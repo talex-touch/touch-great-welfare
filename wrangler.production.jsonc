@@ -13,12 +13,10 @@
       "/api/*"
     ]
   },
-  "d1_databases": [
+  "hyperdrive": [
     {
-      "binding": "LOCAL_DB",
-      "database_name": "touch-great-welfare-local",
-      "database_id": "local-only",
-      "migrations_dir": "migrations"
+      "binding": "HYPERDRIVE",
+      "id": "replace-with-hyperdrive-id"
     }
   ],
   "observability": {

@@ -1,1 +1,2 @@
-/* /index.html 200
+# SPA fallback is handled by Workers Static Assets:
+# wrangler.jsonc -> assets.not_found_handling = "single-page-application"

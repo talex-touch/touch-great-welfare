@@ -32,6 +32,7 @@
     "src/**/*.ts",
     "src/**/*.d.ts",
     "src/**/*.vue",
+    "vite.config.ts",
     "auto-imports.d.ts",
     "components.d.ts",
     "shims.d.ts"

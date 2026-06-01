@@ -3,6 +3,9 @@ shellEmulator: true
 trustPolicy: no-downgrade
 
 packages: []
+catalog:
+  '@types/pg': ^8.20.0
+  pg: ^8.21.0
 catalogs:
   build:
     '@iconify-json/carbon': ^1.2.19

@@ -1,6 +1,8 @@
 .DS_Store
 .vite-ssg-dist
 .vite-ssg-temp
+.playwright-mcp/
+.wrangler/
 *.local
 dist
 dist-ssr

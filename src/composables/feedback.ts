@@ -16,9 +16,9 @@ export function useWelfareFeedback() {
     }, 2800)
   }
 
-  function runSafely(action: () => void, success: string) {
+  async function runSafely(action: () => void | Promise<void>, success: string) {
     try {
-      action()
+      await action()
       notify(success)
     }
     catch (error) {

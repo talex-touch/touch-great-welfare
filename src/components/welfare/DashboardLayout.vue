@@ -3,7 +3,7 @@ import SideNav from './SideNav.vue'
 </script>
 
 <template>
-  <section class="mt-6 gap-6 grid lg:grid-cols-[260px_1fr]">
+  <section class="mt-6 flex-1 gap-6 grid lg:grid-cols-[260px_1fr]">
     <SideNav />
 
     <main class="min-w-0 space-y-6">

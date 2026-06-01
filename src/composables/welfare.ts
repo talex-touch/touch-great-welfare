@@ -1,4 +1,5 @@
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { loadWelfareState, saveWelfareState } from './welfare-persistence'
 
 export type UserRole = 'admin' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro'
@@ -85,7 +86,7 @@ export interface CreditTransaction {
   createdAt: string
 }
 
-interface WelfareState {
+export interface WelfareState {
   users: User[]
   currentUserId?: string
   oauth: OauthConfig
@@ -128,7 +129,7 @@ export interface SubmitStudentPayload {
   attachments?: FileLike[]
 }
 
-const STORAGE_KEY = 'touch-great-welfare:v1'
+const SAVE_DEBOUNCE_MS = 250
 
 export const REQUEST_COST: Record<RequestKind, number> = {
   code: 1,
@@ -187,29 +188,6 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
   }
 }
 
-function loadState(): WelfareState {
-  if (typeof window === 'undefined')
-    return defaultState()
-
-  const raw = window.localStorage.getItem(STORAGE_KEY)
-  if (!raw)
-    return defaultState()
-
-  try {
-    return normalizeState(JSON.parse(raw) as Partial<WelfareState>)
-  }
-  catch {
-    return defaultState()
-  }
-}
-
-function saveState(state: WelfareState) {
-  if (typeof window === 'undefined')
-    return
-
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-}
-
 function assertCurrentUser(user?: User): asserts user is User {
   if (!user)
     throw new Error('请先通过 OAuth 登录')
@@ -233,13 +211,68 @@ function totalBytes(files: FileLike[] = []) {
   return files.reduce((sum, file) => sum + file.size, 0)
 }
 
-const state = reactive<WelfareState>(loadState())
+const state = reactive<WelfareState>(defaultState())
+const isHydrated = ref(false)
+const persistenceError = ref('')
+let hydratePromise: Promise<void> | undefined
+let saveTimer: ReturnType<typeof setTimeout> | undefined
 
 watch(
   state,
-  value => saveState(value),
+  (value) => {
+    if (!isHydrated.value)
+      return
+
+    if (saveTimer)
+      clearTimeout(saveTimer)
+
+    saveTimer = setTimeout(() => {
+      saveWelfareState(value)
+        .then(() => {
+          persistenceError.value = ''
+        })
+        .catch((error) => {
+          persistenceError.value = error instanceof Error ? error.message : '数据库状态保存失败'
+          console.error(error)
+        })
+    }, SAVE_DEBOUNCE_MS)
+  },
   { deep: true },
 )
+
+export function ensureWelfareStateLoaded() {
+  if (isHydrated.value)
+    return persistenceError.value ? Promise.reject(new Error(persistenceError.value)) : Promise.resolve()
+
+  hydratePromise ??= loadWelfareState()
+    .then((storedState) => {
+      Object.assign(state, normalizeState(storedState))
+      persistenceError.value = ''
+    })
+    .catch((error) => {
+      persistenceError.value = error instanceof Error ? error.message : '数据库状态加载失败'
+      throw error
+    })
+    .finally(() => {
+      isHydrated.value = true
+    })
+
+  return hydratePromise
+}
+
+if (typeof window !== 'undefined') {
+  ensureWelfareStateLoaded().catch((error) => {
+    console.error(error)
+  })
+}
+
+function assertPersistenceReady() {
+  if (!isHydrated.value)
+    throw new Error('数据库状态加载中，请稍后再试')
+
+  if (persistenceError.value)
+    throw new Error(persistenceError.value)
+}
 
 export function useWelfareDemo() {
   const hasAdmin = computed(() => state.users.some(user => user.role === 'admin'))
@@ -306,6 +339,8 @@ export function useWelfareDemo() {
   }
 
   function createAdmin(payload: CreateAdminPayload) {
+    assertPersistenceReady()
+
     if (hasAdmin.value)
       throw new Error('管理员已经创建')
 
@@ -335,6 +370,8 @@ export function useWelfareDemo() {
   }
 
   function loginAsAdmin() {
+    assertPersistenceReady()
+
     const admin = state.users.find(user => user.role === 'admin')
     if (!admin)
       throw new Error('尚未创建管理员')
@@ -344,6 +381,8 @@ export function useWelfareDemo() {
   }
 
   function mockOauthLogin(payload: MockLoginPayload) {
+    assertPersistenceReady()
+
     if (!oauthReady.value)
       throw new Error('OAuth 尚未启用，请先由管理员配置 Client ID')
 
@@ -384,11 +423,15 @@ export function useWelfareDemo() {
   }
 
   function logout() {
+    assertPersistenceReady()
+
     state.currentUserId = undefined
   }
 
   function updateCurrentProfile(profile: Partial<UserProfile>) {
+    assertPersistenceReady()
     assertCurrentUser(currentUser.value)
+
     currentUser.value.profile = {
       ...currentUser.value.profile,
       ...profile,
@@ -409,7 +452,9 @@ export function useWelfareDemo() {
   }
 
   function rechargeCurrentUser(amount: number) {
+    assertPersistenceReady()
     assertCurrentUser(currentUser.value)
+
     if (!Number.isFinite(amount) || amount <= 0)
       throw new Error('请输入有效充值积分')
 
@@ -417,7 +462,9 @@ export function useWelfareDemo() {
   }
 
   function submitApplication(payload: SubmitApplicationPayload) {
+    assertPersistenceReady()
     assertCurrentUser(currentUser.value)
+
     if (currentUser.value.role === 'admin')
       throw new Error('请使用普通用户账号提交申请')
 
@@ -458,7 +505,9 @@ export function useWelfareDemo() {
   }
 
   function answerProApplication(applicationId: string, answer: string) {
+    assertPersistenceReady()
     assertAdmin(currentUser.value)
+
     const application = state.applications.find(item => item.id === applicationId)
     if (!application || application.type !== 'pro')
       throw new Error('申请不存在')
@@ -475,7 +524,9 @@ export function useWelfareDemo() {
   }
 
   function rejectProApplication(applicationId: string, reason: string) {
+    assertPersistenceReady()
     assertAdmin(currentUser.value)
+
     const application = state.applications.find(item => item.id === applicationId)
     if (!application || application.type !== 'pro')
       throw new Error('申请不存在')
@@ -489,7 +540,9 @@ export function useWelfareDemo() {
   }
 
   function submitStudentVerification(payload: SubmitStudentPayload) {
+    assertPersistenceReady()
     assertCurrentUser(currentUser.value)
+
     if (currentUser.value.role === 'admin')
       throw new Error('请使用普通用户账号申请学生认证')
     if (!payload.category.trim())
@@ -518,7 +571,9 @@ export function useWelfareDemo() {
   }
 
   function approveStudentVerification(id: string, reply: string) {
+    assertPersistenceReady()
     assertAdmin(currentUser.value)
+
     const verification = state.studentVerifications.find(item => item.id === id)
     if (!verification)
       throw new Error('认证申请不存在')
@@ -537,7 +592,9 @@ export function useWelfareDemo() {
   }
 
   function rejectStudentVerification(id: string, reason: string) {
+    assertPersistenceReady()
     assertAdmin(currentUser.value)
+
     const verification = state.studentVerifications.find(item => item.id === id)
     if (!verification)
       throw new Error('认证申请不存在')
@@ -550,22 +607,19 @@ export function useWelfareDemo() {
   }
 
   function adjustUserPoints(userId: string, amount: number, reason: string) {
+    assertPersistenceReady()
     assertAdmin(currentUser.value)
+
     if (!Number.isFinite(amount) || amount === 0)
       throw new Error('请输入非零积分调整值')
 
     addTransaction(userId, Math.trunc(amount), 'adjustment', reason.trim() || '管理员手动调整')
   }
 
-  function resetDemo() {
-    if (typeof window !== 'undefined')
-      window.localStorage.removeItem(STORAGE_KEY)
-
-    Object.assign(state, defaultState())
-  }
-
   return {
     state,
+    isHydrated,
+    persistenceError,
     hasAdmin,
     currentUser,
     currentUserApplications,
@@ -592,7 +646,8 @@ export function useWelfareDemo() {
     approveStudentVerification,
     rejectStudentVerification,
     adjustUserPoints,
-    resetDemo,
+    ensureWelfareStateLoaded,
+    assertPersistenceReady,
   }
 }
 

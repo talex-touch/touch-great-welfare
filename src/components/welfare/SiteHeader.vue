@@ -25,6 +25,15 @@ function goHeaderNav(item: typeof navItems[number]) {
   selectedSection.value = item.key
   router.push(item.path)
 }
+
+function onLogout() {
+  const redirect = route.path.startsWith('/dashboard') ? route.fullPath : undefined
+  logout()
+  router.push({
+    path: '/login',
+    query: redirect ? { redirect } : undefined,
+  })
+}
 </script>
 
 <template>
@@ -60,7 +69,7 @@ function goHeaderNav(item: typeof navItems[number]) {
         <button class="icon-btn" title="Toggle dark" @click="toggleDark()">
           <span class="i-carbon-sun dark:i-carbon-moon" />
         </button>
-        <TxButton v-if="currentUser" size="sm" variant="ghost" @click="logout">
+        <TxButton v-if="currentUser" size="sm" variant="ghost" @click="onLogout">
           退出
         </TxButton>
       </div>

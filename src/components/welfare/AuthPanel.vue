@@ -1,10 +1,22 @@
 <script setup lang="ts">
 import { TxAvatar, TxButton, TxCard, TxInput, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
-import { useRouter } from 'vue-router'
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 
+const route = useRoute()
 const router = useRouter()
+const redirectPath = computed(() => {
+  const redirect = route.query.redirect
+  if (typeof redirect !== 'string' || !redirect.startsWith('/'))
+    return undefined
+
+  if (redirect.startsWith('//') || redirect.startsWith('/login'))
+    return undefined
+
+  return redirect
+})
 
 const {
   hasAdmin,
@@ -24,15 +36,24 @@ const {
 const { runSafely } = useWelfareFeedback()
 
 function onCreateAdmin() {
-  runSafely(() => createAdmin(adminForm), '管理员已创建，已进入后台')
+  runSafely(() => {
+    createAdmin(adminForm)
+    router.push(redirectPath.value ?? '/dashboard/admin')
+  }, '管理员已创建，已进入后台')
 }
 
 function onOauthLogin() {
-  runSafely(() => mockOauthLogin(loginForm), 'OAuth 登录成功')
+  runSafely(() => {
+    mockOauthLogin(loginForm)
+    router.push(redirectPath.value ?? '/dashboard/apply')
+  }, 'OAuth 登录成功')
 }
 
 function onLoginAsAdmin() {
-  runSafely(() => loginAsAdmin(), '已切换到管理员')
+  runSafely(() => {
+    loginAsAdmin()
+    router.push(redirectPath.value ?? '/dashboard/admin')
+  }, '已切换到管理员')
 }
 
 function onRecharge() {

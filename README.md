@@ -25,61 +25,71 @@ pnpm install
 pnpm dev
 ```
 
+`pnpm dev` 会先构建前端、应用本地 D1 migration，再启动 `wrangler dev`。本地业务数据写入 Cloudflare D1 local store，不需要本机 PostgreSQL。
+
 ## 校验
 
 ```bash
-pnpm lint
-pnpm typecheck
-pnpm test -- --run
+pnpm run check
 pnpm build
+pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc --dry-run
 ```
 
-## Cloudflare Pages 部署
+## Cloudflare Workers 部署
 
-项目按静态 SPA 部署到 Cloudflare Pages：
+项目部署为一个 Cloudflare Worker：
 
-- Pages 项目名：`touch-great-welfare`
-- 构建命令：`pnpm run build`
-- 输出目录：`dist`
-- SPA 回退：`public/_redirects` 会随 Vite 构建复制到 `dist/_redirects`
+- `dist` 由 Workers Static Assets 托管。
+- `/api/*` 通过 `run_worker_first` 优先进入 Worker 边缘函数。
+- PostgreSQL 通过 Hyperdrive binding 连接，Worker 代码不直接暴露数据库连接串。
+- 本地开发使用 D1 local 模拟数据库，不依赖本机 PostgreSQL。
+- `not_found_handling = single-page-application` 负责 SPA 回退。
 
 本地首次接入真实 Cloudflare 环境：
 
 ```bash
 pnpm exec wrangler login
-pnpm run cf:whoami
-pnpm run cf:project:create
+pnpm exec wrangler whoami
 ```
 
-脚本默认使用当前机器历史部署过的 Account ID：`4375ff26cc9f8d57b32af4a38f49b811`。如果要部署到其他账号，直接覆盖环境变量：
+创建 Hyperdrive：
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID="<your-account-id>"
-pnpm run cf:project:create
+export DATABASE_URL="postgresql://user:password@host:5432/touch_great_welfare"
+pnpm exec wrangler hyperdrive create touch-great-welfare-db --connection-string "$DATABASE_URL"
 ```
 
-CI 或无浏览器环境使用 API Token：
+把命令输出里的 Hyperdrive ID 写入 `wrangler.production.jsonc` 的 `hyperdrive[0].id`。远端配置 dry-run：
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID="<your-account-id>"
-export CLOUDFLARE_API_TOKEN="<pages-write-token>"
-pnpm run deploy:cloudflare
+pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc --dry-run
 ```
 
 部署：
 
 ```bash
-pnpm run deploy:cloudflare
+pnpm run deploy
 ```
 
-如果 `pnpm run cf:project:create` 或部署时报 `Authentication error [code: 10000]`，当前 Wrangler OAuth 没有目标 Account 的 Pages 写权限。重新执行 `pnpm exec wrangler login` 并确认授权到正确账号，或设置具备 Pages 写权限的 `CLOUDFLARE_API_TOKEN` 后再部署。
+CI 或无浏览器环境使用 API Token：
+
+```bash
+export CLOUDFLARE_API_TOKEN="<workers-and-hyperdrive-token>"
+pnpm run deploy
+```
+
+如果部署时报 `Authentication error [code: 10000]`，当前 Wrangler OAuth 或 API Token 没有目标账号的 Workers/Hyperdrive 写权限。重新执行 `pnpm exec wrangler login` 并确认授权到正确账号，或设置具备对应权限的 `CLOUDFLARE_API_TOKEN` 后再部署。
 
 ## 数据说明
 
-当前是前端原型，演示数据保存在 `localStorage`：
+业务数据不再保存在浏览器本地存储。前端通过 `/api/welfare-state` 读取和保存 PostgreSQL 中的 `welfare_app_state` 表：
 
-```txt
-touch-great-welfare:v1
+```sql
+create table if not exists welfare_app_state (
+  id text primary key,
+  state jsonb not null,
+  updated_at timestamptz not null default now()
+);
 ```
 
-页面底部提供“重置本地演示数据”。后续接入后端时，可将 `src/composables/welfare.ts` 中的本地状态与方法替换为真实 API。
+生产环境需要配置 Hyperdrive binding。本地开发使用 `LOCAL_DB` D1 binding。如果数据库不可用，页面会显示数据库错误，业务写操作不会落到浏览器本地存储。
