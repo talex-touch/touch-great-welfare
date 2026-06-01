@@ -1,0 +1,57 @@
+{
+  "type": "module",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "build": "vite build",
+    "cf:project:create": "CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-4375ff26cc9f8d57b32af4a38f49b811} pnpm exec wrangler pages project create touch-great-welfare --production-branch main",
+    "cf:whoami": "pnpm exec wrangler whoami",
+    "deploy:cloudflare": "CHOKIDAR_USEPOLLING=1 pnpm run build && CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-4375ff26cc9f8d57b32af4a38f49b811} pnpm exec wrangler pages deploy dist --project-name touch-great-welfare --branch main",
+    "dev": "vite --port 3333 --open",
+    "lint": "eslint .",
+    "typecheck": "vue-tsc",
+    "preview": "vite preview",
+    "test": "vitest",
+    "up": "taze major -I",
+    "postinstall": "npx simple-git-hooks"
+  },
+  "dependencies": {
+    "@talex-touch/tuffex": "catalog:frontend",
+    "@vueuse/core": "catalog:frontend",
+    "vue": "catalog:frontend",
+    "vue-router": "catalog:frontend"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:dev",
+    "@iconify-json/carbon": "catalog:build",
+    "@types/node": "catalog:dev",
+    "@unocss/eslint-plugin": "catalog:dev",
+    "@vitejs/plugin-vue": "catalog:build",
+    "@vue-macros/volar": "catalog:dev",
+    "@vue/test-utils": "catalog:dev",
+    "eslint": "catalog:dev",
+    "eslint-plugin-format": "catalog:dev",
+    "jsdom": "catalog:build",
+    "lint-staged": "catalog:dev",
+    "simple-git-hooks": "catalog:dev",
+    "taze": "catalog:dev",
+    "typescript": "catalog:dev",
+    "unocss": "catalog:build",
+    "unplugin-auto-import": "catalog:build",
+    "unplugin-vue-components": "catalog:build",
+    "unplugin-vue-macros": "catalog:build",
+    "vite": "catalog:build",
+    "vitest": "catalog:dev",
+    "vue-tsc": "catalog:dev"
+  },
+  "resolutions": {
+    "unplugin": "catalog:build",
+    "vite": "catalog:build"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint-staged"
+  },
+  "lint-staged": {
+    "*": "eslint --fix"
+  }
+}
