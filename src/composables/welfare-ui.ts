@@ -1,10 +1,49 @@
-import type { RequestKind } from './welfare'
+import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
+import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
+import type { CrowdReviewDecision, RejectApplicationOptions, RequestKind } from './welfare'
 import { computed, reactive, ref, watch } from 'vue'
+import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
+import { createApplicationReview, createImageJob, createTemporaryAiKey, loadAiConfig, saveAiConfig } from './ai'
+import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
-  MAX_ACTIVE_PRO_APPLICATIONS,
+  loadNotificationProviderConfig,
+  loadNotifications,
+  loadNotificationSettings,
+  loadPushPublicKey,
+  markAllNotificationsRead,
+  markNotificationRead,
+  saveNotificationProviderConfig,
+  saveNotificationSettings,
+  savePushSubscription,
+  urlBase64ToUint8Array,
+} from './notifications'
+import { createRechargeOrder, loadRechargeConfig, loadRechargeStatus, saveRechargeConfig } from './recharge'
+import {
+  ACTIVITY_DISCOUNT_RATE,
+  ACTIVITY_END_AT,
+  ACTIVITY_NAME,
+  calculateActivityPrice,
+  calculateApplicationPrepaidCost,
+  calculateLlmApiCostPoints,
+  DEFAULT_LLM_API_MODELS,
+  LLM_API_BUDGET_OPTIONS,
+  LLM_API_DEFAULT_MODEL_KEY,
+  LLM_API_EXTENDED_PROCESSING_HOURS,
+  LLM_API_EXTENDED_REVIEW_THRESHOLD_USD,
+  LLM_API_STANDARD_PROCESSING_HOURS,
+  llmApiRequiresExtendedReview,
+  MAX_ACTIVE_USER_REQUESTS,
+  normalizeLlmApiBudgetUsd,
+  PRO_EXPEDITE_COST,
+  PRO_EXPEDITED_PROCESSING_HOURS,
+  PRO_STANDARD_PROCESSING_HOURS,
   REQUEST_COST,
-  useWelfareDemo,
+  resolveLlmApiModel,
+  STORAGE_EXTENSION_COST,
+  STUDENT_REVIEW_FEE,
+  useWelfareStore,
 } from './welfare'
+import { saveWelfareState } from './welfare-persistence'
 
 export interface UploadLikeFile {
   id: string
@@ -14,16 +53,11 @@ export interface UploadLikeFile {
   file: File
 }
 
-const demo = useWelfareDemo()
+const welfare = useWelfareStore()
 
 export const adminForm = reactive({
   displayName: '公益管理员',
   email: 'admin@welfare.dev',
-})
-
-export const loginForm = reactive({
-  displayName: '开源同学',
-  email: 'student@example.com',
 })
 
 export const profileForm = reactive({
@@ -36,78 +70,306 @@ export const profileForm = reactive({
 
 export const rechargeForm = reactive({
   amount: 100,
+  loading: false,
+  statusMessage: '',
 })
+
+export const rechargeConfigForm = reactive({
+  enabled: true,
+  gatewayBaseUrl: 'https://credit.linux.do/epay',
+  pid: '',
+  key: '',
+  keyMasked: '',
+  pointsPerLdc: 10,
+  configured: false,
+  loading: false,
+  message: '',
+  envPreview: null as SaveRechargeConfigResult['env'] | null,
+})
+
+export const githubAppConfigForm = reactive({
+  enabled: true,
+  appName: '',
+  appSlug: '',
+  clientId: '',
+  clientSecret: '',
+  clientSecretMasked: '',
+  callbackUrl: typeof globalThis.location !== 'undefined' ? `${globalThis.location.origin}/api/github-app/callback` : '/api/github-app/callback',
+  authorizeUrl: 'https://github.com/login/oauth/authorize',
+  tokenUrl: 'https://github.com/login/oauth/access_token',
+  apiBaseUrl: 'https://api.github.com',
+  scopes: 'read:user user:email public_repo',
+  configured: false,
+  loading: false,
+  message: '',
+  envPreview: null as SaveGitHubAppConfigResult['env'] | null,
+})
+
+export const githubAuthorizationForm = reactive({
+  loading: false,
+  message: '',
+})
+
+export const aiConfigForm = reactive({
+  enabled: true,
+  baseUrl: 'https://api.openai.com/v1',
+  imageModel: 'gpt-image-1.5',
+  reviewModel: 'gpt-4.1-mini',
+  apiKey: '',
+  apiKeyMasked: '',
+  newapiKey: '',
+  newapiKeyMasked: '',
+  newapiManagementBaseUrl: '',
+  newapiUserId: '',
+  temporaryKeyTtlMinutes: 60,
+  temporaryKeyQuota: 100,
+  llmApiModels: [...DEFAULT_LLM_API_MODELS],
+  configured: false,
+  loading: false,
+  message: '',
+  envPreview: null as Record<string, string> | null,
+})
+
+export const temporaryAiKey = ref('')
+export const temporaryAiKeyExpiresAt = ref('')
+
+export const notificationSettingsForm = reactive({
+  emailEnabled: false,
+  emailAddress: '',
+  feishuEnabled: false,
+  feishuWebhookUrl: '',
+  feishuWebhookMasked: '',
+  browserPushEnabled: false,
+  pushSubscriptionCount: 0,
+  loading: false,
+  permission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+})
+
+export const notificationProviderConfigForm = reactive({
+  resendApiKey: '',
+  resendApiKeyMasked: '',
+  resendFromEmail: 'Touch Great Welfare <notice@example.com>',
+  vapidPublicKey: '',
+  vapidPrivateKey: '',
+  vapidPrivateKeyMasked: '',
+  vapidSubject: 'mailto:admin@example.com',
+  emailConfigured: false,
+  pushConfigured: false,
+  loading: false,
+  message: '',
+})
+
+export const notificationList = ref<Awaited<ReturnType<typeof loadNotifications>>['notifications']>([])
+export const unreadNotificationCount = ref(0)
+export const notificationsLoading = ref(false)
 
 export const applicationForm = reactive({
   type: 'pro' as RequestKind,
   title: '公益项目架构与实现支持',
-  description: '希望获得面向校园公益项目的完整技术建议、代码审阅或架构答复。',
+  description: '<p>希望获得面向校园公益项目的完整技术建议、代码审阅或架构答复。</p>',
   githubRepo: '',
+  extendStorage: false,
+  expediteProcessing: false,
+  waiveRejectionReviewFee: false,
+  llmApiModelKey: LLM_API_DEFAULT_MODEL_KEY,
+  llmApiBudgetUsd: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd,
 })
 
 export const applicationFiles = ref<UploadLikeFile[]>([])
 
 export const studentForm = reactive({
-  category: '在校学生 / 开源贡献者',
-  school: '示例大学',
-  identity: '2026 级本科生',
-  notes: '可上传学生证、录取通知、校园邮箱截图或其他能说明身份的资料。',
+  category: '大学生',
+  school: '北京大学',
+  grade: '2026 级',
+  educationLevel: '本科',
+  identity: '',
+  educationEmail: '',
+  notes: '<h3>身份说明</h3><ul><li>2026 级本科生</li><li>已上传学生证或录取通知截图</li></ul><h3>材料清单</h3><ul><li>学生证照片</li><li>校园邮箱截图</li></ul>',
 })
+
+export const studentCategoryOptions = [
+  '高中生',
+  '大学生',
+  '研究生',
+  '博士生',
+  '科研工作者',
+  '教师',
+  '其他',
+] as const
+
+export const studentGradeOptions = [
+  '高一',
+  '高二',
+  '高三',
+  '大一',
+  '大二',
+  '大三',
+  '大四',
+  '研一',
+  '研二',
+  '研三',
+  '博一',
+  '博二',
+  '博三',
+  '2026 级',
+  '2025 级',
+  '2024 级',
+  '2023 级',
+] as const
+
+export const studentEducationLevelOptions = [
+  '保密',
+  '高中',
+  '专科',
+  '本科',
+  '硕士',
+  '博士',
+  '博士后',
+] as const
 
 export const studentFiles = ref<UploadLikeFile[]>([])
 
 export const reviewDrafts = reactive<Record<string, string>>({})
+export const rejectFraudulentDrafts = reactive<Record<string, boolean>>({})
+export const crowdReviewDrafts = reactive<Record<string, {
+  decision: CrowdReviewDecision
+  note: string
+}>>({})
 export const pointDrafts = reactive<Record<string, number>>({})
-export const selectedSection = ref<'apply' | 'profile' | 'student' | 'admin'>('apply')
+export const selectedSection = ref<'apply' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('apply')
+export const ADMIN_TABS = {
+  login: '登录配置',
+  github: 'GitHub 应用',
+  ai: 'AI 配置',
+  notifications: '通知配置',
+  ldc: '充值配置',
+  users: '用户管理',
+  dashboard: '仪表盘数据',
+  data: '业务数据管理',
+  audit: '审计日志',
+  points: '积分管理',
+} as const
+export const adminTabItems = [
+  { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
+  { key: 'github', name: ADMIN_TABS.github, icon: 'i-carbon-logo-github' },
+  { key: 'ai', name: ADMIN_TABS.ai, icon: 'i-carbon-ai-status' },
+  { key: 'notifications', name: ADMIN_TABS.notifications, icon: 'i-carbon-notification' },
+  { key: 'ldc', name: ADMIN_TABS.ldc, icon: 'i-carbon-wallet' },
+  { key: 'users', name: ADMIN_TABS.users, icon: 'i-carbon-user-multiple' },
+  { key: 'dashboard', name: ADMIN_TABS.dashboard, icon: 'i-carbon-dashboard' },
+  { key: 'data', name: ADMIN_TABS.data, icon: 'i-carbon-data-table' },
+  { key: 'audit', name: ADMIN_TABS.audit, icon: 'i-carbon-cloud-auditing' },
+  { key: 'points', name: ADMIN_TABS.points, icon: 'i-carbon-chart-line-data' },
+] as const
+export const activeAdminTab = ref<(typeof ADMIN_TABS)[keyof typeof ADMIN_TABS]>(ADMIN_TABS.login)
+export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
 
 export const applicationTypeCards = [
   {
     type: 'code' as const,
-    title: 'Code',
+    title: 'LLMApi',
     icon: 'i-carbon-code',
-    cost: REQUEST_COST.code,
-    desc: '代码类申请预留入口，提交后立即扣除 1 积分。',
+    cost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
+    originalCost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
+    desc: '可选择 Codex、ClaudeCode 及国内外模型，不同模型价格不同，管理员后台可配置。',
   },
   {
     type: 'image' as const,
     title: 'Image',
     icon: 'i-carbon-image',
-    cost: REQUEST_COST.image,
-    desc: '图片类申请预留入口，提交后立即扣除 10 积分。',
+    cost: calculateActivityPrice(REQUEST_COST.image),
+    originalCost: REQUEST_COST.image,
+    desc: `图片类申请，当前 ${ACTIVITY_NAME} 价 ${calculateActivityPrice(REQUEST_COST.image).toLocaleString('zh-CN')} 积分。`,
   },
   {
     type: 'pro' as const,
     title: 'Pro',
     icon: 'i-carbon-star',
-    cost: REQUEST_COST.pro,
-    desc: '复杂公益需求，管理员答复通过后才扣除 100 积分。',
+    cost: calculateActivityPrice(REQUEST_COST.pro),
+    originalCost: REQUEST_COST.pro,
+    desc: `复杂公益需求，${PRO_STANDARD_PROCESSING_HOURS / 24} 天处理，当前 ${ACTIVITY_NAME} 价 ${calculateActivityPrice(REQUEST_COST.pro).toLocaleString('zh-CN')} 积分。`,
   },
 ]
 
+export const pricingSummary = {
+  activityName: ACTIVITY_NAME,
+  activityDiscountRate: ACTIVITY_DISCOUNT_RATE,
+  activityEndsAt: ACTIVITY_END_AT,
+  requestCost: REQUEST_COST,
+  currentRequestCost: {
+    code: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
+    image: calculateActivityPrice(REQUEST_COST.image),
+    pro: calculateActivityPrice(REQUEST_COST.pro),
+  },
+  storageExtensionCost: STORAGE_EXTENSION_COST,
+  studentReviewFee: STUDENT_REVIEW_FEE,
+  proExpediteCost: PRO_EXPEDITE_COST,
+  proStandardProcessingHours: PRO_STANDARD_PROCESSING_HOURS,
+  proExpeditedProcessingHours: PRO_EXPEDITED_PROCESSING_HOURS,
+}
+
+export const llmApiBudgetOptions = LLM_API_BUDGET_OPTIONS
+export const codexBudgetOptions = llmApiBudgetOptions
+export const llmApiReviewLimits = {
+  extendedReviewThresholdUsd: LLM_API_EXTENDED_REVIEW_THRESHOLD_USD,
+  standardProcessingHours: LLM_API_STANDARD_PROCESSING_HOURS,
+  extendedProcessingHours: LLM_API_EXTENDED_PROCESSING_HOURS,
+} as const
+export const codexAccessLimits = {
+  minBudgetUsd: DEFAULT_LLM_API_MODELS[0].minBudgetUsd,
+  maxBudgetUsd: DEFAULT_LLM_API_MODELS[0].maxBudgetUsd,
+  pointsPerUsd: DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
+  extendedReviewThresholdUsd: LLM_API_EXTENDED_REVIEW_THRESHOLD_USD,
+  standardProcessingHours: LLM_API_STANDARD_PROCESSING_HOURS,
+  extendedProcessingHours: LLM_API_EXTENDED_PROCESSING_HOURS,
+  ipLimit: DEFAULT_LLM_API_MODELS[0].ipLimit,
+  rpmLimit: DEFAULT_LLM_API_MODELS[0].rpmLimit,
+  concurrencyLimit: DEFAULT_LLM_API_MODELS[0].concurrencyLimit,
+} as const
+
 export function useWelfareUiState() {
-  const repoOptions = computed(() => demo.mockGithubRepos(profileForm.githubUsername))
+  const repoOptions = computed(() => welfare.currentUser.value?.profile.githubRepos ?? [])
   const totalApplicationBytes = computed(() => applicationFiles.value.reduce((sum, file) => sum + file.size, 0))
   const totalStudentBytes = computed(() => studentFiles.value.reduce((sum, file) => sum + file.size, 0))
-  const proActiveCount = computed(() => demo.currentUser.value ? demo.activeProCount(demo.currentUser.value.id) : 0)
-  const canSubmitPro = computed(() => proActiveCount.value < MAX_ACTIVE_PRO_APPLICATIONS)
-  const selectedCost = computed(() => REQUEST_COST[applicationForm.type])
-  const heroProgress = computed(() => Math.min(100, Math.round((demo.state.users.length / 12) * 100) + 24))
-  const pendingCount = computed(() => demo.pendingProApplications.value.length + demo.pendingStudentVerifications.value.length)
-  const latestTransactions = computed(() => demo.state.transactions.slice(0, 8))
+  const activeRequestCount = computed(() => welfare.currentUser.value ? welfare.activeRequestCount(welfare.currentUser.value.id) : 0)
+  const canCreateRequest = computed(() => activeRequestCount.value < MAX_ACTIVE_USER_REQUESTS)
+  const enabledLlmApiModels = computed(() => aiConfigForm.llmApiModels.filter(item => item.enabled))
+  const selectedLlmApiModel = computed(() => resolveLlmApiModel(applicationForm.llmApiModelKey, aiConfigForm.llmApiModels))
+  const selectedLlmApiBudgetUsd = computed(() => normalizeLlmApiBudgetUsd(applicationForm.llmApiBudgetUsd, selectedLlmApiModel.value))
+  const selectedCodexBudgetUsd = selectedLlmApiBudgetUsd
+  const selectedCost = computed(() => applicationForm.type === 'code' ? calculateLlmApiCostPoints(selectedLlmApiBudgetUsd.value, selectedLlmApiModel.value) : calculateActivityPrice(REQUEST_COST[applicationForm.type]))
+  const selectedPrepaidCost = computed(() => {
+    if (applicationForm.type === 'code')
+      return selectedCost.value
+
+    return calculateApplicationPrepaidCost(applicationForm.type, applicationForm.extendStorage, applicationForm.expediteProcessing)
+  })
+  const selectedLlmApiRequiresExtendedReview = computed(() => applicationForm.type === 'code' && llmApiRequiresExtendedReview(selectedLlmApiBudgetUsd.value, selectedLlmApiModel.value))
+  const selectedCodexRequiresExtendedReview = selectedLlmApiRequiresExtendedReview
+  const heroProgress = computed(() => Math.min(100, Math.round((welfare.state.users.length / 12) * 100) + 24))
+  const pendingCount = computed(() => welfare.pendingApplications.value.length + welfare.pendingStudentVerifications.value.length)
+  const latestTransactions = computed(() => {
+    if (!welfare.currentUser.value)
+      return []
+
+    return welfare.state.transactions
+      .filter(item => item.userId === welfare.currentUser.value?.id)
+      .slice(0, 8)
+  })
 
   function syncProfileForm() {
-    if (!demo.currentUser.value)
+    if (!welfare.currentUser.value)
       return
 
-    profileForm.displayName = demo.currentUser.value.profile.displayName
-    profileForm.email = demo.currentUser.value.profile.email
-    profileForm.bio = demo.currentUser.value.profile.bio ?? ''
-    profileForm.githubUsername = demo.currentUser.value.profile.githubUsername ?? ''
-    profileForm.selectedRepo = demo.currentUser.value.profile.selectedRepo ?? ''
-    applicationForm.githubRepo = profileForm.selectedRepo
+    profileForm.displayName = welfare.currentUser.value.profile.displayName
+    profileForm.email = welfare.currentUser.value.profile.email
+    profileForm.bio = welfare.currentUser.value.profile.bio ?? ''
+    profileForm.githubUsername = welfare.currentUser.value.profile.githubUsername ?? ''
+    profileForm.selectedRepo = welfare.currentUser.value.profile.selectedRepo ?? ''
+    applicationForm.githubRepo = welfare.currentUser.value.profile.githubAuthorized ? profileForm.selectedRepo : ''
   }
 
-  watch(demo.currentUser, syncProfileForm, { immediate: true })
+  watch(welfare.currentUser, syncProfileForm, { immediate: true })
   watch(() => profileForm.githubUsername, () => {
     if (!repoOptions.value.includes(profileForm.selectedRepo))
       profileForm.selectedRepo = repoOptions.value[0] ?? ''
@@ -117,24 +379,30 @@ export function useWelfareUiState() {
   })
   watch(() => applicationForm.type, (type) => {
     if (type === 'code') {
-      applicationForm.title = '代码问题快速支持'
-      applicationForm.description = '请预留代码申请处理流程，后续接入真实 Code 服务。'
+      const model = selectedLlmApiModel.value
+      applicationForm.title = 'LLMApi 额度申请'
+      applicationForm.description = '<p>请说明需要使用 LLMApi 的项目、预计用途、模型选择、仓库上下文和希望获得的额度。</p>'
+      applicationForm.llmApiBudgetUsd = model.defaultBudgetUsd
     }
     if (type === 'image') {
       applicationForm.title = '图片公益物料支持'
-      applicationForm.description = '请预留图片申请处理流程，后续接入真实 Image 服务。'
+      applicationForm.description = '<p>请描述公益图片物料的用途、风格和必要约束。</p>'
     }
     if (type === 'pro') {
       applicationForm.title = '公益项目架构与实现支持'
-      applicationForm.description = '希望获得面向校园公益项目的完整技术建议、代码审阅或架构答复。'
+      applicationForm.description = '<p>希望获得面向校园公益项目的完整技术建议、代码审阅或架构答复。</p>'
     }
+    applicationForm.waiveRejectionReviewFee = false
   })
 
   function statusText(status: string) {
     const map: Record<string, string> = {
-      reserved: '预留',
+      reserved: '已提交',
       pending_review: '待审核',
+      processing: '处理中',
       answered: '已答复',
+      completed: '已结束',
+      closed: '已关闭',
       rejected: '已退回',
       pending: '待审核',
       approved: '已认证',
@@ -143,9 +411,9 @@ export function useWelfareUiState() {
   }
 
   function statusTone(status: string) {
-    if (['answered', 'approved'].includes(status))
+    if (['answered', 'completed', 'closed', 'approved'].includes(status))
       return 'success'
-    if (['pending_review', 'pending'].includes(status))
+    if (['pending_review', 'processing', 'pending'].includes(status))
       return 'warning'
     if (status === 'rejected')
       return 'danger'
@@ -164,26 +432,517 @@ export function useWelfareUiState() {
     studentFiles.value = []
   }
 
+  function crowdReviewDraftFor(applicationId: string) {
+    crowdReviewDrafts[applicationId] ??= {
+      decision: 'needs_admin',
+      note: '',
+    }
+    return crowdReviewDrafts[applicationId]
+  }
+
+  function submitCrowdReviewDraft(applicationId: string) {
+    const draft = crowdReviewDraftFor(applicationId)
+    const review = welfare.submitCrowdReview('pro_application', applicationId, draft.decision, draft.note)
+    delete crowdReviewDrafts[applicationId]
+    return review
+  }
+
+  function rejectApplicationWithOptions(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
+    welfare.rejectApplication(applicationId, reason, options)
+    delete rejectFraudulentDrafts[applicationId]
+  }
+
+  function applyRechargeConfig(config: RechargeConfigView) {
+    rechargeConfigForm.enabled = config.enabled
+    rechargeConfigForm.gatewayBaseUrl = config.gatewayBaseUrl
+    rechargeConfigForm.pid = config.pid
+    rechargeConfigForm.key = ''
+    rechargeConfigForm.keyMasked = config.keyMasked
+    rechargeConfigForm.pointsPerLdc = config.pointsPerLdc
+    rechargeConfigForm.configured = config.configured
+  }
+
+  function applyGitHubAppConfig(config: GitHubAppConfigView) {
+    githubAppConfigForm.enabled = config.enabled
+    githubAppConfigForm.appName = config.appName
+    githubAppConfigForm.appSlug = config.appSlug
+    githubAppConfigForm.clientId = config.clientId
+    githubAppConfigForm.clientSecret = ''
+    githubAppConfigForm.clientSecretMasked = config.clientSecretMasked
+    githubAppConfigForm.callbackUrl = config.callbackUrl
+    githubAppConfigForm.authorizeUrl = config.authorizeUrl
+    githubAppConfigForm.tokenUrl = config.tokenUrl
+    githubAppConfigForm.apiBaseUrl = config.apiBaseUrl
+    githubAppConfigForm.scopes = config.scopes
+    githubAppConfigForm.configured = config.configured
+  }
+
+  async function refreshRechargeConfig() {
+    rechargeConfigForm.loading = true
+    try {
+      const config = await loadRechargeConfig()
+      applyRechargeConfig(config)
+    }
+    finally {
+      rechargeConfigForm.loading = false
+    }
+  }
+
+  async function persistRechargeConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    rechargeConfigForm.loading = true
+    rechargeConfigForm.message = ''
+    rechargeConfigForm.envPreview = null
+    try {
+      const result = await saveRechargeConfig({
+        enabled: rechargeConfigForm.enabled,
+        gatewayBaseUrl: rechargeConfigForm.gatewayBaseUrl,
+        pid: rechargeConfigForm.pid,
+        key: rechargeConfigForm.key,
+        pointsPerLdc: rechargeConfigForm.pointsPerLdc,
+      }, welfare.currentUser.value.id)
+      rechargeConfigForm.message = result.message
+      rechargeConfigForm.envPreview = result.env
+    }
+    finally {
+      rechargeConfigForm.loading = false
+    }
+  }
+
+  async function refreshGitHubAppConfig() {
+    githubAppConfigForm.loading = true
+    try {
+      const config = await loadGitHubAppConfig()
+      applyGitHubAppConfig(config)
+    }
+    finally {
+      githubAppConfigForm.loading = false
+    }
+  }
+
+  async function persistGitHubAppConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    githubAppConfigForm.loading = true
+    githubAppConfigForm.message = ''
+    githubAppConfigForm.envPreview = null
+    try {
+      const result = await saveGitHubAppConfig({
+        enabled: githubAppConfigForm.enabled,
+        appName: githubAppConfigForm.appName,
+        appSlug: githubAppConfigForm.appSlug,
+        clientId: githubAppConfigForm.clientId,
+        clientSecret: githubAppConfigForm.clientSecret,
+        callbackUrl: githubAppConfigForm.callbackUrl,
+        authorizeUrl: githubAppConfigForm.authorizeUrl,
+        tokenUrl: githubAppConfigForm.tokenUrl,
+        apiBaseUrl: githubAppConfigForm.apiBaseUrl,
+        scopes: githubAppConfigForm.scopes,
+      }, welfare.currentUser.value.id)
+      githubAppConfigForm.message = result.message
+      githubAppConfigForm.envPreview = result.env
+    }
+    finally {
+      githubAppConfigForm.loading = false
+    }
+  }
+
+  async function startGitHubAuthorization() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录后再授权 GitHub')
+
+    githubAuthorizationForm.loading = true
+    githubAuthorizationForm.message = '正在创建 GitHub App 授权链接...'
+    try {
+      const result = await createGitHubAuthorization('/dashboard/open-source', welfare.currentUser.value.id, 'connect')
+      githubAuthorizationForm.message = '即将跳转到 GitHub 授权页...'
+      globalThis.location.href = result.authorizeUrl
+    }
+    finally {
+      githubAuthorizationForm.loading = false
+    }
+  }
+
+  async function startGitHubLogin(redirect = '/dashboard/apply') {
+    githubAuthorizationForm.loading = true
+    githubAuthorizationForm.message = '正在创建 GitHub App 登录链接...'
+    try {
+      const result = await createGitHubAuthorization(redirect, undefined, 'login')
+      githubAuthorizationForm.message = '即将跳转到 GitHub 授权页...'
+      globalThis.location.href = result.authorizeUrl
+    }
+    finally {
+      githubAuthorizationForm.loading = false
+    }
+  }
+
+  function applyAiConfig(config: Awaited<ReturnType<typeof loadAiConfig>>) {
+    aiConfigForm.enabled = config.enabled
+    aiConfigForm.baseUrl = config.baseUrl
+    aiConfigForm.imageModel = config.imageModel
+    aiConfigForm.reviewModel = config.reviewModel
+    aiConfigForm.apiKey = ''
+    aiConfigForm.apiKeyMasked = config.apiKeyMasked
+    aiConfigForm.newapiKey = ''
+    aiConfigForm.newapiKeyMasked = config.newapiKeyMasked
+    aiConfigForm.newapiManagementBaseUrl = config.newapiManagementBaseUrl
+    aiConfigForm.newapiUserId = config.newapiUserId
+    aiConfigForm.temporaryKeyTtlMinutes = config.temporaryKeyTtlMinutes
+    aiConfigForm.temporaryKeyQuota = config.temporaryKeyQuota
+    aiConfigForm.llmApiModels = config.llmApiModels
+    aiConfigForm.configured = config.configured
+    aiConfigForm.envPreview = config.env
+  }
+
+  async function refreshAiConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    aiConfigForm.loading = true
+    try {
+      applyAiConfig(await loadAiConfig(welfare.currentUser.value.id))
+    }
+    finally {
+      aiConfigForm.loading = false
+    }
+  }
+
+  async function persistAiConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    aiConfigForm.loading = true
+    aiConfigForm.message = ''
+    try {
+      const result = await saveAiConfig(welfare.currentUser.value.id, {
+        enabled: aiConfigForm.enabled,
+        baseUrl: aiConfigForm.baseUrl,
+        imageModel: aiConfigForm.imageModel,
+        reviewModel: aiConfigForm.reviewModel,
+        apiKey: aiConfigForm.apiKey,
+        newapiKey: aiConfigForm.newapiKey,
+        newapiManagementBaseUrl: aiConfigForm.newapiManagementBaseUrl,
+        newapiUserId: aiConfigForm.newapiUserId,
+        temporaryKeyTtlMinutes: aiConfigForm.temporaryKeyTtlMinutes,
+        temporaryKeyQuota: aiConfigForm.temporaryKeyQuota,
+        llmApiModels: aiConfigForm.llmApiModels,
+      })
+      applyAiConfig(result)
+      aiConfigForm.message = 'AI Provider 配置已保存'
+    }
+    finally {
+      aiConfigForm.loading = false
+    }
+  }
+
+  function applyNotificationProviderConfig(config: Awaited<ReturnType<typeof loadNotificationProviderConfig>>) {
+    notificationProviderConfigForm.resendApiKey = ''
+    notificationProviderConfigForm.resendApiKeyMasked = config.resendApiKeyMasked
+    notificationProviderConfigForm.resendFromEmail = config.resendFromEmail
+    notificationProviderConfigForm.vapidPublicKey = config.vapidPublicKey
+    notificationProviderConfigForm.vapidPrivateKey = ''
+    notificationProviderConfigForm.vapidPrivateKeyMasked = config.vapidPrivateKeyMasked
+    notificationProviderConfigForm.vapidSubject = config.vapidSubject
+    notificationProviderConfigForm.emailConfigured = config.configured.email
+    notificationProviderConfigForm.pushConfigured = config.configured.push
+  }
+
+  async function refreshNotificationProviderConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    notificationProviderConfigForm.loading = true
+    try {
+      applyNotificationProviderConfig(await loadNotificationProviderConfig(welfare.currentUser.value.id))
+    }
+    finally {
+      notificationProviderConfigForm.loading = false
+    }
+  }
+
+  async function persistNotificationProviderConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    notificationProviderConfigForm.loading = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await saveNotificationProviderConfig(welfare.currentUser.value.id, {
+        resendApiKey: notificationProviderConfigForm.resendApiKey,
+        resendFromEmail: notificationProviderConfigForm.resendFromEmail,
+        vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
+        vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
+        vapidSubject: notificationProviderConfigForm.vapidSubject,
+      })
+      applyNotificationProviderConfig(result)
+      notificationProviderConfigForm.message = '通知供应商配置已保存'
+    }
+    finally {
+      notificationProviderConfigForm.loading = false
+    }
+  }
+
+  async function generateTemporaryAiKey() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    const result = await createTemporaryAiKey(welfare.currentUser.value.id)
+    temporaryAiKey.value = result.key
+    temporaryAiKeyExpiresAt.value = result.expiresAt
+  }
+
+  async function submitImageGenerationApplication(applicationId?: string) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    const application = applicationId
+      ? welfare.state.applications.find(item => item.id === applicationId)
+      : welfare.submitApplication({
+          type: 'image',
+          title: applicationForm.title,
+          description: applicationForm.description,
+          githubRepo: applicationForm.githubRepo,
+          attachments: applicationFiles.value,
+          extendStorage: applicationForm.extendStorage,
+          expediteProcessing: applicationForm.expediteProcessing,
+          waiveRejectionReviewFee: applicationForm.waiveRejectionReviewFee,
+          llmApiModelKey: applicationForm.llmApiModelKey,
+          llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
+        })
+    if (!application || application.type !== 'image')
+      throw new Error('图片申请不存在')
+
+    await saveWelfareState(welfare.state)
+    try {
+      await createImageJob(welfare.currentUser.value.id, application.description, application.id)
+      resetApplicationFiles()
+    }
+    finally {
+      await welfare.reloadWelfareState()
+    }
+  }
+
+  async function submitApplicationWithAiReview() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    const application = welfare.submitApplication({
+      type: applicationForm.type,
+      title: applicationForm.title,
+      description: applicationForm.description,
+      githubRepo: applicationForm.githubRepo,
+      attachments: applicationFiles.value,
+      extendStorage: applicationForm.extendStorage,
+      expediteProcessing: applicationForm.expediteProcessing,
+      waiveRejectionReviewFee: applicationForm.waiveRejectionReviewFee,
+      llmApiModelKey: applicationForm.llmApiModelKey,
+      llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
+    })
+    await saveWelfareState(welfare.state)
+    try {
+      await createApplicationReview(welfare.currentUser.value.id, application.id)
+      resetApplicationFiles()
+    }
+    finally {
+      await welfare.reloadWelfareState()
+    }
+  }
+
+  function applyNotificationSettings(settings: Awaited<ReturnType<typeof loadNotificationSettings>>) {
+    notificationSettingsForm.emailEnabled = settings.emailEnabled
+    notificationSettingsForm.emailAddress = settings.emailAddress
+    notificationSettingsForm.feishuEnabled = settings.feishuEnabled
+    notificationSettingsForm.feishuWebhookMasked = settings.feishuWebhookMasked
+    notificationSettingsForm.feishuWebhookUrl = ''
+    notificationSettingsForm.browserPushEnabled = settings.browserPushEnabled
+    notificationSettingsForm.pushSubscriptionCount = settings.pushSubscriptionCount
+  }
+
+  async function refreshNotifications() {
+    if (!welfare.currentUser.value)
+      return
+
+    notificationsLoading.value = true
+    try {
+      const result = await loadNotifications(welfare.currentUser.value.id)
+      notificationList.value = result.notifications
+      unreadNotificationCount.value = result.unreadCount
+    }
+    finally {
+      notificationsLoading.value = false
+    }
+  }
+
+  async function refreshNotificationSettings() {
+    if (!welfare.currentUser.value)
+      return
+
+    notificationSettingsForm.loading = true
+    try {
+      applyNotificationSettings(await loadNotificationSettings(welfare.currentUser.value.id))
+      notificationSettingsForm.permission = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+    }
+    finally {
+      notificationSettingsForm.loading = false
+    }
+  }
+
+  async function persistNotificationSettings() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    notificationSettingsForm.loading = true
+    try {
+      applyNotificationSettings(await saveNotificationSettings(welfare.currentUser.value.id, {
+        emailEnabled: notificationSettingsForm.emailEnabled,
+        emailAddress: notificationSettingsForm.emailAddress,
+        feishuEnabled: notificationSettingsForm.feishuEnabled,
+        feishuWebhookUrl: notificationSettingsForm.feishuWebhookUrl,
+        browserPushEnabled: notificationSettingsForm.browserPushEnabled,
+      }))
+    }
+    finally {
+      notificationSettingsForm.loading = false
+    }
+  }
+
+  async function enableBrowserPush() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+    if (!('serviceWorker' in navigator) || !('PushManager' in window))
+      throw new Error('当前浏览器不支持 Push 通知')
+
+    const pushConfig = await loadPushPublicKey()
+    if (!pushConfig.configured || !pushConfig.publicKey)
+      throw new Error('服务端尚未配置 VAPID Key')
+
+    const permission = await Notification.requestPermission()
+    notificationSettingsForm.permission = permission
+    if (permission !== 'granted')
+      throw new Error('浏览器通知权限未授权')
+
+    const registration = await navigator.serviceWorker.register('/notification-sw.js')
+    const existing = await registration.pushManager.getSubscription()
+    const subscription = existing ?? await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(pushConfig.publicKey),
+    })
+    applyNotificationSettings(await savePushSubscription(
+      welfare.currentUser.value.id,
+      subscription.toJSON() as {
+        endpoint: string
+        keys: { p256dh: string, auth: string }
+      },
+    ))
+  }
+
+  async function readNotification(id: string) {
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+    await markNotificationRead(welfare.currentUser.value.id, id)
+    await refreshNotifications()
+  }
+
+  async function readAllNotifications() {
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+    await markAllNotificationsRead(welfare.currentUser.value.id)
+    await refreshNotifications()
+  }
+
+  async function startRecharge() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录后再充值')
+
+    const amount = Number(rechargeForm.amount)
+    if (!Number.isInteger(amount) || amount <= 0)
+      throw new Error('当前积分充值仅支持正整数')
+
+    rechargeForm.loading = true
+    rechargeForm.statusMessage = '正在创建 LINUX DO Credit 充值订单...'
+    try {
+      const result = await createRechargeOrder(amount, welfare.currentUser.value.id)
+      rechargeForm.statusMessage = '订单已创建，正在跳转到 LINUX DO Credit...'
+      globalThis.location.href = result.redirectUrl
+    }
+    finally {
+      rechargeForm.loading = false
+    }
+  }
+
+  async function refreshRechargeStatus(outTradeNo: string) {
+    const status = await loadRechargeStatus(outTradeNo)
+    lastRechargeStatus.value = status
+    return status
+  }
+
   return {
-    ...demo,
+    ...welfare,
     adminForm,
-    loginForm,
     profileForm,
     rechargeForm,
+    rechargeConfigForm,
+    githubAppConfigForm,
+    githubAuthorizationForm,
+    aiConfigForm,
+    notificationProviderConfigForm,
+    temporaryAiKey,
+    temporaryAiKeyExpiresAt,
+    notificationSettingsForm,
+    notificationList,
+    unreadNotificationCount,
+    notificationsLoading,
+    lastRechargeStatus,
     applicationForm,
     applicationFiles,
     studentForm,
     studentFiles,
+    studentCategoryOptions,
+    studentEducationLevelOptions,
+    studentGradeOptions,
+    studentSchoolSuggestions: STUDENT_SCHOOL_SUGGESTIONS,
     reviewDrafts,
+    rejectFraudulentDrafts,
+    crowdReviewDrafts,
     pointDrafts,
     selectedSection,
+    activeAdminTab,
+    adminTabItems,
     applicationTypeCards,
+    pricingSummary,
+    llmApiBudgetOptions,
+    llmApiReviewLimits,
+    codexBudgetOptions,
+    codexAccessLimits,
+    enabledLlmApiModels,
+    selectedLlmApiModel,
     repoOptions,
     totalApplicationBytes,
     totalStudentBytes,
-    proActiveCount,
-    canSubmitPro,
+    activeRequestCount,
+    canCreateRequest,
     selectedCost,
+    selectedPrepaidCost,
+    selectedLlmApiBudgetUsd,
+    selectedLlmApiRequiresExtendedReview,
+    selectedCodexBudgetUsd,
+    selectedCodexRequiresExtendedReview,
     heroProgress,
     pendingCount,
     latestTransactions,
@@ -192,5 +951,29 @@ export function useWelfareUiState() {
     typeIcon,
     resetApplicationFiles,
     resetStudentFiles,
+    crowdReviewDraftFor,
+    submitCrowdReviewDraft,
+    rejectApplicationWithOptions,
+    refreshRechargeConfig,
+    persistRechargeConfig,
+    refreshGitHubAppConfig,
+    persistGitHubAppConfig,
+    startGitHubAuthorization,
+    startGitHubLogin,
+    refreshAiConfig,
+    persistAiConfig,
+    refreshNotificationProviderConfig,
+    persistNotificationProviderConfig,
+    generateTemporaryAiKey,
+    submitImageGenerationApplication,
+    submitApplicationWithAiReview,
+    refreshNotifications,
+    refreshNotificationSettings,
+    persistNotificationSettings,
+    enableBrowserPush,
+    readNotification,
+    readAllNotifications,
+    startRecharge,
+    refreshRechargeStatus,
   }
 }

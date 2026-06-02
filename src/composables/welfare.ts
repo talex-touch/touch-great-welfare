@@ -1,11 +1,34 @@
 import { computed, reactive, ref, watch } from 'vue'
+import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
+import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
 import { loadWelfareState, saveWelfareState } from './welfare-persistence'
 
-export type UserRole = 'admin' | 'user'
+export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro'
-export type RequestStatus = 'reserved' | 'pending_review' | 'answered' | 'rejected'
+export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected'
 export type StudentStatus = 'pending' | 'approved' | 'rejected'
 export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustment' | 'grant'
+export type AiReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_human' | 'failed'
+export type CrowdReviewTargetType = 'pro_application'
+export type CrowdReviewDecision = 'approve' | 'reject' | 'needs_admin'
+export type UserLevelKey = 'starter' | 'steady' | 'trusted' | 'priority' | 'guardian'
+export type LlmApiModelRegion = 'domestic' | 'global' | 'custom'
+
+export interface LlmApiModelPricing {
+  key: string
+  name: string
+  provider: string
+  region: LlmApiModelRegion
+  description: string
+  enabled: boolean
+  pointsPerUsd: number
+  defaultBudgetUsd: number
+  minBudgetUsd: number
+  maxBudgetUsd: number
+  ipLimit: number
+  rpmLimit: number
+  concurrencyLimit: number
+}
 
 export interface UserProfile {
   displayName: string
@@ -13,7 +36,11 @@ export interface UserProfile {
   avatar?: string
   bio?: string
   githubUsername?: string
+  githubId?: string
   selectedRepo?: string
+  githubRepos?: string[]
+  githubAuthorized?: boolean
+  githubAuthorizedAt?: string
   studentVerified: boolean
 }
 
@@ -43,18 +70,72 @@ export interface AttachmentMeta {
   type: string
 }
 
+export interface AiApplicationReview {
+  status: AiReviewStatus
+  summary: string
+  risk: 'low' | 'medium' | 'high'
+  reason?: string
+  model?: string
+  reviewedAt?: string
+}
+
 export interface WelfareApplication {
   id: string
   userId: string
   type: RequestKind
+  parentApplicationId?: string
   title: string
   description: string
   githubRepo?: string
   hasOpenSourceBadge: boolean
   attachments: AttachmentMeta[]
   status: RequestStatus
+  baseCost?: number
   cost: number
   costCharged: boolean
+  pricingDiscountRate?: number
+  pricingPromotionName?: string
+  pricingPromotionEndsAt?: string
+  pricingAppliedAt?: string
+  aiReview?: AiApplicationReview
+  aiReviewFeeRate: number
+  rejectionReviewFee: number
+  rejectionReviewFeeWaived: boolean
+  rejectionFraudulent?: boolean
+  waiveRejectionReviewFeeBlockedUntil?: string
+  llmApiModelKey?: string
+  llmApiModelName?: string
+  llmApiProvider?: string
+  llmApiBudgetUsd?: number
+  llmApiPointRate?: number
+  llmApiIpLimit?: number
+  llmApiRpmLimit?: number
+  llmApiConcurrencyLimit?: number
+  llmApiRequiresExtendedReview?: boolean
+  /** @deprecated use llmApiBudgetUsd */
+  codexBudgetUsd?: number
+  /** @deprecated use llmApiPointRate */
+  codexPointRate?: number
+  /** @deprecated use llmApiIpLimit */
+  codexIpLimit?: number
+  /** @deprecated use llmApiRpmLimit */
+  codexRpmLimit?: number
+  /** @deprecated use llmApiConcurrencyLimit */
+  codexConcurrencyLimit?: number
+  /** @deprecated use llmApiRequiresExtendedReview */
+  codexRequiresExtendedReview?: boolean
+  storageExtended: boolean
+  storageExtensionCost: number
+  retentionExpiresAt: string
+  standardProcessingHours?: number
+  processingDueAt?: string
+  processingStartedAt?: string
+  completedAt?: string
+  expedited?: boolean
+  expediteCost?: number
+  contextAppendCost?: number
+  contextAppendUntil?: string
+  cooldownUntil?: string
   answer?: string
   createdAt: string
   reviewedAt?: string
@@ -66,6 +147,9 @@ export interface StudentVerification {
   category: string
   school?: string
   identity?: string
+  grade?: string
+  educationLevel?: string
+  educationEmail?: string
   notes: string
   attachments: AttachmentMeta[]
   status: StudentStatus
@@ -74,6 +158,16 @@ export interface StudentVerification {
   reply?: string
   createdAt: string
   reviewedAt?: string
+}
+
+export interface CrowdReview {
+  id: string
+  targetType: CrowdReviewTargetType
+  targetId: string
+  reviewerId: string
+  decision: CrowdReviewDecision
+  note: string
+  createdAt: string
 }
 
 export interface CreditTransaction {
@@ -92,6 +186,7 @@ export interface WelfareState {
   oauth: OauthConfig
   applications: WelfareApplication[]
   studentVerifications: StudentVerification[]
+  crowdReviews: CrowdReview[]
   transactions: CreditTransaction[]
   createdAt: string
 }
@@ -108,41 +203,394 @@ export interface CreateAdminPayload {
   email: string
 }
 
-export interface MockLoginPayload {
-  displayName: string
-  email: string
-}
-
 export interface SubmitApplicationPayload {
   type: RequestKind
   title: string
   description: string
   githubRepo?: string
   attachments?: FileLike[]
+  extendStorage?: boolean
+  expediteProcessing?: boolean
+  waiveRejectionReviewFee?: boolean
+  llmApiModelKey?: string
+  llmApiBudgetUsd?: number
+  /** @deprecated use llmApiBudgetUsd */
+  codexBudgetUsd?: number
+}
+
+export interface AppendApplicationContextPayload {
+  applicationId: string
+  description: string
 }
 
 export interface SubmitStudentPayload {
   category: string
   school?: string
   identity?: string
+  grade?: string
+  educationLevel?: string
+  educationEmail?: string
   notes: string
   attachments?: FileLike[]
 }
 
-const SAVE_DEBOUNCE_MS = 250
-
-export const REQUEST_COST: Record<RequestKind, number> = {
-  code: 1,
-  image: 10,
-  pro: 100,
+export interface RejectApplicationOptions {
+  fraudulent?: boolean
 }
 
-export const STUDENT_REVIEW_FEE = 10
+export interface UserReviewStats {
+  submitted: number
+  approved: number
+  rejected: number
+  pending: number
+  studentApproved: number
+  studentRejected: number
+}
+
+export interface UserLevelRule {
+  key: UserLevelKey
+  name: string
+  minScore: number
+  priority: number
+  tone: 'info' | 'success' | 'warning'
+  summary: string
+}
+
+export interface UserLevelCard extends UserLevelRule {
+  score: number
+  maxScore: number
+  next?: UserLevelRule
+  stats: UserReviewStats
+  reasons: string[]
+}
+
+const SAVE_DEBOUNCE_MS = 250
+const USER_LEVEL_MAX_SCORE = 3000
+const USER_LEVEL_APPROVAL_TIERS = [
+  { count: 3, points: 12 },
+  { count: 5, points: 7 },
+  { count: 10, points: 4 },
+] as const
+const USER_LEVEL_OPEN_SOURCE_TIERS = [
+  { count: 3, points: 4 },
+  { count: 5, points: 3 },
+] as const
+
+export const USER_LEVEL_RULES: UserLevelRule[] = [
+  {
+    key: 'starter',
+    name: 'L1 新芽',
+    minScore: 0,
+    priority: 1,
+    tone: 'info',
+    summary: '新用户或材料记录较少，按常规顺序处理。',
+  },
+  {
+    key: 'steady',
+    name: 'L2 稳定',
+    minScore: 300,
+    priority: 2,
+    tone: 'info',
+    summary: '已有稳定提交记录，进入略高优先级。',
+  },
+  {
+    key: 'trusted',
+    name: 'L3 可信',
+    minScore: 850,
+    priority: 3,
+    tone: 'success',
+    summary: '通过率和认证表现较好，优先进入审核视野。',
+  },
+  {
+    key: 'priority',
+    name: 'L4 优先',
+    minScore: 1600,
+    priority: 4,
+    tone: 'success',
+    summary: '持续贡献且退回较少，待审队列优先排序。',
+  },
+  {
+    key: 'guardian',
+    name: 'L5 共建',
+    minScore: 2450,
+    priority: 5,
+    tone: 'warning',
+    summary: '高可信共建用户，资源紧张时最高优先级。',
+  },
+]
+
+export const REQUEST_COST: Record<RequestKind, number> = {
+  code: 800,
+  image: 3200,
+  pro: 12000,
+}
+
+export const BASE_REQUEST_COST: Record<RequestKind, number> = {
+  code: 800,
+  image: 3200,
+  pro: 12000,
+}
+
+export const ACTIVITY_DISCOUNT_RATE = 0.1
+export const ACTIVITY_DAYS = 7
+export const ACTIVITY_START_AT = '2026-06-01T00:00:00.000Z'
+export const ACTIVITY_END_AT = '2026-06-08T00:00:00.000Z'
+export const ACTIVITY_NAME = '限时 0.1 折'
+export const PRO_BASE_COST = 10880
+export const PRO_PUBLIC_COST = BASE_REQUEST_COST.pro
+export const PRO_CONTEXT_APPEND_COST = 10880
+export const PRO_STANDARD_PROCESSING_HOURS = 72
+export const PRO_EXPEDITED_PROCESSING_HOURS = 48
+export const PRO_EXPEDITE_COST = 1100
+export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
+export const LLM_API_EXTENDED_REVIEW_THRESHOLD_USD = 100
+export const LLM_API_STANDARD_PROCESSING_HOURS = 24
+export const LLM_API_EXTENDED_PROCESSING_HOURS = 72
+export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
+  {
+    key: 'codex',
+    name: 'Codex',
+    provider: 'OpenAI',
+    region: 'global',
+    description: '适合代码生成、仓库理解和自动化任务。',
+    enabled: true,
+    pointsPerUsd: 10,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 2,
+    concurrencyLimit: 1,
+  },
+  {
+    key: 'claude-code',
+    name: 'ClaudeCode',
+    provider: 'Anthropic',
+    region: 'global',
+    description: '适合长上下文代码分析、重构和复杂推理。',
+    enabled: true,
+    pointsPerUsd: 12,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 2,
+    concurrencyLimit: 1,
+  },
+  {
+    key: 'deepseek',
+    name: 'DeepSeek',
+    provider: 'DeepSeek',
+    region: 'domestic',
+    description: '国内模型通道，适合通用代码问答与较低成本场景。',
+    enabled: true,
+    pointsPerUsd: 6,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 3,
+    concurrencyLimit: 1,
+  },
+  {
+    key: 'qwen',
+    name: 'Qwen',
+    provider: 'Alibaba Cloud',
+    region: 'domestic',
+    description: '国内模型通道，适合中文材料理解与代码辅助。',
+    enabled: true,
+    pointsPerUsd: 5,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 3,
+    concurrencyLimit: 1,
+  },
+]
+export const LLM_API_BUDGET_OPTIONS = [10, 25, 50, 100, 250, 500, 1000] as const
+export const CODEX_DEFAULT_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd
+export const CODEX_MIN_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].minBudgetUsd
+export const CODEX_MAX_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].maxBudgetUsd
+export const CODEX_EXTENDED_REVIEW_THRESHOLD_USD = LLM_API_EXTENDED_REVIEW_THRESHOLD_USD
+export const CODEX_POINTS_PER_USD = DEFAULT_LLM_API_MODELS[0].pointsPerUsd
+export const CODEX_IP_LIMIT = DEFAULT_LLM_API_MODELS[0].ipLimit
+export const CODEX_DEFAULT_RPM_LIMIT = DEFAULT_LLM_API_MODELS[0].rpmLimit
+export const CODEX_CONCURRENCY_LIMIT = DEFAULT_LLM_API_MODELS[0].concurrencyLimit
+export const CODEX_STANDARD_PROCESSING_HOURS = LLM_API_STANDARD_PROCESSING_HOURS
+export const CODEX_EXTENDED_PROCESSING_HOURS = LLM_API_EXTENDED_PROCESSING_HOURS
+export const STUDENT_REVIEW_FEE = 800
+export const STORAGE_EXTENSION_DAYS = 7
+export const STORAGE_EXTENSION_COST = 300
+export const REJECTION_REVIEW_FEE_RATE = 0.3
+export const REJECTION_REVIEW_FEE_MIN = 300
+export const REJECTION_REVIEW_FEE_MAX = 800
+export const REJECTION_FEE_WAIVER_BLOCK_DAYS = 3
+export const REJECTION_FRAUD_COOLDOWN_DAYS = 7
 export const MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
-export const MAX_ACTIVE_PRO_APPLICATIONS = 3
+export const MAX_ACTIVE_USER_REQUESTS = 5
+export { DATA_RETENTION_DAYS }
 
 function now() {
   return new Date().toISOString()
+}
+
+function addDays(value: string, days: number) {
+  return new Date(new Date(value).getTime() + days * 24 * 60 * 60 * 1000).toISOString()
+}
+
+function addHours(value: string, hours: number) {
+  return new Date(new Date(value).getTime() + hours * 60 * 60 * 1000).toISOString()
+}
+
+function isPromotionActive(referenceTime = now()) {
+  const time = new Date(referenceTime).getTime()
+  const start = new Date(ACTIVITY_START_AT).getTime()
+  const end = new Date(ACTIVITY_END_AT).getTime()
+  return Number.isFinite(time) && time >= start && time < end
+}
+
+export function calculateActivityPrice(cost: number, referenceTime = now()) {
+  if (!isPromotionActive(referenceTime))
+    return cost
+
+  return Math.max(1, Math.ceil(cost * ACTIVITY_DISCOUNT_RATE))
+}
+
+export function buildPricingSnapshot(type: RequestKind, referenceTime = now()) {
+  const baseCost = BASE_REQUEST_COST[type]
+  const discountedCost = calculateActivityPrice(baseCost, referenceTime)
+  const active = discountedCost !== baseCost
+  return {
+    baseCost,
+    cost: discountedCost,
+    discountRate: active ? ACTIVITY_DISCOUNT_RATE : 1,
+    promotionName: active ? ACTIVITY_NAME : undefined,
+    promotionEndsAt: active ? ACTIVITY_END_AT : undefined,
+    appliedAt: referenceTime,
+  }
+}
+
+export function calculateRejectionReviewFee(cost: number) {
+  return Math.min(REJECTION_REVIEW_FEE_MAX, Math.max(REJECTION_REVIEW_FEE_MIN, Math.ceil(cost * REJECTION_REVIEW_FEE_RATE)))
+}
+
+export function calculateApplicationPrepaidCost(type: RequestKind, extendedStorage: boolean, expeditedProcessing = false, referenceTime = now()) {
+  const pricing = buildPricingSnapshot(type, referenceTime)
+  return pricing.cost
+    + (extendedStorage ? STORAGE_EXTENSION_COST : 0)
+    + (type === 'pro' && expeditedProcessing ? PRO_EXPEDITE_COST : 0)
+}
+
+export function normalizeLlmApiModelPricing(model: Partial<LlmApiModelPricing>): LlmApiModelPricing {
+  const fallback = DEFAULT_LLM_API_MODELS[0]
+  const pointsPerUsd = Math.max(1, Math.min(1000, Math.trunc(Number(model.pointsPerUsd || fallback.pointsPerUsd))))
+  const minBudgetUsd = Math.max(1, Math.min(100000, Math.trunc(Number(model.minBudgetUsd || fallback.minBudgetUsd))))
+  const maxBudgetUsd = Math.max(minBudgetUsd, Math.min(100000, Math.trunc(Number(model.maxBudgetUsd || fallback.maxBudgetUsd))))
+  const defaultBudgetUsd = Math.max(minBudgetUsd, Math.min(maxBudgetUsd, Math.trunc(Number(model.defaultBudgetUsd || fallback.defaultBudgetUsd))))
+  const region = ['domestic', 'global', 'custom'].includes(String(model.region)) ? model.region as LlmApiModelRegion : 'custom'
+
+  return {
+    key: String(model.key || fallback.key).trim() || fallback.key,
+    name: String(model.name || fallback.name).trim() || fallback.name,
+    provider: String(model.provider || fallback.provider).trim() || fallback.provider,
+    region,
+    description: String(model.description || '').trim() || fallback.description,
+    enabled: model.enabled !== false,
+    pointsPerUsd,
+    defaultBudgetUsd,
+    minBudgetUsd,
+    maxBudgetUsd,
+    ipLimit: Math.max(1, Math.min(50, Math.trunc(Number(model.ipLimit || fallback.ipLimit)))),
+    rpmLimit: Math.max(1, Math.min(1000, Math.trunc(Number(model.rpmLimit || fallback.rpmLimit)))),
+    concurrencyLimit: Math.max(1, Math.min(100, Math.trunc(Number(model.concurrencyLimit || fallback.concurrencyLimit)))),
+  }
+}
+
+export function normalizeLlmApiModelPricings(value: unknown): LlmApiModelPricing[] {
+  const source = Array.isArray(value) && value.length ? value : DEFAULT_LLM_API_MODELS
+  const seen = new Set<string>()
+  const normalized: LlmApiModelPricing[] = []
+
+  for (const item of source) {
+    if (!item || typeof item !== 'object')
+      continue
+
+    const model = normalizeLlmApiModelPricing(item as Partial<LlmApiModelPricing>)
+    if (seen.has(model.key))
+      continue
+
+    seen.add(model.key)
+    normalized.push(model)
+  }
+
+  return normalized.length ? normalized : DEFAULT_LLM_API_MODELS.map(item => ({ ...item }))
+}
+
+export function resolveLlmApiModel(modelKey?: string, models: readonly LlmApiModelPricing[] = DEFAULT_LLM_API_MODELS) {
+  const enabledModels = models.filter(item => item.enabled)
+  return enabledModels.find(item => item.key === modelKey)
+    ?? enabledModels.find(item => item.key === LLM_API_DEFAULT_MODEL_KEY)
+    ?? enabledModels[0]
+    ?? DEFAULT_LLM_API_MODELS[0]
+}
+
+export function normalizeLlmApiBudgetUsd(value: unknown, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  const amount = Math.trunc(Number(value))
+  if (!Number.isFinite(amount))
+    return model.defaultBudgetUsd
+
+  return Math.max(model.minBudgetUsd, Math.min(model.maxBudgetUsd, amount))
+}
+
+export function calculateLlmApiCostPoints(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  return normalizeLlmApiBudgetUsd(budgetUsd, model) * model.pointsPerUsd
+}
+
+export function llmApiRequiresExtendedReview(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  return normalizeLlmApiBudgetUsd(budgetUsd, model) > LLM_API_EXTENDED_REVIEW_THRESHOLD_USD
+}
+
+export function normalizeCodexBudgetUsd(value: unknown) {
+  return normalizeLlmApiBudgetUsd(value, DEFAULT_LLM_API_MODELS[0])
+}
+
+export function calculateCodexCostPoints(budgetUsd: number) {
+  return calculateLlmApiCostPoints(budgetUsd, DEFAULT_LLM_API_MODELS[0])
+}
+
+export function codexRequiresExtendedReview(budgetUsd: number) {
+  return llmApiRequiresExtendedReview(budgetUsd, DEFAULT_LLM_API_MODELS[0])
+}
+
+export function createRetentionExpiresAt(createdAt: string, extended: boolean) {
+  return addDays(createdAt, DATA_RETENTION_DAYS + (extended ? STORAGE_EXTENSION_DAYS : 0))
+}
+
+export function createProcessingDueAt(createdAt: string, type: RequestKind, expedited = false) {
+  if (type === 'code')
+    return addHours(createdAt, CODEX_STANDARD_PROCESSING_HOURS)
+
+  if (type !== 'pro')
+    return undefined
+
+  return addHours(createdAt, expedited ? PRO_EXPEDITED_PROCESSING_HOURS : PRO_STANDARD_PROCESSING_HOURS)
+}
+
+export function createLlmApiProcessingDueAt(createdAt: string, budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  return addHours(createdAt, llmApiRequiresExtendedReview(budgetUsd, model) ? LLM_API_EXTENDED_PROCESSING_HOURS : LLM_API_STANDARD_PROCESSING_HOURS)
+}
+
+export function createCodexProcessingDueAt(createdAt: string, budgetUsd: number) {
+  return createLlmApiProcessingDueAt(createdAt, budgetUsd, DEFAULT_LLM_API_MODELS[0])
+}
+
+export function createRejectionFeeWaiverBlockedUntil(reviewedAt: string) {
+  return addDays(reviewedAt, REJECTION_FEE_WAIVER_BLOCK_DAYS)
+}
+
+export function createFraudRejectionCooldownUntil(reviewedAt: string) {
+  return addDays(reviewedAt, REJECTION_FRAUD_COOLDOWN_DAYS)
 }
 
 function createId(prefix: string) {
@@ -167,6 +615,7 @@ function defaultState(): WelfareState {
     oauth: defaultOauth(),
     applications: [],
     studentVerifications: [],
+    crowdReviews: [],
     transactions: [],
     createdAt: now(),
   }
@@ -174,7 +623,7 @@ function defaultState(): WelfareState {
 
 function normalizeState(input: Partial<WelfareState>): WelfareState {
   const fallback = defaultState()
-  return {
+  const normalized = {
     ...fallback,
     ...input,
     oauth: {
@@ -184,18 +633,203 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     users: input.users ?? [],
     applications: input.applications ?? [],
     studentVerifications: input.studentVerifications ?? [],
+    crowdReviews: input.crowdReviews ?? [],
     transactions: input.transactions ?? [],
   }
+
+  normalized.applications = normalized.applications.map((application) => {
+    const createdAt = application.createdAt || now()
+    const baseCost = Number.isFinite(application.baseCost) ? application.baseCost! : BASE_REQUEST_COST[application.type]
+    const llmApiModel = application.type === 'code'
+      ? resolveLlmApiModel(application.llmApiModelKey ?? (application.codexBudgetUsd ? 'codex' : undefined))
+      : undefined
+    const llmApiBudgetUsd = application.type === 'code' && llmApiModel
+      ? normalizeLlmApiBudgetUsd(application.llmApiBudgetUsd ?? application.codexBudgetUsd ?? llmApiModel.defaultBudgetUsd, llmApiModel)
+      : undefined
+    const llmApiCost = llmApiBudgetUsd && llmApiModel ? calculateLlmApiCostPoints(llmApiBudgetUsd, llmApiModel) : undefined
+    const codexBudgetUsd = llmApiModel?.key === 'codex' ? llmApiBudgetUsd : undefined
+    const cost = Number.isFinite(application.cost) ? application.cost : llmApiCost ?? calculateActivityPrice(baseCost, createdAt)
+    const storageExtended = !!application.storageExtended
+    const expedited = !!application.expedited
+    const rejectionReviewFeeWaived = !!application.rejectionReviewFeeWaived
+    const waiveRejectionReviewFeeBlockedUntil = application.waiveRejectionReviewFeeBlockedUntil
+      ?? (application.status === 'rejected' && rejectionReviewFeeWaived && application.reviewedAt
+        ? createRejectionFeeWaiverBlockedUntil(application.reviewedAt)
+        : undefined)
+    return {
+      ...application,
+      baseCost,
+      cost,
+      pricingDiscountRate: application.pricingDiscountRate ?? (cost < baseCost ? ACTIVITY_DISCOUNT_RATE : 1),
+      pricingPromotionName: application.pricingPromotionName ?? (cost < baseCost ? ACTIVITY_NAME : undefined),
+      pricingPromotionEndsAt: application.pricingPromotionEndsAt ?? (cost < baseCost ? ACTIVITY_END_AT : undefined),
+      pricingAppliedAt: application.pricingAppliedAt ?? createdAt,
+      aiReviewFeeRate: application.aiReviewFeeRate ?? REJECTION_REVIEW_FEE_RATE,
+      rejectionReviewFee: application.rejectionReviewFee ?? calculateRejectionReviewFee(cost),
+      rejectionReviewFeeWaived,
+      rejectionFraudulent: !!application.rejectionFraudulent,
+      waiveRejectionReviewFeeBlockedUntil,
+      llmApiModelKey: llmApiModel?.key,
+      llmApiModelName: application.llmApiModelName ?? llmApiModel?.name,
+      llmApiProvider: application.llmApiProvider ?? llmApiModel?.provider,
+      llmApiBudgetUsd,
+      llmApiPointRate: application.llmApiPointRate ?? llmApiModel?.pointsPerUsd,
+      llmApiIpLimit: application.llmApiIpLimit ?? llmApiModel?.ipLimit,
+      llmApiRpmLimit: application.llmApiRpmLimit ?? llmApiModel?.rpmLimit,
+      llmApiConcurrencyLimit: application.llmApiConcurrencyLimit ?? llmApiModel?.concurrencyLimit,
+      llmApiRequiresExtendedReview: application.llmApiRequiresExtendedReview ?? (llmApiBudgetUsd && llmApiModel ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined),
+      codexBudgetUsd,
+      codexPointRate: llmApiModel?.key === 'codex' ? (application.codexPointRate ?? llmApiModel.pointsPerUsd) : undefined,
+      codexIpLimit: llmApiModel?.key === 'codex' ? (application.codexIpLimit ?? llmApiModel.ipLimit) : undefined,
+      codexRpmLimit: llmApiModel?.key === 'codex' ? (application.codexRpmLimit ?? llmApiModel.rpmLimit) : undefined,
+      codexConcurrencyLimit: llmApiModel?.key === 'codex' ? (application.codexConcurrencyLimit ?? llmApiModel.concurrencyLimit) : undefined,
+      codexRequiresExtendedReview: llmApiModel?.key === 'codex' && llmApiBudgetUsd ? (application.codexRequiresExtendedReview ?? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel)) : undefined,
+      storageExtended,
+      storageExtensionCost: application.storageExtensionCost ?? (storageExtended ? STORAGE_EXTENSION_COST : 0),
+      retentionExpiresAt: application.retentionExpiresAt ?? createRetentionExpiresAt(createdAt, storageExtended),
+      standardProcessingHours: application.standardProcessingHours ?? (application.type === 'pro' ? PRO_STANDARD_PROCESSING_HOURS : llmApiBudgetUsd && llmApiModel ? (llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) ? LLM_API_EXTENDED_PROCESSING_HOURS : LLM_API_STANDARD_PROCESSING_HOURS) : undefined),
+      processingDueAt: application.processingDueAt ?? (llmApiBudgetUsd && llmApiModel ? createLlmApiProcessingDueAt(createdAt, llmApiBudgetUsd, llmApiModel) : createProcessingDueAt(createdAt, application.type, expedited)),
+      expedited,
+      expediteCost: application.expediteCost ?? (application.type === 'pro' && expedited ? PRO_EXPEDITE_COST : 0),
+      contextAppendCost: application.contextAppendCost ?? (application.type === 'pro' ? PRO_CONTEXT_APPEND_COST : undefined),
+      contextAppendUntil: application.contextAppendUntil ?? application.retentionExpiresAt ?? createRetentionExpiresAt(createdAt, storageExtended),
+    }
+  })
+
+  return applyWelfareRetentionPolicy(normalized).state
 }
 
 function assertCurrentUser(user?: User): asserts user is User {
   if (!user)
-    throw new Error('请先通过 OAuth 登录')
+    throw new Error('请先通过 GitHub App 授权登录')
 }
 
 function assertAdmin(user?: User): asserts user is User {
   if (!user || user.role !== 'admin')
     throw new Error('需要管理员权限')
+}
+
+function assertCrowdReviewer(user?: User): asserts user is User {
+  if (!user || !['admin', 'reviewer'].includes(user.role))
+    throw new Error('需要众包审核权限')
+}
+
+function emptyUserReviewStats(): UserReviewStats {
+  return {
+    submitted: 0,
+    approved: 0,
+    rejected: 0,
+    pending: 0,
+    studentApproved: 0,
+    studentRejected: 0,
+  }
+}
+
+function userReviewStats(userId: string, source: Pick<WelfareState, 'applications' | 'studentVerifications'>): UserReviewStats {
+  const stats = emptyUserReviewStats()
+
+  for (const application of source.applications) {
+    if (application.userId !== userId)
+      continue
+
+    stats.submitted += 1
+    if (['answered', 'completed', 'closed'].includes(application.status))
+      stats.approved += 1
+    if (application.status === 'rejected')
+      stats.rejected += 1
+    if (['pending_review', 'processing'].includes(application.status))
+      stats.pending += 1
+  }
+
+  for (const verification of source.studentVerifications) {
+    if (verification.userId !== userId)
+      continue
+
+    stats.submitted += 1
+    if (verification.status === 'approved') {
+      stats.approved += 1
+      stats.studentApproved += 1
+    }
+    if (verification.status === 'rejected') {
+      stats.rejected += 1
+      stats.studentRejected += 1
+    }
+    if (verification.status === 'pending')
+      stats.pending += 1
+  }
+
+  return stats
+}
+
+function clampScore(value: number) {
+  return Math.max(0, Math.min(USER_LEVEL_MAX_SCORE, Math.round(value)))
+}
+
+function tieredCountScore(count: number, tiers: readonly { count: number, points: number }[], tailPoints: number) {
+  let remaining = Math.max(0, count)
+  let score = 0
+
+  for (const tier of tiers) {
+    const used = Math.min(remaining, tier.count)
+    score += used * tier.points
+    remaining -= used
+
+    if (!remaining)
+      break
+  }
+
+  return score + remaining * tailPoints
+}
+
+export function buildUserLevelCard(user: User, source: Pick<WelfareState, 'applications' | 'studentVerifications'>): UserLevelCard {
+  const stats = userReviewStats(user.id, source)
+  const approvedApplications = source.applications.filter(item => item.userId === user.id && ['answered', 'completed', 'closed'].includes(item.status))
+  const openSourceApprovals = approvedApplications.filter(item => item.hasOpenSourceBadge).length
+  const submittedSignal = Math.min(18, Math.floor(Math.sqrt(stats.submitted) * 4))
+  const approvalSignal = tieredCountScore(approvedApplications.length, USER_LEVEL_APPROVAL_TIERS, 2)
+  const openSourceSignal = Math.min(24, tieredCountScore(openSourceApprovals, USER_LEVEL_OPEN_SOURCE_TIERS, 1))
+  const studentSignal = Math.min(12, stats.studentApproved * 6) + (user.profile.studentVerified ? 8 : 0)
+  const accountSignal = (user.profile.githubAuthorized ? 6 : 0) + Math.min(8, Math.floor(Math.max(0, user.points) / 4000))
+  const roleBoost = user.role === 'admin' ? 65 : user.role === 'reviewer' ? 20 : 0
+  const score = clampScore(
+    submittedSignal
+    + approvalSignal
+    + Math.min(5, stats.pending)
+    + studentSignal
+    + openSourceSignal
+    + accountSignal
+    + roleBoost
+    - stats.rejected * 18
+    - stats.studentRejected * 8,
+  )
+  const rule = [...USER_LEVEL_RULES]
+    .reverse()
+    .find(item => score >= item.minScore) ?? USER_LEVEL_RULES[0]
+  const ruleIndex = USER_LEVEL_RULES.findIndex(item => item.key === rule.key)
+  const next = USER_LEVEL_RULES[ruleIndex + 1]
+  const reasons = [
+    `提交 ${stats.submitted} 次`,
+    `通过 ${stats.approved} 次`,
+    `退回 ${stats.rejected} 次`,
+  ]
+
+  if (stats.pending)
+    reasons.push(`待审 ${stats.pending} 次`)
+  if (user.profile.studentVerified)
+    reasons.push('学生认证')
+  if (user.profile.githubAuthorized)
+    reasons.push('GitHub 授权')
+  if (user.role === 'reviewer')
+    reasons.push('众包审核员')
+
+  return {
+    ...rule,
+    score,
+    maxScore: USER_LEVEL_MAX_SCORE,
+    next,
+    stats,
+    reasons,
+  }
 }
 
 function toAttachmentMeta(files: FileLike[] = []): AttachmentMeta[] {
@@ -209,6 +843,38 @@ function toAttachmentMeta(files: FileLike[] = []): AttachmentMeta[] {
 
 function totalBytes(files: FileLike[] = []) {
   return files.reduce((sum, file) => sum + file.size, 0)
+}
+
+function isActiveApplication(status: RequestStatus) {
+  return ['reserved', 'pending_review', 'processing'].includes(status)
+}
+
+function isActiveStudentVerification(status: StudentStatus) {
+  return status === 'pending'
+}
+
+function defaultApplicationRejectionAnswer(application: WelfareApplication, fraudulent: boolean) {
+  const fee = application.rejectionReviewFee || calculateRejectionReviewFee(application.cost)
+  if (application.rejectionReviewFeeWaived) {
+    if (fraudulent) {
+      return `申请已退回；你已选择认真填写承诺，但管理员判断材料存在造假或不实包装，本次仍扣除 ${fee} 积分（30%）AI 审核手续费。${REJECTION_FRAUD_COOLDOWN_DAYS} 天内不可再次提交同类申请，且 ${REJECTION_FEE_WAIVER_BLOCK_DAYS} 天内不能再次勾选认真填写承诺。`
+    }
+
+    return `申请已退回；你已选择认真填写承诺，本次免除 AI 审核手续费。${REJECTION_FEE_WAIVER_BLOCK_DAYS} 天内不能再次勾选认真填写承诺；仍可按规则提交同类申请。`
+  }
+
+  if (fraudulent)
+    return `申请已退回，本次扣除 ${fee} 积分 AI 审核手续费。由于审核判断材料存在造假或不实包装，${REJECTION_FRAUD_COOLDOWN_DAYS} 天内不可再次提交同类申请。`
+
+  return `申请已退回，本次扣除 ${fee} 积分 AI 审核手续费。`
+}
+
+function buildApplicationRejectionAnswer(application: WelfareApplication, reason: string, fraudulent: boolean) {
+  const ruleNotice = defaultApplicationRejectionAnswer(application, fraudulent)
+  if (!richTextToPlainText(reason))
+    return ruleNotice
+
+  return `${sanitizeRichText(reason)}<p>${ruleNotice}</p>`
 }
 
 const state = reactive<WelfareState>(defaultState())
@@ -260,6 +926,13 @@ export function ensureWelfareStateLoaded() {
   return hydratePromise
 }
 
+export async function reloadWelfareState() {
+  const storedState = await loadWelfareState()
+  Object.assign(state, normalizeState(storedState))
+  persistenceError.value = ''
+  isHydrated.value = true
+}
+
 if (typeof window !== 'undefined') {
   ensureWelfareStateLoaded().catch((error) => {
     console.error(error)
@@ -274,9 +947,10 @@ function assertPersistenceReady() {
     throw new Error(persistenceError.value)
 }
 
-export function useWelfareDemo() {
+export function useWelfareStore() {
   const hasAdmin = computed(() => state.users.some(user => user.role === 'admin'))
   const currentUser = computed(() => state.users.find(user => user.id === state.currentUserId))
+  const currentUserLevelCard = computed(() => currentUser.value ? buildUserLevelCard(currentUser.value, state) : undefined)
   const currentUserApplications = computed(() => {
     if (!currentUser.value)
       return []
@@ -294,13 +968,26 @@ export function useWelfareDemo() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
   const isAdmin = computed(() => currentUser.value?.role === 'admin')
-  const oauthReady = computed(() => state.oauth.enabled && !!state.oauth.clientId.trim())
+  const canCrowdReview = computed(() => currentUser.value?.role === 'admin' || currentUser.value?.role === 'reviewer')
+  const compareReviewPriority = (left: { userId: string, createdAt: string }, right: { userId: string, createdAt: string }) => {
+    const leftLevel = userLevelCard(left.userId)
+    const rightLevel = userLevelCard(right.userId)
+    const priorityDiff = rightLevel.priority - leftLevel.priority
+    if (priorityDiff)
+      return priorityDiff
+
+    const scoreDiff = rightLevel.score - leftLevel.score
+    return scoreDiff || right.createdAt.localeCompare(left.createdAt)
+  }
   const pendingProApplications = computed(() => state.applications
-    .filter(item => item.type === 'pro' && item.status === 'pending_review')
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+    .filter(item => item.type === 'pro' && ['pending_review', 'processing'].includes(item.status))
+    .sort(compareReviewPriority))
+  const pendingApplications = computed(() => state.applications
+    .filter(item => ['pending_review', 'processing'].includes(item.status))
+    .sort(compareReviewPriority))
   const pendingStudentVerifications = computed(() => state.studentVerifications
     .filter(item => item.status === 'pending')
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+    .sort(compareReviewPriority))
   const totalReservedApplications = computed(() => state.applications
     .filter(item => item.status === 'reserved')
     .length)
@@ -313,8 +1000,57 @@ export function useWelfareDemo() {
     return state.users.find(user => user.id === userId)?.profile.email ?? 'unknown@example.com'
   }
 
-  function activeProCount(userId: string) {
-    return state.applications.filter(item => item.userId === userId && item.type === 'pro' && item.status === 'pending_review').length
+  function userLevelCard(userId: string) {
+    const user = state.users.find(item => item.id === userId)
+    if (!user) {
+      return {
+        ...USER_LEVEL_RULES[0],
+        score: 0,
+        maxScore: USER_LEVEL_MAX_SCORE,
+        next: USER_LEVEL_RULES[1],
+        stats: emptyUserReviewStats(),
+        reasons: ['用户不存在'],
+      }
+    }
+
+    return buildUserLevelCard(user, state)
+  }
+
+  function activeRequestCount(userId: string) {
+    const applicationCount = state.applications.filter(item => item.userId === userId && isActiveApplication(item.status)).length
+    const studentCount = state.studentVerifications.filter(item => item.userId === userId && isActiveStudentVerification(item.status)).length
+    return applicationCount + studentCount
+  }
+
+  function assertCanCreateRequest(userId: string) {
+    if (activeRequestCount(userId) >= MAX_ACTIVE_USER_REQUESTS)
+      throw new Error(`一个用户最多只能同时创建 ${MAX_ACTIVE_USER_REQUESTS} 个待处理请求`)
+  }
+
+  function applicationCooldownUntil(userId: string, type: RequestKind) {
+    const currentTime = Date.now()
+    return state.applications
+      .filter(item => item.userId === userId && item.type === type && !!item.rejectionFraudulent && !!item.cooldownUntil)
+      .map(item => item.cooldownUntil!)
+      .filter((value) => {
+        const time = new Date(value).getTime()
+        return Number.isFinite(time) && time > currentTime
+      })
+      .sort()
+      .at(-1)
+  }
+
+  function rejectionFeeWaiverBlockedUntil(userId: string) {
+    const currentTime = Date.now()
+    return state.applications
+      .filter(item => item.userId === userId && !!item.waiveRejectionReviewFeeBlockedUntil)
+      .map(item => item.waiveRejectionReviewFeeBlockedUntil!)
+      .filter((value) => {
+        const time = new Date(value).getTime()
+        return Number.isFinite(time) && time > currentTime
+      })
+      .sort()
+      .at(-1)
   }
 
   function addTransaction(userId: string, delta: number, type: CreditTransactionType, reason: string, refId?: string) {
@@ -338,6 +1074,11 @@ export function useWelfareDemo() {
     })
   }
 
+  function chargeRejectionReviewFee(application: WelfareApplication) {
+    const fee = application.rejectionReviewFee || calculateRejectionReviewFee(application.cost)
+    addTransaction(application.userId, -fee, 'spend', '申请退回扣除 AI 审核手续费', application.id)
+  }
+
   function createAdmin(payload: CreateAdminPayload) {
     assertPersistenceReady()
 
@@ -350,9 +1091,10 @@ export function useWelfareDemo() {
       profile: {
         displayName: payload.displayName.trim() || '公益管理员',
         email: payload.email.trim() || 'admin@example.com',
+        githubAuthorized: false,
         studentVerified: false,
       },
-      points: 1000,
+      points: 100000,
       createdAt: now(),
       lastLoginAt: now(),
     }
@@ -362,7 +1104,7 @@ export function useWelfareDemo() {
     state.transactions.unshift({
       id: createId('tx'),
       userId: admin.id,
-      delta: 1000,
+      delta: 100000,
       type: 'grant',
       reason: '首次创建管理员初始化积分',
       createdAt: now(),
@@ -378,48 +1120,6 @@ export function useWelfareDemo() {
 
     admin.lastLoginAt = now()
     state.currentUserId = admin.id
-  }
-
-  function mockOauthLogin(payload: MockLoginPayload) {
-    assertPersistenceReady()
-
-    if (!oauthReady.value)
-      throw new Error('OAuth 尚未启用，请先由管理员配置 Client ID')
-
-    const email = payload.email.trim().toLowerCase()
-    if (!email)
-      throw new Error('请输入邮箱')
-
-    let user = state.users.find(item => item.profile.email.toLowerCase() === email)
-    if (!user) {
-      user = {
-        id: createId('user'),
-        role: 'user',
-        profile: {
-          displayName: payload.displayName.trim() || email.split('@')[0] || '公益用户',
-          email,
-          avatar: `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(email)}`,
-          studentVerified: false,
-        },
-        points: 120,
-        createdAt: now(),
-        lastLoginAt: now(),
-      }
-      state.users.push(user)
-      state.transactions.unshift({
-        id: createId('tx'),
-        userId: user.id,
-        delta: 120,
-        type: 'grant',
-        reason: 'OAuth 首次登录体验积分',
-        createdAt: now(),
-      })
-    }
-    else {
-      user.lastLoginAt = now()
-    }
-
-    state.currentUserId = user.id
   }
 
   function logout() {
@@ -438,49 +1138,40 @@ export function useWelfareDemo() {
     }
   }
 
-  function mockGithubRepos(username: string) {
-    const handle = username.trim().replace(/^@/, '')
-    if (!handle)
-      return []
-
-    return [
-      `${handle}/public-good-kit`,
-      `${handle}/campus-helper`,
-      `${handle}/open-welfare-tools`,
-      `${handle}/awesome-accessibility`,
-    ]
-  }
-
-  function rechargeCurrentUser(amount: number) {
-    assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
-
-    if (!Number.isFinite(amount) || amount <= 0)
-      throw new Error('请输入有效充值积分')
-
-    addTransaction(currentUser.value.id, Math.floor(amount), 'recharge', '充值接口预留：手动模拟到账')
-  }
-
   function submitApplication(payload: SubmitApplicationPayload) {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
 
-    if (currentUser.value.role === 'admin')
-      throw new Error('请使用普通用户账号提交申请')
-
     const title = payload.title.trim()
-    const description = payload.description.trim()
+    const description = sanitizeRichText(payload.description)
     if (!title)
       throw new Error('请填写申请标题')
-    if (!description)
+    if (isRichTextEmpty(description))
       throw new Error('请填写申请说明')
     if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('附件总大小不能超过 200MB')
-    if (payload.type === 'pro' && activeProCount(currentUser.value.id) >= MAX_ACTIVE_PRO_APPLICATIONS)
-      throw new Error('一个用户同时最多只能有 3 个 Pro 申请待审核')
+    const cooldownUntil = applicationCooldownUntil(currentUser.value.id, payload.type)
+    if (cooldownUntil)
+      throw new Error(`同类申请限制中，请在 ${formatDate(cooldownUntil)} 后再提交`)
+    const waiveBlockedUntil = rejectionFeeWaiverBlockedUntil(currentUser.value.id)
+    if (payload.waiveRejectionReviewFee && waiveBlockedUntil)
+      throw new Error(`认真填写承诺暂不可用，请在 ${formatDate(waiveBlockedUntil)} 后再勾选`)
+    assertCanCreateRequest(currentUser.value.id)
 
-    const cost = REQUEST_COST[payload.type]
-    const shouldChargeNow = payload.type !== 'pro'
+    const createdAt = now()
+    const pricing = buildPricingSnapshot(payload.type, createdAt)
+    const llmApiModel = payload.type === 'code' ? resolveLlmApiModel(payload.llmApiModelKey ?? (payload.codexBudgetUsd ? 'codex' : undefined)) : undefined
+    const llmApiBudgetUsd = payload.type === 'code' && llmApiModel ? normalizeLlmApiBudgetUsd(payload.llmApiBudgetUsd ?? payload.codexBudgetUsd, llmApiModel) : undefined
+    const cost = llmApiBudgetUsd && llmApiModel ? calculateLlmApiCostPoints(llmApiBudgetUsd, llmApiModel) : pricing.cost
+    const codexBudgetUsd = llmApiModel?.key === 'codex' ? llmApiBudgetUsd : undefined
+    const storageExtended = payload.type !== 'code' && !!payload.extendStorage
+    const storageExtensionCost = storageExtended ? STORAGE_EXTENSION_COST : 0
+    const expedited = payload.type === 'pro' && !!payload.expediteProcessing
+    const expediteCost = expedited ? PRO_EXPEDITE_COST : 0
+    const prepaidCost = cost + storageExtensionCost + expediteCost
+    if (currentUser.value.points < prepaidCost)
+      throw new Error(`积分不足，本次申请需要预扣 ${prepaidCost} 积分`)
+
     const application: WelfareApplication = {
       id: createId('app'),
       userId: currentUser.value.id,
@@ -488,69 +1179,221 @@ export function useWelfareDemo() {
       title,
       description,
       githubRepo: payload.githubRepo,
-      hasOpenSourceBadge: !!payload.githubRepo && !!currentUser.value.profile.githubUsername,
+      hasOpenSourceBadge: !!payload.githubRepo && !!currentUser.value.profile.githubUsername && !!currentUser.value.profile.githubAuthorized,
       attachments: toAttachmentMeta(payload.attachments),
-      status: payload.type === 'pro' ? 'pending_review' : 'reserved',
+      status: 'pending_review',
+      baseCost: llmApiBudgetUsd ? cost : pricing.baseCost,
       cost,
-      costCharged: false,
-      createdAt: now(),
+      costCharged: true,
+      pricingDiscountRate: llmApiBudgetUsd ? 1 : pricing.discountRate,
+      pricingPromotionName: llmApiBudgetUsd ? undefined : pricing.promotionName,
+      pricingPromotionEndsAt: llmApiBudgetUsd ? undefined : pricing.promotionEndsAt,
+      pricingAppliedAt: pricing.appliedAt,
+      aiReview: {
+        status: 'pending',
+        summary: 'AI 审核排队中，管理员处理前会展示自动审核结果。',
+        risk: 'medium',
+      },
+      aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
+      rejectionReviewFee: calculateRejectionReviewFee(cost),
+      rejectionReviewFeeWaived: !!payload.waiveRejectionReviewFee,
+      rejectionFraudulent: false,
+      llmApiModelKey: llmApiModel?.key,
+      llmApiModelName: llmApiModel?.name,
+      llmApiProvider: llmApiModel?.provider,
+      llmApiBudgetUsd,
+      llmApiPointRate: llmApiModel?.pointsPerUsd,
+      llmApiIpLimit: llmApiModel?.ipLimit,
+      llmApiRpmLimit: llmApiModel?.rpmLimit,
+      llmApiConcurrencyLimit: llmApiModel?.concurrencyLimit,
+      llmApiRequiresExtendedReview: llmApiBudgetUsd && llmApiModel ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined,
+      codexBudgetUsd,
+      codexPointRate: llmApiModel?.key === 'codex' ? llmApiModel.pointsPerUsd : undefined,
+      codexIpLimit: llmApiModel?.key === 'codex' ? llmApiModel.ipLimit : undefined,
+      codexRpmLimit: llmApiModel?.key === 'codex' ? llmApiModel.rpmLimit : undefined,
+      codexConcurrencyLimit: llmApiModel?.key === 'codex' ? llmApiModel.concurrencyLimit : undefined,
+      codexRequiresExtendedReview: llmApiModel?.key === 'codex' && llmApiBudgetUsd ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined,
+      storageExtended,
+      storageExtensionCost,
+      retentionExpiresAt: createRetentionExpiresAt(createdAt, storageExtended),
+      standardProcessingHours: payload.type === 'pro'
+        ? PRO_STANDARD_PROCESSING_HOURS
+        : llmApiBudgetUsd && llmApiModel
+          ? (llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) ? LLM_API_EXTENDED_PROCESSING_HOURS : LLM_API_STANDARD_PROCESSING_HOURS)
+          : undefined,
+      processingDueAt: llmApiBudgetUsd && llmApiModel ? createLlmApiProcessingDueAt(createdAt, llmApiBudgetUsd, llmApiModel) : createProcessingDueAt(createdAt, payload.type, expedited),
+      expedited,
+      expediteCost,
+      contextAppendCost: payload.type === 'pro' ? PRO_CONTEXT_APPEND_COST : undefined,
+      contextAppendUntil: createRetentionExpiresAt(createdAt, storageExtended),
+      createdAt,
     }
 
-    if (shouldChargeNow) {
-      addTransaction(currentUser.value.id, -cost, 'spend', `${payload.type.toUpperCase()} 申请预留扣除`, application.id)
+    addTransaction(currentUser.value.id, -cost, 'spend', `${payload.type.toUpperCase()} 申请预扣`, application.id)
+    if (storageExtended)
+      addTransaction(currentUser.value.id, -storageExtensionCost, 'spend', '延长申请存储服务 7 天预扣', application.id)
+    if (expediteCost)
+      addTransaction(currentUser.value.id, -expediteCost, 'spend', 'Pro 处理加速预扣', application.id)
+
+    state.applications.unshift(application)
+    return application
+  }
+
+  function answerApplication(applicationId: string, answer: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('该申请已经处理')
+    const normalizedAnswer = sanitizeRichText(answer)
+    if (isRichTextEmpty(normalizedAnswer))
+      throw new Error('请填写审核答复')
+
+    if (!application.costCharged) {
+      addTransaction(application.userId, -application.cost, 'spend', `${application.type.toUpperCase()} 申请历史补扣`, application.id)
       application.costCharged = true
     }
 
+    application.status = 'completed'
+    application.answer = normalizedAnswer
+    application.reviewedAt = now()
+    application.processingStartedAt ??= application.reviewedAt
+    application.completedAt = application.reviewedAt
+  }
+
+  function rejectApplication(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('该申请已经处理')
+
+    const reviewedAt = now()
+    const fraudulent = !!options.fraudulent
+    application.status = 'rejected'
+    application.rejectionFraudulent = fraudulent
+    if (application.costCharged) {
+      addTransaction(application.userId, application.cost, 'refund', `${application.type.toUpperCase()} 申请退回返还预扣`, application.id)
+      application.costCharged = false
+    }
+    if (application.expediteCost) {
+      addTransaction(application.userId, application.expediteCost, 'refund', 'Pro 处理加速退回返还', application.id)
+      application.expediteCost = 0
+    }
+
+    if (fraudulent)
+      application.cooldownUntil = createFraudRejectionCooldownUntil(reviewedAt)
+
+    if (application.rejectionReviewFeeWaived) {
+      application.waiveRejectionReviewFeeBlockedUntil = createRejectionFeeWaiverBlockedUntil(reviewedAt)
+      if (fraudulent)
+        chargeRejectionReviewFee(application)
+      application.answer = buildApplicationRejectionAnswer(application, reason, fraudulent)
+    }
+    else {
+      chargeRejectionReviewFee(application)
+      application.answer = buildApplicationRejectionAnswer(application, reason, fraudulent)
+    }
+    application.reviewedAt = reviewedAt
+  }
+
+  function appendApplicationContext(payload: AppendApplicationContextPayload) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const source = state.applications.find(item => item.id === payload.applicationId)
+    if (!source || source.userId !== currentUser.value.id || source.type !== 'pro')
+      throw new Error('Pro 申请不存在')
+    if (!['answered', 'completed', 'closed'].includes(source.status))
+      throw new Error('该 Pro 申请尚未结束，暂不支持追加上下文')
+
+    const currentTime = Date.now()
+    const appendUntil = new Date(source.contextAppendUntil || source.retentionExpiresAt).getTime()
+    if (!Number.isFinite(appendUntil) || currentTime > appendUntil)
+      throw new Error('该 Pro 对话已超过可追加时间，请重新提交申请')
+
+    const description = sanitizeRichText(payload.description)
+    if (isRichTextEmpty(description))
+      throw new Error('请填写追加上下文')
+
+    const createdAt = now()
+    const pricing = buildPricingSnapshot('pro', createdAt)
+    const cost = calculateActivityPrice(PRO_CONTEXT_APPEND_COST, createdAt)
+    if (currentUser.value.points < cost)
+      throw new Error(`积分不足，本次追加需要预扣 ${cost} 积分`)
+
+    const application: WelfareApplication = {
+      id: createId('app'),
+      parentApplicationId: source.id,
+      userId: currentUser.value.id,
+      type: 'pro',
+      title: `${source.title} · 追加上下文`,
+      description,
+      githubRepo: source.githubRepo,
+      hasOpenSourceBadge: source.hasOpenSourceBadge,
+      attachments: [],
+      status: 'pending_review',
+      baseCost: PRO_CONTEXT_APPEND_COST,
+      cost,
+      costCharged: true,
+      pricingDiscountRate: pricing.discountRate,
+      pricingPromotionName: pricing.promotionName,
+      pricingPromotionEndsAt: pricing.promotionEndsAt,
+      pricingAppliedAt: pricing.appliedAt,
+      aiReview: {
+        status: 'pending',
+        summary: '追加上下文排队中，管理员处理前会展示自动审核结果。',
+        risk: 'medium',
+      },
+      aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
+      rejectionReviewFee: calculateRejectionReviewFee(cost),
+      rejectionReviewFeeWaived: false,
+      rejectionFraudulent: false,
+      storageExtended: source.storageExtended,
+      storageExtensionCost: 0,
+      retentionExpiresAt: createRetentionExpiresAt(createdAt, source.storageExtended),
+      standardProcessingHours: PRO_STANDARD_PROCESSING_HOURS,
+      processingDueAt: createProcessingDueAt(createdAt, 'pro', false),
+      expedited: false,
+      expediteCost: 0,
+      contextAppendCost: PRO_CONTEXT_APPEND_COST,
+      contextAppendUntil: createRetentionExpiresAt(createdAt, source.storageExtended),
+      createdAt,
+    }
+
+    addTransaction(currentUser.value.id, -cost, 'spend', 'Pro 追加上下文预扣', application.id)
     state.applications.unshift(application)
+    return application
   }
 
   function answerProApplication(applicationId: string, answer: string) {
-    assertPersistenceReady()
-    assertAdmin(currentUser.value)
-
-    const application = state.applications.find(item => item.id === applicationId)
-    if (!application || application.type !== 'pro')
-      throw new Error('申请不存在')
-    if (application.status !== 'pending_review')
-      throw new Error('该申请已经处理')
-    if (!answer.trim())
-      throw new Error('请填写审核答复')
-
-    addTransaction(application.userId, -REQUEST_COST.pro, 'spend', 'Pro 申请审核通过后扣除', application.id)
-    application.status = 'answered'
-    application.answer = answer.trim()
-    application.costCharged = true
-    application.reviewedAt = now()
+    answerApplication(applicationId, answer)
   }
 
-  function rejectProApplication(applicationId: string, reason: string) {
-    assertPersistenceReady()
-    assertAdmin(currentUser.value)
-
-    const application = state.applications.find(item => item.id === applicationId)
-    if (!application || application.type !== 'pro')
-      throw new Error('申请不存在')
-    if (application.status !== 'pending_review')
-      throw new Error('该申请已经处理')
-
-    application.status = 'rejected'
-    application.answer = reason.trim() || '申请已退回，本次不扣除积分。'
-    application.costCharged = false
-    application.reviewedAt = now()
+  function rejectProApplication(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
+    rejectApplication(applicationId, reason, options)
   }
 
   function submitStudentVerification(payload: SubmitStudentPayload) {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
 
-    if (currentUser.value.role === 'admin')
-      throw new Error('请使用普通用户账号申请学生认证')
     if (!payload.category.trim())
       throw new Error('请填写认证类目')
-    if (!payload.notes.trim())
+    const notes = sanitizeRichText(payload.notes)
+    if (isRichTextEmpty(notes))
       throw new Error('请填写认证材料说明')
+    if (payload.educationEmail?.trim() && !/^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/.test(payload.educationEmail.trim()))
+      throw new Error('请填写有效的教育邮箱')
     if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('材料附件总大小不能超过 200MB')
+    assertCanCreateRequest(currentUser.value.id)
 
     const verification: StudentVerification = {
       id: createId('stu'),
@@ -558,7 +1401,10 @@ export function useWelfareDemo() {
       category: payload.category.trim(),
       school: payload.school?.trim(),
       identity: payload.identity?.trim(),
-      notes: payload.notes.trim(),
+      grade: payload.grade?.trim(),
+      educationLevel: payload.educationLevel?.trim(),
+      educationEmail: payload.educationEmail?.trim(),
+      notes,
       attachments: toAttachmentMeta(payload.attachments),
       status: 'pending',
       reviewFee: STUDENT_REVIEW_FEE,
@@ -581,7 +1427,7 @@ export function useWelfareDemo() {
       throw new Error('该认证申请已经处理')
 
     verification.status = 'approved'
-    verification.reply = reply.trim() || '认证通过，审核积分已返还。'
+    verification.reply = richTextToPlainText(reply) ? sanitizeRichText(reply) : '认证通过，审核积分已返还。'
     verification.reviewedAt = now()
     verification.feeReturned = true
     addTransaction(verification.userId, verification.reviewFee, 'refund', '学生认证通过返还审核费', verification.id)
@@ -602,8 +1448,103 @@ export function useWelfareDemo() {
       throw new Error('该认证申请已经处理')
 
     verification.status = 'rejected'
-    verification.reply = reason.trim() || '材料不足，审核费不返还。'
+    verification.reply = richTextToPlainText(reason) ? sanitizeRichText(reason) : '材料不足，审核费不返还。'
     verification.reviewedAt = now()
+  }
+
+  function crowdReviewsFor(targetType: CrowdReviewTargetType, targetId: string) {
+    return state.crowdReviews
+      .filter(item => item.targetType === targetType && item.targetId === targetId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  }
+
+  function submitCrowdReview(targetType: CrowdReviewTargetType, targetId: string, decision: CrowdReviewDecision, note: string) {
+    assertPersistenceReady()
+    assertCrowdReviewer(currentUser.value)
+
+    if (targetType !== 'pro_application')
+      throw new Error('众包审核当前只开放 Pro 申请摘要')
+
+    const application = state.applications.find(item => item.id === targetId && item.type === 'pro')
+    if (!application)
+      throw new Error('申请不存在')
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('该申请已经处理')
+    if (application.userId === currentUser.value.id)
+      throw new Error('不能审核自己的申请')
+    if (!['approve', 'reject', 'needs_admin'].includes(decision))
+      throw new Error('请选择有效的审核建议')
+
+    const normalizedNote = sanitizeRichText(note)
+    if (isRichTextEmpty(normalizedNote))
+      throw new Error('请填写众包审核建议')
+
+    const existing = state.crowdReviews.find(item =>
+      item.targetType === targetType
+      && item.targetId === targetId
+      && item.reviewerId === currentUser.value?.id,
+    )
+
+    if (existing) {
+      existing.decision = decision
+      existing.note = normalizedNote
+      existing.createdAt = now()
+      return existing
+    }
+
+    const review: CrowdReview = {
+      id: createId('crv'),
+      targetType,
+      targetId,
+      reviewerId: currentUser.value.id,
+      decision,
+      note: normalizedNote,
+      createdAt: now(),
+    }
+    state.crowdReviews.unshift(review)
+    return review
+  }
+
+  function setUserCrowdReviewer(userId: string, enabled: boolean) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const user = state.users.find(item => item.id === userId)
+    if (!user)
+      throw new Error('用户不存在')
+    if (user.role === 'admin')
+      throw new Error('管理员角色不能在此切换')
+
+    user.role = enabled ? 'reviewer' : 'user'
+  }
+
+  function setUserStudentVerified(userId: string, verified: boolean) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const user = state.users.find(item => item.id === userId)
+    if (!user)
+      throw new Error('用户不存在')
+
+    user.profile.studentVerified = verified
+  }
+
+  function unbindUserGitHub(userId: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const user = state.users.find(item => item.id === userId)
+    if (!user)
+      throw new Error('用户不存在')
+    if (!user.profile.githubAuthorized && !user.profile.githubUsername && !user.profile.githubId)
+      throw new Error('该用户没有可解绑的 GitHub 认证')
+
+    user.profile.githubAuthorized = false
+    user.profile.githubAuthorizedAt = undefined
+    user.profile.githubId = undefined
+    user.profile.githubUsername = undefined
+    user.profile.selectedRepo = ''
+    user.profile.githubRepos = []
   }
 
   function adjustUserPoints(userId: string, amount: number, reason: string) {
@@ -622,31 +1563,42 @@ export function useWelfareDemo() {
     persistenceError,
     hasAdmin,
     currentUser,
+    currentUserLevelCard,
     currentUserApplications,
     currentStudentVerifications,
     isAdmin,
-    oauthReady,
+    canCrowdReview,
+    pendingApplications,
     pendingProApplications,
     pendingStudentVerifications,
     totalReservedApplications,
-    activeProCount,
+    activeRequestCount,
+    applicationCooldownUntil,
+    rejectionFeeWaiverBlockedUntil,
     userName,
     userEmail,
+    userLevelCard,
     createAdmin,
     loginAsAdmin,
-    mockOauthLogin,
     logout,
     updateCurrentProfile,
-    mockGithubRepos,
-    rechargeCurrentUser,
     submitApplication,
+    appendApplicationContext,
+    answerApplication,
+    rejectApplication,
     answerProApplication,
     rejectProApplication,
     submitStudentVerification,
     approveStudentVerification,
     rejectStudentVerification,
+    crowdReviewsFor,
+    submitCrowdReview,
+    setUserCrowdReviewer,
+    setUserStudentVerified,
+    unbindUserGitHub,
     adjustUserPoints,
     ensureWelfareStateLoaded,
+    reloadWelfareState,
     assertPersistenceReady,
   }
 }
@@ -676,4 +1628,20 @@ export function formatDate(value?: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+export function formatRetentionExpiry(createdAt?: string) {
+  if (!createdAt)
+    return '-'
+
+  const createdTime = new Date(createdAt).getTime()
+  if (!Number.isFinite(createdTime))
+    return '-'
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(createdTime + DATA_RETENTION_MS))
 }
