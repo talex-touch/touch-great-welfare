@@ -9,7 +9,7 @@ import VueMacros from 'unplugin-vue-macros/vite'
 import { defineConfig } from 'vitest/config'
 import { VueRouterAutoImports } from 'vue-router/unplugin'
 import VueRouter from 'vue-router/vite'
-import { handleDevWelfareStateRequest } from './src/worker/dev-api'
+import { handleDevGitHubAppRequest, handleDevWelfareStateRequest } from './src/worker/dev-api'
 
 export default defineConfig({
   resolve: {
@@ -21,6 +21,7 @@ export default defineConfig({
     // https://github.com/vuejs/router/pull/2603
     VueRouter({
       dts: 'src/typed-router.d.ts',
+      watch: false,
     }),
 
     VueMacros({
@@ -61,10 +62,13 @@ export default defineConfig({
     // see uno.config.ts for config
     UnoCSS(),
     {
-      name: 'welfare-state-api-guard',
+      name: 'worker-api-guard',
       configureServer(server) {
         server.middlewares.use('/api/welfare-state', (req, res) => {
           void handleDevWelfareStateRequest(req, res)
+        })
+        server.middlewares.use('/api/github-app', (req, res) => {
+          void handleDevGitHubAppRequest(req, res)
         })
       },
     },

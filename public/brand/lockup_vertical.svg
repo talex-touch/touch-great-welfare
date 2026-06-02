@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="620" viewBox="0 0 1024 620" fill="none">
+
+<g transform="translate(368,40) scale(0.28)">
+
+<defs>
+  <clipPath id="clipCircle"><circle cx="512" cy="512" r="448"/></clipPath>
+</defs>
+<g clip-path="url(#clipCircle)">
+  <circle cx="512" cy="512" r="448" fill="#F2F2F0"/>
+  <path d="M512 64 A448 448 0 0 0 512 960 Z" fill="#1D1D1F"/>
+  <rect x="0" y="650" width="1024" height="374" fill="#FFB000"/>
+</g>
+<!-- abstract lowercase l / benefit path as white negative space -->
+<path clip-path="url(#clipCircle)" fill="#FFFFFF" d="M442 56 H574 V624 C574 675 612 706 668 706 H968 V822 H664 C526 822 442 742 442 626 Z"/>
+
+</g>
+<text x="512" y="445" text-anchor="middle" font-family="Noto Sans CJK SC, PingFang SC, Microsoft YaHei, sans-serif" font-size="92" font-weight="700" letter-spacing="8" fill="#1D1D1F">领益</text>
+<text x="512" y="520" text-anchor="middle" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="42" font-weight="500" fill="#8E8E93">Link Welfare</text>
+
+</svg>

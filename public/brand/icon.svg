@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+
+<defs>
+  <clipPath id="clipCircle"><circle cx="512" cy="512" r="448"/></clipPath>
+</defs>
+<g clip-path="url(#clipCircle)">
+  <circle cx="512" cy="512" r="448" fill="#F2F2F0"/>
+  <path d="M512 64 A448 448 0 0 0 512 960 Z" fill="#1D1D1F"/>
+  <rect x="0" y="650" width="1024" height="374" fill="#FFB000"/>
+</g>
+<!-- abstract lowercase l / benefit path as white negative space -->
+<path clip-path="url(#clipCircle)" fill="#FFFFFF" d="M442 56 H574 V624 C574 675 612 706 668 706 H968 V822 H664 C526 822 442 742 442 626 Z"/>
+
+</svg>

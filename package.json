@@ -4,11 +4,12 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "build": "vite build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test -- --run",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
     "deploy": "pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc",
     "dev": "pnpm run build && pnpm exec wrangler d1 migrations apply touch-great-welfare-local --local && pnpm exec wrangler dev",
+    "generate:student-schools": "python3 scripts/generate-student-schools.py",
     "lint": "eslint .",
-    "test": "vitest",
+    "test": "vitest run",
     "typecheck": "vue-tsc",
     "up": "taze major -I",
     "postinstall": "npx simple-git-hooks"

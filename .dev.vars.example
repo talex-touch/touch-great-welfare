@@ -1,0 +1,10 @@
+# Copy this file to `.dev.vars` for `wrangler dev`.
+# Do not commit `.dev.vars`; it contains local Worker secrets.
+
+# Required for encrypting secrets saved from the admin console.
+NOTIFY_SECRET_KEY=replace-with-32-byte-random-secret
+
+# Legacy fallback only. Prefer configuring these in the admin console.
+OPENAI_API_KEY=sk-your-openai-key
+NEWAPI_API_KEY=sk-your-newapi-admin-key
+RESEND_API_KEY=re_your_resend-key

@@ -1,21 +1,27 @@
 # Touch Great Welfare
 
-基于 `antfu/vitesse-lite` 的公益积分申请网站原型，使用 Vue 3、Vite、UnoCSS 和 `@talex-touch/tuffex` 组件库构建。
+基于 `antfu/vitesse-lite` 的公益积分申请网站，使用 Vue 3、Vite、UnoCSS 和 `@talex-touch/tuffex` 组件库构建。
 
 ## 已实现功能
 
 - 首次访问创建管理员账号。
-- 管理员后台配置 OAuth（当前为前端模拟登录，预留真实授权跳转）。
-- 用户通过 OAuth 模拟登录。
-- 用户积分系统：充值预留、流水、管理员手动调整。
-- 申请类型：
-  - `code`：1 积分，预留入口，提交即扣除。
-  - `image`：10 积分，预留入口，提交即扣除。
-  - `pro`：100 积分，提交后进入审核；管理员给出答复通过后才扣除，退回不扣除。
-- Pro 申请支持文本、图片、附件等资料，前端限制总大小 200MB。
-- 单个用户同时最多 3 个待审核 Pro 申请。
-- 用户个人资料编辑，支持关联 GitHub 用户名并选择仓库；提交时携带“开源认证”标签。
-- 学生认证：用户提交任意类目信息和材料，先扣 10 积分；审核通过后返还，退回不返还。
+- 管理员后台配置 GitHub App，用于用户登录和开源认证。
+- 用户通过 GitHub App 完成真实授权登录。
+- 用户积分系统：LINUX DO Credit 充值接入、流水、管理员手动调整。
+- 申请类型全部采用预扣费制度，提交后立即预扣并进入 AI 初审 / 管理员审核：
+  - `code`：Codex 额度申请，默认 10 美元，按 10 积分 = 1 美元预扣；用户可自行选择额度，单次最多 1000 美元。
+  - `image`：原价 3200 积分，活动期 320 积分，预扣后等待审核，审核通过后调用 AI 图片生成接口。
+  - `pro`：原价 12000 积分，活动期 1200 积分，预扣后按 3 天处理；可额外预扣 1100 积分加速到 2 天。
+- 限时活动：2026-06-01 至 2026-06-08 采用 0.1 折，活动价会写入申请价格快照，活动结束后新申请恢复原价。
+- Pro 成本模型：按 680 元/周/50 次、10 元 = 800 LDC、1 LDC = 10 积分估算，单次成本约 10880 积分，对外取整为 12000 积分。
+- Pro 结束后可在数据保留期内追加同一上下文，基础追加价按 10880 积分；超过保留期需重新提交申请。
+- Codex 申请超过 100 美元需要更长审核时间；访问限制以首次访问 IP 为准，默认最多 2 个 IP、RPM 2，并限制并发，超过 IP 限制后需要管理员清除绑定。
+- 每个申请可勾选延长存储服务，额外保存 7 天并一并预扣 300 积分。
+- 申请退回会返还申请预扣，再按规则处理 AI 审核手续费；用户可勾选认真填写承诺免除普通退回手续费，被拒绝后 3 天内不可再次勾选该承诺；若管理员判定存在造假或不实包装，7 天内不可提交同类申请。
+- 申请支持文本、图片、附件等资料，前端限制总大小 200MB。
+- 单个用户同时最多 5 个待处理请求，审核队列按用户等级和历史表现排序。
+- 开源认证：用户通过 GitHub App 授权同步 GitHub 用户名和公开仓库，选择默认仓库后提交申请会携带“开源认证”标签。
+- 学生认证：用户提交任意类目信息和材料，先扣 800 积分；审核通过后返还，退回不返还。
 - 简约高级的玻璃拟态界面，主要 UI 使用 `@talex-touch/tuffex`。
 
 ## 开发
@@ -42,7 +48,7 @@ pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc -
 - `dist` 由 Workers Static Assets 托管。
 - `/api/*` 通过 `run_worker_first` 优先进入 Worker 边缘函数。
 - PostgreSQL 通过 Hyperdrive binding 连接，Worker 代码不直接暴露数据库连接串。
-- 本地开发使用 D1 local 模拟数据库，不依赖本机 PostgreSQL。
+- 本地开发使用 D1 local 数据库，不依赖本机 PostgreSQL。
 - `not_found_handling = single-page-application` 负责 SPA 回退。
 
 本地首次接入真实 Cloudflare 环境：
@@ -79,6 +85,101 @@ pnpm run deploy
 ```
 
 如果部署时报 `Authentication error [code: 10000]`，当前 Wrangler OAuth 或 API Token 没有目标账号的 Workers/Hyperdrive 写权限。重新执行 `pnpm exec wrangler login` 并确认授权到正确账号，或设置具备对应权限的 `CLOUDFLARE_API_TOKEN` 后再部署。
+
+## 环境变量整理
+
+本项目运行时变量只在 Worker 侧读取，前端没有自定义 `VITE_*` 暴露变量；`src/main.ts` 只使用 Vite 内置的 `BASE_URL`。
+
+Cloudflare binding：
+
+| 名称         | 环境        | 说明                                                                 |
+| ------------ | ----------- | -------------------------------------------------------------------- |
+| `LOCAL_DB`   | 本地        | D1 local 数据库 binding，由 `wrangler.jsonc` 配置。                  |
+| `HYPERDRIVE` | 生产        | PostgreSQL Hyperdrive binding，由 `wrangler.production.jsonc` 配置。 |
+| `AI_ASSETS`  | 本地 / 生产 | AI 图片结果 R2 bucket binding。                                      |
+
+业务配置优先在管理员后台保存到服务端数据库，环境变量只作为旧部署 fallback。`wrangler.jsonc` / `wrangler.production.jsonc` 默认不再写业务 vars：
+
+| 配置域 | 后台位置 | 可配置内容 |
+| --- | --- | --- |
+| GitHub App | 管理员后台 / GitHub 应用 | enabled、App 名称、Client ID / Secret、Callback URL、OAuth 端点和 scopes。 |
+| AI Provider | 管理员后台 / AI 配置 | enabled、base URL、OpenAI 兼容 Key、NewAPI 管理 Key、模型、临时 Key TTL / 配额。 |
+| 通知供应商 | 管理员后台 / 通知配置 | Resend API Key / 发件人、VAPID public/private key、VAPID subject。 |
+| LINUX DO Credit | 管理员后台 / 充值配置 | enabled、网关地址、PID、KEY、1 LDC 兑换积分倍率，默认 10。 |
+
+仍需要保留的 Worker Secret：
+
+```bash
+pnpm exec wrangler secret put NOTIFY_SECRET_KEY
+```
+
+`NOTIFY_SECRET_KEY` 是后台保存密钥类配置的加密根密钥，生产环境必须稳定保存；更换它会导致已保存的加密配置无法解密。
+
+本地 `wrangler dev` 使用 `.dev.vars` 读取这个根密钥。复制 `.dev.vars.example` 后填入真实值即可：
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+`.env.example` 只作为整理清单和本地工具变量参考；Worker 运行时以管理员后台数据库配置、`.dev.vars` / Worker Secret、Cloudflare binding 为准。旧环境变量仍保留 fallback 读取，方便平滑迁移。
+
+## GitHub App 开源认证配置
+
+开源认证使用 GitHub App 的 OAuth 授权流程：
+
+- 管理员后台 “GitHub App” 面板保存 Client ID / Client Secret、Callback URL 和 scopes。
+- 用户在登录页或“开源认证”页点击 GitHub 授权，Worker 使用授权 code 换取 token。
+- Worker 读取 `/user`、`/user/emails`、`/user/repos`，把 GitHub 用户名、公开仓库和授权状态写入服务端业务状态。
+- 只有完成 GitHub App 授权且选择了关联仓库的申请，才会携带“开源认证”标签。
+
+GitHub App 的 Callback URL 配置为：
+
+```text
+https://你的域名/api/github-app/callback
+```
+
+默认 scopes：
+
+```text
+read:user user:email public_repo
+```
+
+管理员后台会把配置保存到数据库。旧部署仍可通过 Worker 变量 / Secret fallback：
+
+```json
+{
+  "GITHUB_APP_ENABLED": "true",
+  "GITHUB_APP_NAME": "Touch Great Welfare",
+  "GITHUB_APP_SLUG": "touch-great-welfare",
+  "GITHUB_APP_CLIENT_ID": "Iv1.xxxxx",
+  "GITHUB_APP_CALLBACK_URL": "https://你的域名/api/github-app/callback",
+  "GITHUB_APP_SCOPES": "read:user user:email public_repo"
+}
+```
+
+运行时优先使用管理员后台保存的 GitHub App 配置；只有数据库未配置时，才读取 `GITHUB_APP_*` 环境变量 fallback。
+
+## LINUX DO Credit 充值配置
+
+充值使用 LINUX DO Credit 的易支付兼容接口：
+
+- 下单：`POST https://credit.linux.do/epay/pay/submit.php`
+- 异步通知：`/api/recharge/notify`
+- 用户回跳：`/api/recharge/return`
+
+管理员后台的“LINUX DO Credit 充值”面板可以配置 PID / KEY 和兑换倍率并保存到服务端数据库。本地和生产配置均默认启用充值，但只有配置了商户信息后才可创建订单。默认兑换倍率为 `1 LDC = 10 积分`；订单按 LDC 支付，到账按倍率换算积分。
+
+管理员后台会把 PID / KEY 保存到数据库。旧部署仍可通过 Worker 变量 / Secret fallback：
+
+```json
+{
+  "LDC_PAYMENT_ENABLED": "true",
+  "LDC_GATEWAY_BASE_URL": "https://credit.linux.do/epay",
+  "LDC_POINTS_PER_LDC": "10"
+}
+```
+
+运行时优先使用管理员后台保存的充值配置；只有数据库未配置时，才读取 `LDC_*` 环境变量 fallback。
 
 ## 数据说明
 
