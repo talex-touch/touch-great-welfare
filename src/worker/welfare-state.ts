@@ -1,10 +1,43 @@
 import { Pool } from 'pg'
+import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
+import { dispatchWelfareStateChangeNotifications } from './notifications'
 
 export interface WorkerEnv {
   LOCAL_DB?: D1Database
+  AI_ASSETS?: R2Bucket
   HYPERDRIVE?: {
     connectionString: string
   }
+  LDC_GATEWAY_BASE_URL?: string
+  LDC_PID?: string
+  LDC_KEY?: string
+  LDC_PAYMENT_ENABLED?: string
+  AI_PROVIDER_ENABLED?: string
+  AI_PROVIDER_BASE_URL?: string
+  AI_IMAGE_MODEL?: string
+  AI_REVIEW_MODEL?: string
+  OPENAI_API_KEY?: string
+  NEWAPI_API_KEY?: string
+  NEWAPI_MANAGEMENT_BASE_URL?: string
+  NEWAPI_USER_ID?: string
+  NEWAPI_TEMP_KEY_TTL_MINUTES?: string
+  NEWAPI_TEMP_KEY_QUOTA?: string
+  GITHUB_APP_ENABLED?: string
+  GITHUB_APP_NAME?: string
+  GITHUB_APP_SLUG?: string
+  GITHUB_APP_CLIENT_ID?: string
+  GITHUB_APP_CLIENT_SECRET?: string
+  GITHUB_APP_CALLBACK_URL?: string
+  GITHUB_APP_AUTHORIZE_URL?: string
+  GITHUB_APP_TOKEN_URL?: string
+  GITHUB_APP_API_BASE_URL?: string
+  GITHUB_APP_SCOPES?: string
+  NOTIFY_SECRET_KEY?: string
+  RESEND_API_KEY?: string
+  RESEND_FROM_EMAIL?: string
+  VAPID_PUBLIC_KEY?: string
+  VAPID_PRIVATE_KEY?: string
+  VAPID_SUBJECT?: string
 }
 
 const STATE_KEY = 'default'
@@ -17,11 +50,11 @@ function getConnectionString(env: WorkerEnv) {
   return env.HYPERDRIVE?.connectionString
 }
 
-function shouldUseD1(env: WorkerEnv) {
+export function shouldUseD1(env: WorkerEnv) {
   return !!env.LOCAL_DB && !env.HYPERDRIVE
 }
 
-function getPool(env: WorkerEnv) {
+export function getPool(env: WorkerEnv) {
   const connectionString = getConnectionString(env)
   if (!connectionString)
     throw new Error('Hyperdrive binding is required')
@@ -49,7 +82,7 @@ async function ensureSchema(env: WorkerEnv) {
   `)
 }
 
-async function readState(env: WorkerEnv) {
+export async function readWelfareState(env: WorkerEnv) {
   await ensureSchema(env)
 
   if (shouldUseD1(env)) {
@@ -58,7 +91,12 @@ async function readState(env: WorkerEnv) {
       .bind(STATE_KEY)
       .first<{ state: string }>()
 
-    return row?.state ? JSON.parse(row.state) : {}
+    const state = row?.state ? JSON.parse(row.state) : {}
+    const result = applyWelfareRetentionPolicy(state)
+    if (result.changed)
+      await writeWelfareState(env, result.state)
+
+    return result.state
   }
 
   const result = await getPool(env).query(
@@ -66,10 +104,15 @@ async function readState(env: WorkerEnv) {
     [STATE_KEY],
   )
 
-  return result.rows[0]?.state ?? {}
+  const state = result.rows[0]?.state ?? {}
+  const retentionResult = applyWelfareRetentionPolicy(state)
+  if (retentionResult.changed)
+    await writeWelfareState(env, retentionResult.state)
+
+  return retentionResult.state
 }
 
-async function writeState(env: WorkerEnv, state: unknown) {
+export async function writeWelfareState(env: WorkerEnv, state: unknown) {
   await ensureSchema(env)
 
   if (shouldUseD1(env)) {
@@ -116,7 +159,7 @@ function assertStateShape(state: unknown): asserts state is Record<string, unkno
     throw new Error('state must be an object')
 
   const record = state as Record<string, unknown>
-  for (const key of ['users', 'applications', 'studentVerifications', 'transactions']) {
+  for (const key of ['users', 'applications', 'studentVerifications', 'crowdReviews', 'transactions']) {
     if (record[key] !== undefined && !Array.isArray(record[key]))
       throw new Error(`${key} must be an array`)
   }
@@ -140,12 +183,15 @@ async function readPayload(request: Request) {
 export async function handleWelfareStateRequest(request: Request, env: WorkerEnv) {
   try {
     if (request.method === 'GET')
-      return json({ state: await readState(env) })
+      return json({ state: await readWelfareState(env) })
 
     if (request.method === 'PUT') {
+      const previousState = await readWelfareState(env)
       const payload = await readPayload(request)
       assertStateShape(payload.state)
-      await writeState(env, payload.state)
+      const nextState = applyWelfareRetentionPolicy(payload.state).state
+      await writeWelfareState(env, nextState)
+      await dispatchWelfareStateChangeNotifications(env, previousState, nextState)
       return json({ ok: true })
     }
 
