@@ -16,14 +16,14 @@
   "r2_buckets": [
     {
       "binding": "AI_ASSETS",
-      "bucket_name": "touch-great-welfare-ai-assets"
+      "bucket_name": "touch-great-welfare-ai-assets-local"
     }
   ],
   "d1_databases": [
     {
       "binding": "LOCAL_DB",
-      "database_name": "touchx-universe-preview",
-      "database_id": "8952f345-85f9-4b28-ab21-8e5b8c222a81",
+      "database_name": "touch-great-welfare-local",
+      "database_id": "local-only",
       "migrations_dir": "migrations"
     }
   ],

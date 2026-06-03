@@ -5,8 +5,8 @@
   "scripts": {
     "build": "vite build",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "deploy": "pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc",
-    "dev": "pnpm run build && pnpm exec wrangler d1 migrations apply touch-great-welfare-local --local && pnpm exec wrangler dev",
+    "deploy": "pnpm run build && pnpm exec wrangler deploy",
+    "dev": "pnpm run build && pnpm exec wrangler d1 migrations apply touch-great-welfare-local --local --config wrangler.local.jsonc && pnpm exec wrangler dev --config wrangler.local.jsonc",
     "generate:student-schools": "python3 scripts/generate-student-schools.py",
     "lint": "eslint .",
     "test": "vitest run",
