@@ -15,6 +15,8 @@ declare module 'vue' {
     ApplicationCreatePanel: typeof import('./src/components/welfare/ApplicationCreatePanel.vue')['default']
     ApplicationDetailPanel: typeof import('./src/components/welfare/ApplicationDetailPanel.vue')['default']
     ApplicationPanel: typeof import('./src/components/welfare/ApplicationPanel.vue')['default']
+    ApplicationResultSubmit: typeof import('./src/components/welfare/ApplicationResultSubmit.vue')['default']
+    ApplicationThread: typeof import('./src/components/welfare/ApplicationThread.vue')['default']
     AuthPanel: typeof import('./src/components/welfare/AuthPanel.vue')['default']
     DashboardLayout: typeof import('./src/components/welfare/DashboardLayout.vue')['default']
     DataNotice: typeof import('./src/components/welfare/DataNotice.vue')['default']

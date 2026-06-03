@@ -6,6 +6,7 @@ import { loadWelfareState, saveWelfareState } from './welfare-persistence'
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
 export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
+export type ApplicationMessageType = 'comment' | 'result_submission' | 'system'
 export type StudentStatus = 'pending' | 'approved' | 'rejected'
 export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustment' | 'grant'
 export type AiReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_human' | 'failed'
@@ -188,6 +189,7 @@ export interface WelfareApplication {
   contextAppendUntil?: string
   cooldownUntil?: string
   answer?: string
+  messages?: ApplicationMessage[]
   createdAt: string
   reviewedAt?: string
   /** Resource application platform fields. Present when type === 'resource'. */
@@ -203,6 +205,16 @@ export interface WelfareApplication {
   resourceItems?: ApplicationItem[]
   termsAcceptances?: ResourceTermAcceptance[]
   submittedAt?: string
+}
+
+export interface ApplicationMessage {
+  id: string
+  applicationId: string
+  userId: string
+  type: ApplicationMessageType
+  content: string
+  attachments: AttachmentMeta[]
+  createdAt: string
 }
 
 export interface StudentVerification {
@@ -1734,11 +1746,24 @@ export function useWelfareStore() {
       application.costCharged = true
     }
 
-    application.status = 'completed'
+    const reviewedAt = now()
+    application.status = 'answered'
     application.answer = normalizedAnswer
-    application.reviewedAt = now()
-    application.processingStartedAt ??= application.reviewedAt
-    application.completedAt = application.reviewedAt
+    application.reviewedAt = reviewedAt
+    application.processingStartedAt ??= reviewedAt
+
+    // 审核答复作为系统消息加入沟通记录
+    if (!application.messages)
+      application.messages = []
+    application.messages.push({
+      id: createId('msg'),
+      applicationId: application.id,
+      userId: currentUser.value.id,
+      type: 'system',
+      content: normalizedAnswer,
+      attachments: [],
+      createdAt: reviewedAt,
+    })
   }
 
   function rejectApplication(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
@@ -1778,6 +1803,80 @@ export function useWelfareStore() {
       application.answer = buildApplicationRejectionAnswer(application, reason, fraudulent)
     }
     application.reviewedAt = reviewedAt
+
+    // 退回原因作为系统消息加入沟通记录
+    if (!application.messages)
+      application.messages = []
+    application.messages.push({
+      id: createId('msg'),
+      applicationId: application.id,
+      userId: currentUser.value.id,
+      type: 'system',
+      content: application.answer ?? buildApplicationRejectionAnswer(application, reason, fraudulent),
+      attachments: [],
+      createdAt: reviewedAt,
+    })
+  }
+
+  function completeApplication(applicationId: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (application.status !== 'answered')
+      throw new Error('只有已答复的申请可以标记完成')
+
+    const completedAt = now()
+    application.status = 'completed'
+    application.completedAt = completedAt
+
+    if (!application.messages)
+      application.messages = []
+    application.messages.push({
+      id: createId('msg'),
+      applicationId: application.id,
+      userId: currentUser.value.id,
+      type: 'system',
+      content: '<p>管理员已确认所有结果，申请完成。</p>',
+      attachments: [],
+      createdAt: completedAt,
+    })
+  }
+
+  function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: FileLike[] = []) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (!['pending_review', 'processing', 'answered'].includes(application.status))
+      throw new Error('该申请状态不支持追加消息')
+
+    const normalizedContent = sanitizeRichText(content)
+    if (isRichTextEmpty(normalizedContent))
+      throw new Error('请输入消息内容')
+    if (totalBytes(attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('附件总大小不能超过 200MB')
+
+    if (!application.messages)
+      application.messages = []
+
+    application.messages.push({
+      id: createId('msg'),
+      applicationId: application.id,
+      userId: currentUser.value.id,
+      type,
+      content: normalizedContent,
+      attachments: toAttachmentMeta(attachments),
+      createdAt: now(),
+    })
+  }
+
+  function submitApplicationResult(applicationId: string, content: string, attachments: FileLike[] = []) {
+    addApplicationMessage(applicationId, 'result_submission', content, attachments)
   }
 
   function appendApplicationContext(payload: AppendApplicationContextPayload) {
@@ -2067,6 +2166,9 @@ export function useWelfareStore() {
     appendApplicationContext,
     answerApplication,
     rejectApplication,
+    completeApplication,
+    addApplicationMessage,
+    submitApplicationResult,
     answerProApplication,
     rejectProApplication,
     submitStudentVerification,

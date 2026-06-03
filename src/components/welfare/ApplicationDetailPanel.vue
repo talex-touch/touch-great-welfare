@@ -2,12 +2,16 @@
 import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useWelfareFeedback } from '~/composables/feedback'
 import { formatBytes, formatDate, formatPoints, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
+import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
+import ApplicationThread from './ApplicationThread.vue'
 import RichTextView from './RichTextView.vue'
 
 const route = useRoute()
 const router = useRouter()
+const { runSafely } = useWelfareFeedback()
 
 const {
   state,
@@ -17,6 +21,8 @@ const {
   statusTone,
   typeIcon,
   userName,
+  completeApplication,
+  addApplicationMessage,
 } = useWelfareUiState()
 
 const applicationId = computed(() => {
@@ -31,6 +37,8 @@ const application = computed(() => state.applications.find((item) => {
   return isAdmin.value || item.userId === currentUser.value?.id
 }))
 
+const messages = computed(() => application.value?.messages ?? [])
+
 const prepaidStateText = computed(() => {
   if (!application.value)
     return '-'
@@ -43,6 +51,28 @@ const prepaidStateTone = computed(() => application.value?.costCharged ? 'warnin
 function backToList() {
   router.push('/dashboard/apply')
 }
+
+function handleSendMessage(type: 'comment' | 'result_submission', content: string) {
+  if (!application.value)
+    return
+
+  runSafely(() => {
+    addApplicationMessage(applicationId.value, type, content)
+  }, type === 'result_submission' ? '结果已提交' : '消息已发送')
+}
+
+function handleSubmitResult(content: string) {
+  handleSendMessage('result_submission', content)
+}
+
+function handleComplete() {
+  if (!application.value || !isAdmin.value)
+    return
+
+  runSafely(() => {
+    completeApplication(applicationId.value)
+  }, '申请已标记为完成')
+}
 </script>
 
 <template>
@@ -54,7 +84,7 @@ function backToList() {
             申请详情
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            查看单个申请的预扣、审核、答复和材料记录。
+            查看申请的预扣、审核、沟通记录和结果提交。
           </p>
         </div>
         <TxButton variant="ghost" @click="backToList">
@@ -67,6 +97,7 @@ function backToList() {
       </div>
 
       <div v-else class="mt-6 space-y-6">
+        <!-- Application header -->
         <div class="p-5 border border-black/8 rounded-3xl bg-slate-50 dark:border-white/10 dark:bg-white/5">
           <div class="flex flex-wrap gap-4 items-start justify-between">
             <div class="min-w-0">
@@ -124,6 +155,7 @@ function backToList() {
           </div>
         </div>
 
+        <!-- LLMApi details -->
         <div v-if="application.type === 'code'" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
           <h3 class="text-xl fw-900">
             LLMApi 额度
@@ -152,6 +184,7 @@ function backToList() {
           </div>
         </div>
 
+        <!-- Resource details -->
         <div v-if="application.type === 'resource'" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
           <h3 class="text-xl fw-900">
             资源明细与逐项审批
@@ -207,6 +240,7 @@ function backToList() {
           </div>
         </div>
 
+        <!-- AI Review -->
         <div v-if="application.aiReview" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
           <h3 class="text-xl fw-900">
             AI 初审
@@ -219,6 +253,7 @@ function backToList() {
           </div>
         </div>
 
+        <!-- Application description -->
         <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
           <h3 class="text-xl fw-900">
             申请说明
@@ -226,13 +261,7 @@ function backToList() {
           <RichTextView :content="application.description" class="mt-3" />
         </div>
 
-        <div v-if="application.answer" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-          <h3 class="text-xl fw-900">
-            审核答复
-          </h3>
-          <RichTextView :content="application.answer" class="mt-3" />
-        </div>
-
+        <!-- Attachments -->
         <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
           <h3 class="text-xl fw-900">
             附件材料
@@ -247,6 +276,23 @@ function backToList() {
             </div>
           </div>
         </div>
+
+        <!-- ===== NEW: Communication Thread ===== -->
+        <ApplicationThread
+          :messages="messages"
+          :application-id="applicationId"
+          :application-user-id="application.userId"
+          :application-status="application.status"
+          @send="handleSendMessage"
+        />
+
+        <!-- ===== NEW: Result Submission ===== -->
+        <ApplicationResultSubmit
+          :messages="messages"
+          :application-status="application.status"
+          @submit-result="handleSubmitResult"
+          @complete="handleComplete"
+        />
       </div>
     </TxCard>
   </section>

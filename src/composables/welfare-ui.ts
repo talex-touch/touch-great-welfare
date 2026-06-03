@@ -466,8 +466,10 @@ export function useWelfareUiState() {
   }
 
   function statusTone(status: string) {
-    if (['answered', 'completed', 'closed', 'approved'].includes(status))
+    if (['completed', 'closed', 'approved'].includes(status))
       return 'success'
+    if (status === 'answered')
+      return 'info'
     if (status === 'partial_approved')
       return 'info'
     if (['pending_review', 'processing', 'pending', 'submitted', 'in_review', 'draft'].includes(status))
@@ -672,6 +674,18 @@ export function useWelfareUiState() {
   function rejectApplicationWithOptions(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
     welfare.rejectApplication(applicationId, reason, options)
     delete rejectFraudulentDrafts[applicationId]
+  }
+
+  function completeApplication(applicationId: string) {
+    welfare.completeApplication(applicationId)
+  }
+
+  function addApplicationMessage(applicationId: string, type: 'comment' | 'result_submission', content: string, attachments: UploadLikeFile[] = []) {
+    welfare.addApplicationMessage(applicationId, type, content, attachments)
+  }
+
+  function submitApplicationResult(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
+    welfare.submitApplicationResult(applicationId, content, attachments)
   }
 
   function applyRechargeConfig(config: RechargeConfigView) {
@@ -1191,6 +1205,9 @@ export function useWelfareUiState() {
     crowdReviewDraftFor,
     submitCrowdReviewDraft,
     rejectApplicationWithOptions,
+    completeApplication,
+    addApplicationMessage,
+    submitApplicationResult,
     refreshRechargeConfig,
     persistRechargeConfig,
     refreshGitHubAppConfig,

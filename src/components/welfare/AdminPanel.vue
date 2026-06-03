@@ -70,6 +70,11 @@ const applicationStatusText: Record<string, string> = {
   completed: '已完成',
   closed: '已关闭',
   rejected: '已退回',
+  submitted: '已提交',
+  in_review: '资源审批中',
+  approved: '已通过',
+  partial_approved: '部分通过',
+  cancelled: '已取消',
 }
 
 const studentStatusText: Record<string, string> = {
@@ -127,6 +132,7 @@ const applicationStatusFilterOptions = [
   { value: 'reserved', label: applicationStatusText.reserved },
   { value: 'pending_review', label: applicationStatusText.pending_review },
   { value: 'answered', label: applicationStatusText.answered },
+  { value: 'completed', label: applicationStatusText.completed },
   { value: 'rejected', label: applicationStatusText.rejected },
 ]
 
