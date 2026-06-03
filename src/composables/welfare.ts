@@ -19,6 +19,7 @@ export type ResourceApprovalStatus = 'pending' | 'approved' | 'rejected' | 'adju
 export type ResourceProvisionStatus = 'not_required' | 'pending' | 'completed'
 export type ResourceUrgency = 'normal' | 'urgent' | 'emergency'
 export type ResourceTermId = 'general_resource_terms' | 'database_security_terms' | 'llm_api_compliance_terms' | 'infrastructure_resource_terms'
+export type ResourceAvailability = 'available' | 'level_required' | 'unavailable'
 
 export interface LlmApiModelPricing {
   key: string
@@ -50,6 +51,9 @@ export interface ResourceTypeConfig {
   description: string
   icon: string
   enabled: boolean
+  availability: ResourceAvailability
+  minUserLevelPriority?: number
+  unavailableReason?: string
   subtypes: string[]
   termsIds: ResourceTermId[]
   approverGroup: string
@@ -554,16 +558,16 @@ export const RESOURCE_TERMS: ResourceTermConfig[] = [
   },
 ]
 export const RESOURCE_TYPE_CONFIGS: ResourceTypeConfig[] = [
-  { resourceType: 'database', displayName: '数据库', category: 'database', description: 'MySQL / PostgreSQL / Redis 权限或实例访问。', icon: 'i-carbon-data-base', enabled: true, subtypes: ['mysql', 'postgresql', 'redis'], termsIds: ['database_security_terms'], approverGroup: 'DBA' },
-  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'OpenAI、Anthropic、Gemini、DeepSeek、通义等 API 额度。', icon: 'i-carbon-ai-status', enabled: true, subtypes: ['openai', 'anthropic', 'google_gemini', 'deepseek', 'qwen', 'doubao', 'zhipu', 'moonshot', 'minimax'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
-  { resourceType: 'git_repository', displayName: 'Git 仓库权限', category: 'access', description: '代码仓库只读、开发者、维护者权限。', icon: 'i-carbon-logo-github', enabled: true, subtypes: ['gitlab', 'github', 'gitee'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
-  { resourceType: 'cicd', displayName: 'CI/CD 权限', category: 'access', description: '流水线执行、配置、部署权限。', icon: 'i-carbon-continuous-deployment', enabled: true, subtypes: ['pipeline', 'runner', 'deployment'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
-  { resourceType: 'vpn', displayName: 'VPN', category: 'access', description: '内网访问 VPN 权限。', icon: 'i-carbon-vpn', enabled: true, subtypes: ['personal', 'project'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
-  { resourceType: 'ip_allowlist', displayName: 'IP 白名单', category: 'access', description: '办公、服务器或第三方访问白名单。', icon: 'i-carbon-firewall', enabled: true, subtypes: ['office_ip', 'server_ip', 'third_party_ip'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
-  { resourceType: 'server', displayName: '云服务器', category: 'compute', description: '云主机规格、数量、环境和成本归属。', icon: 'i-carbon-server', enabled: true, subtypes: ['ecs', 'vm'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
-  { resourceType: 'gpu', displayName: 'GPU', category: 'compute', description: 'GPU 卡型、数量、时长和用途。', icon: 'i-carbon-machine-learning-model', enabled: true, subtypes: ['nvidia_t4', 'nvidia_a10', 'nvidia_a100', 'other'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
-  { resourceType: 'k8s_namespace', displayName: 'K8s Namespace', category: 'compute', description: '命名空间、资源配额、环境和访问范围。', icon: 'i-carbon-kubernetes', enabled: true, subtypes: ['dev', 'test', 'staging', 'prod'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
-  { resourceType: 'object_storage', displayName: '对象存储', category: 'compute', description: 'Bucket、容量、权限和生命周期。', icon: 'i-carbon-cloud-storage', enabled: true, subtypes: ['bucket', 'archive', 'public_assets'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'database', displayName: '数据库', category: 'database', description: 'MySQL / PostgreSQL / Redis 权限或实例访问。', icon: 'i-carbon-data-base', enabled: true, availability: 'available', subtypes: ['mysql', 'postgresql', 'redis'], termsIds: ['database_security_terms'], approverGroup: 'DBA' },
+  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'OpenAI、Anthropic、Gemini、DeepSeek、通义等 API 额度。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['openai', 'anthropic', 'google_gemini', 'deepseek', 'qwen', 'doubao', 'zhipu', 'moonshot', 'minimax'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
+  { resourceType: 'git_repository', displayName: 'Git 仓库权限', category: 'access', description: '代码仓库只读、开发者、维护者权限。', icon: 'i-carbon-logo-github', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['gitlab', 'github', 'gitee'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
+  { resourceType: 'cicd', displayName: 'CI/CD 权限', category: 'access', description: '流水线执行、配置、部署权限。', icon: 'i-carbon-continuous-deployment', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['pipeline', 'runner', 'deployment'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
+  { resourceType: 'vpn', displayName: 'VPN', category: 'access', description: '内网访问 VPN 权限。', icon: 'i-carbon-vpn', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['personal', 'project'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
+  { resourceType: 'ip_allowlist', displayName: 'IP 白名单', category: 'access', description: '办公、服务器或第三方访问白名单。', icon: 'i-carbon-firewall', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['office_ip', 'server_ip', 'third_party_ip'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
+  { resourceType: 'server', displayName: '云服务器', category: 'compute', description: '云主机规格、数量、环境和成本归属。', icon: 'i-carbon-server', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['ecs', 'vm'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'gpu', displayName: 'GPU', category: 'compute', description: 'GPU 卡型、数量、时长和用途。', icon: 'i-carbon-machine-learning-model', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['nvidia_t4', 'nvidia_a10', 'nvidia_a100', 'other'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'k8s_namespace', displayName: 'K8s Namespace', category: 'compute', description: '命名空间、资源配额、环境和访问范围。', icon: 'i-carbon-kubernetes', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['dev', 'test', 'staging', 'prod'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'object_storage', displayName: '对象存储', category: 'compute', description: 'Bucket、容量、权限和生命周期。', icon: 'i-carbon-cloud-storage', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['bucket', 'archive', 'public_assets'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
 ]
 export const CODEX_DEFAULT_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd
 export const CODEX_MIN_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].minBudgetUsd
@@ -1022,6 +1026,22 @@ export function resourceTypeLabel(resourceType: ResourceType) {
   return resourceTypeConfig(resourceType)?.displayName ?? resourceType
 }
 
+export function canApplyResourceType(config: ResourceTypeConfig, userLevelPriority = 0) {
+  if (!config.enabled)
+    return false
+  if (config.availability === 'unavailable')
+    return false
+  if (config.availability === 'level_required')
+    return userLevelPriority >= (config.minUserLevelPriority ?? 0)
+  return true
+}
+
+export function resourceAvailabilityLabel(config: ResourceTypeConfig, userLevelPriority = 0) {
+  if (canApplyResourceType(config, userLevelPriority))
+    return ''
+  return config.unavailableReason ?? (config.availability === 'level_required' ? `平台等级 Lv${config.minUserLevelPriority ?? 3} 开放` : '暂时不提供申请')
+}
+
 export function resourceApprovalStatusText(status: ResourceApprovalStatus) {
   const map: Record<ResourceApprovalStatus, string> = {
     pending: '待审批',
@@ -1194,6 +1214,17 @@ function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTe
 
 const state = reactive<WelfareState>(defaultState())
 const isHydrated = ref(false)
+
+function assertResourceTypeCanApply(resourceType: ResourceType, userId: string) {
+  const config = assertKnownResourceType(resourceType)
+  const user = state.users.find(item => item.id === userId)
+  if (!user)
+    throw new Error('用户不存在')
+  const userLevel = buildUserLevelCard(user, state)
+  if (!canApplyResourceType(config, userLevel.priority))
+    throw new Error(`${config.displayName} ${resourceAvailabilityLabel(config, userLevel.priority)}`)
+  return config
+}
 const persistenceError = ref('')
 let hydratePromise: Promise<void> | undefined
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -1575,7 +1606,9 @@ export function useWelfareStore() {
     if (!resourceTypes.length)
       throw new Error('请至少选择一种资源类型')
     for (const resourceType of resourceTypes)
-      assertKnownResourceType(resourceType)
+      assertResourceTypeCanApply(resourceType, currentUser.value.id)
+    for (const item of payload.resourceItems)
+      assertResourceTypeCanApply(item.resourceType, currentUser.value.id)
     if (!payload.resourceItems.length)
       throw new Error('请至少添加一条资源明细')
     assertCanCreateRequest(currentUser.value.id)
@@ -1646,6 +1679,10 @@ export function useWelfareStore() {
     const resourceTypes = Array.from(new Set(payload.selectedResourceTypes))
     if (!resourceTypes.length)
       throw new Error('请至少选择一种资源类型')
+    for (const resourceType of resourceTypes)
+      assertResourceTypeCanApply(resourceType, currentUser.value.id)
+    for (const item of payload.resourceItems)
+      assertResourceTypeCanApply(item.resourceType, currentUser.value.id)
     if (!payload.resourceItems.length)
       throw new Error('请至少添加一条资源明细')
 

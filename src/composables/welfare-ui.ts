@@ -167,9 +167,9 @@ export const unreadNotificationCount = ref(0)
 export const notificationsLoading = ref(false)
 
 export const applicationForm = reactive({
-  type: 'pro' as RequestKind,
-  title: '公益项目架构与实现支持',
-  description: '<p>希望获得面向校园公益项目的完整技术建议、代码审阅或架构答复。</p>',
+  type: 'code' as RequestKind,
+  title: 'LLMApi 额度申请',
+  description: '<p>希望获得公益项目所需的大模型 API 额度。</p>',
   githubRepo: '',
   extendStorage: false,
   expediteProcessing: false,
@@ -316,22 +316,6 @@ export const applicationTypeCards = [
     cost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
     originalCost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
     desc: '兼容旧版 Codex/LLMApi 单项额度申请；新申请建议使用“资源申请”。',
-  },
-  {
-    type: 'image' as const,
-    title: 'Image',
-    icon: 'i-carbon-image',
-    cost: calculateActivityPrice(REQUEST_COST.image),
-    originalCost: REQUEST_COST.image,
-    desc: `图片类申请，当前 ${ACTIVITY_NAME} 价 ${calculateActivityPrice(REQUEST_COST.image).toLocaleString('zh-CN')} 积分。`,
-  },
-  {
-    type: 'pro' as const,
-    title: 'Pro',
-    icon: 'i-carbon-star',
-    cost: calculateActivityPrice(REQUEST_COST.pro),
-    originalCost: REQUEST_COST.pro,
-    desc: `复杂公益需求，${PRO_STANDARD_PROCESSING_HOURS / 24} 天处理，当前 ${ACTIVITY_NAME} 价 ${calculateActivityPrice(REQUEST_COST.pro).toLocaleString('zh-CN')} 积分。`,
   },
 ]
 

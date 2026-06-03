@@ -5,7 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { formatBytes, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES } from '~/composables/welfare'
+import { canApplyResourceType, formatBytes, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, resourceAvailabilityLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 
@@ -21,6 +21,7 @@ const {
   totalApplicationBytes,
   activeRequestCount,
   canCreateRequest,
+  userLevelCard,
   submitApplicationWithAiReview,
   submitResourceApplication,
   addResourceApplicationItem,
@@ -37,6 +38,7 @@ const legacyMode = ref(false)
 const applicationDraftKey = 'welfare:resource-application-draft'
 const selectedTypeCard = computed(() => applicationTypeCards.find(item => item.type === applicationForm.type))
 const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
+const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
 const groupedResourceItems = computed(() => resourceApplicationForm.selectedResourceTypes.map(resourceType => ({
   config: resourceTypeConfigs.value.find(item => item.resourceType === resourceType),
   items: resourceApplicationItems.value.filter(item => item.resourceType === resourceType),
@@ -55,11 +57,34 @@ const urgencyOptions = [
   { value: 'emergency', label: '应急' },
 ]
 
+function resourceConfig(resourceType: ResourceType) {
+  return resourceTypeConfigs.value.find(item => item.resourceType === resourceType)
+}
+
 function isSelectedResourceType(resourceType: ResourceType) {
   return resourceApplicationForm.selectedResourceTypes.includes(resourceType)
 }
 
+function isResourceTypeAvailable(resourceType: ResourceType) {
+  const config = resourceConfig(resourceType)
+  return !!config && canApplyResourceType(config, currentUserLevelPriority.value)
+}
+
+function resourceTypeUnavailableText(resourceType: ResourceType) {
+  const config = resourceConfig(resourceType)
+  return config ? resourceAvailabilityLabel(config, currentUserLevelPriority.value) : '暂时不提供申请'
+}
+
+function sanitizeSelectedResourceTypes() {
+  const allowed = resourceApplicationForm.selectedResourceTypes.filter(isResourceTypeAvailable)
+  resourceApplicationForm.selectedResourceTypes = allowed.length ? allowed : ['database']
+  resourceApplicationItems.value = resourceApplicationItems.value.filter(item => isResourceTypeAvailable(item.resourceType))
+  ensureSelectedResourceItems()
+}
+
 function toggleResourceType(resourceType: ResourceType) {
+  if (!isResourceTypeAvailable(resourceType))
+    return
   const exists = isSelectedResourceType(resourceType)
   if (exists && resourceApplicationForm.selectedResourceTypes.length === 1)
     return
@@ -75,7 +100,7 @@ function selectLegacyType(type: RequestKind) {
 }
 
 function nextToMaterials() {
-  ensureSelectedResourceItems()
+  sanitizeSelectedResourceTypes()
   currentStep.value = 'materials'
 }
 
@@ -118,6 +143,8 @@ function onSubmitResourceApplication() {
 
 function onSubmitLegacyApplication() {
   runSafely(async () => {
+    if (applicationForm.type !== 'code')
+      throw new Error('旧版入口仅保留 LLMApi 申请')
     await submitApplicationWithAiReview()
     resetApplicationFiles()
     router.push('/dashboard/apply')
@@ -127,6 +154,7 @@ function onSubmitLegacyApplication() {
 onMounted(() => {
   resetResourceApplicationForm()
   restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
+  sanitizeSelectedResourceTypes()
   persistLocalDraft(applicationDraftKey, resourceApplicationForm)
 })
 </script>
@@ -166,10 +194,14 @@ onMounted(() => {
               v-for="config in resourceTypeConfigs"
               :key="config.resourceType"
               type="button"
-              class="p-5 text-left border rounded-3xl transition"
-              :class="isSelectedResourceType(config.resourceType) ? 'border-emerald-400 bg-emerald-50 shadow-lg shadow-emerald-500/10 dark:bg-emerald-500/10' : 'border-black/8 bg-white hover:border-slate-400 dark:border-white/10 dark:bg-[#151820]'"
+              class="p-5 text-left border rounded-3xl transition relative overflow-hidden"
+              :class="isResourceTypeAvailable(config.resourceType)
+                ? (isSelectedResourceType(config.resourceType) ? 'border-emerald-400 bg-emerald-50 shadow-lg shadow-emerald-500/10 dark:bg-emerald-500/10' : 'border-black/8 bg-white hover:border-slate-400 dark:border-white/10 dark:bg-[#151820]')
+                : (config.availability === 'level_required' ? 'border-red-300 bg-white opacity-75 cursor-not-allowed dark:border-red-400/40 dark:bg-[#151820]' : 'border-amber-300 bg-amber-50/40 opacity-70 cursor-not-allowed dark:border-amber-400/40 dark:bg-amber-950/10')"
+              :disabled="!isResourceTypeAvailable(config.resourceType)"
               @click="toggleResourceType(config.resourceType)"
             >
+              <div v-if="!isResourceTypeAvailable(config.resourceType)" class="pointer-events-none inset-0 absolute" :class="config.availability === 'level_required' ? 'ring-4 ring-inset ring-red-500/80' : 'ring-4 ring-inset ring-amber-400/80'" />
               <div class="flex items-center justify-between">
                 <span class="text-2xl" :class="config.icon" />
                 <span class="text-xs text-slate-500 fw-800">{{ config.approverGroup }}</span>
@@ -180,6 +212,9 @@ onMounted(() => {
               <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
                 {{ config.description }}
               </p>
+              <div v-if="!isResourceTypeAvailable(config.resourceType)" class="text-sm fw-900 mt-4" :class="config.availability === 'level_required' ? 'text-red-600' : 'text-amber-700 dark:text-amber-300'">
+                {{ resourceTypeUnavailableText(config.resourceType) }}
+              </div>
             </button>
           </div>
 
@@ -188,7 +223,7 @@ onMounted(() => {
               兼容旧版申请入口
             </summary>
             <div class="mt-4 gap-3 grid md:grid-cols-3">
-              <button v-for="item in applicationTypeCards.filter(card => card.type !== 'resource')" :key="item.type" type="button" class="p-4 text-left border rounded-2xl dark:border-white/10" @click="selectLegacyType(item.type)">
+              <button v-for="item in applicationTypeCards.filter(card => card.type === 'code')" :key="item.type" type="button" class="p-4 text-left border rounded-2xl dark:border-white/10" @click="selectLegacyType(item.type)">
                 <b>{{ item.title }}</b>
                 <p class="text-xs text-slate-500 mt-1">
                   {{ item.desc }}

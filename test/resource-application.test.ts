@@ -9,6 +9,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 describe('resource application platform rules', async () => {
   const {
     aggregateResourceApplicationStatus,
+    canApplyResourceType,
     RESOURCE_TYPE_CONFIGS,
     termsForResourceTypes,
   } = await import('../src/composables/welfare')
@@ -29,6 +30,25 @@ describe('resource application platform rules', async () => {
     expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'database')?.subtypes).toEqual(['mysql', 'postgresql', 'redis'])
     expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'llm_api_quota')?.subtypes).toContain('deepseek')
     expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'llm_api_quota')?.subtypes).toContain('openai')
+  })
+
+  it('marks gated and temporarily unavailable resources', () => {
+    const byType = Object.fromEntries(RESOURCE_TYPE_CONFIGS.map(item => [item.resourceType, item]))
+
+    expect(canApplyResourceType(byType.database, 1)).toBe(true)
+    expect(canApplyResourceType(byType.llm_api_quota, 1)).toBe(true)
+
+    expect(byType.server.availability).toBe('level_required')
+    expect(byType.object_storage.availability).toBe('level_required')
+    expect(canApplyResourceType(byType.server, 2)).toBe(false)
+    expect(canApplyResourceType(byType.server, 3)).toBe(true)
+    expect(canApplyResourceType(byType.object_storage, 2)).toBe(false)
+    expect(canApplyResourceType(byType.object_storage, 3)).toBe(true)
+
+    for (const type of ['git_repository', 'cicd', 'vpn', 'ip_allowlist', 'gpu', 'k8s_namespace'] as const) {
+      expect(byType[type].availability).toBe('unavailable')
+      expect(canApplyResourceType(byType[type], 5)).toBe(false)
+    }
   })
 
   it('automatically merges common and resource-specific terms', () => {
