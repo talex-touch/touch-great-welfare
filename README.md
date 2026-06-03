@@ -10,9 +10,9 @@
 - 用户积分系统：LINUX DO Credit 充值接入、流水、管理员手动调整。
 - 申请类型全部采用预扣费制度，提交后立即预扣并进入 AI 初审 / 管理员审核：
   - `code`：Codex 额度申请，默认 10 美元，按 10 积分 = 1 美元预扣；用户可自行选择额度，单次最多 1000 美元。
-  - `image`：原价 3200 积分，活动期 320 积分，预扣后等待审核，审核通过后调用 AI 图片生成接口。
-  - `pro`：原价 12000 积分，活动期 1200 积分，预扣后按 3 天处理；可额外预扣 1100 积分加速到 2 天。
-- 限时活动：2026-06-01 至 2026-06-08 采用 0.1 折，活动价会写入申请价格快照，活动结束后新申请恢复原价。
+  - `image`：原价 3200 积分，活动期 32 积分，预扣后等待审核，审核通过后调用 AI 图片生成接口。
+  - `pro`：原价 12000 积分，活动期 120 积分，预扣后按 3 天处理；可额外预扣 1100 积分加速到 2 天。
+- 限时活动：2026-06-01 至 2026-06-08 采用 0.1 折，即原价 1%，活动价会写入申请价格快照，活动结束后新申请恢复原价。
 - Pro 成本模型：按 680 元/周/50 次、10 元 = 800 LDC、1 LDC = 10 积分估算，单次成本约 10880 积分，对外取整为 12000 积分。
 - Pro 结束后可在数据保留期内追加同一上下文，基础追加价按 10880 积分；超过保留期需重新提交申请。
 - Codex 申请超过 100 美元需要更长审核时间；访问限制以首次访问 IP 为准，默认最多 2 个 IP、RPM 2，并限制并发，超过 IP 限制后需要管理员清除绑定。
@@ -100,12 +100,12 @@ Cloudflare binding：
 
 业务配置优先在管理员后台保存到服务端数据库，环境变量只作为旧部署 fallback。`wrangler.jsonc` / `wrangler.production.jsonc` 默认不再写业务 vars：
 
-| 配置域 | 后台位置 | 可配置内容 |
-| --- | --- | --- |
-| GitHub App | 管理员后台 / GitHub 应用 | enabled、App 名称、Client ID / Secret、Callback URL、OAuth 端点和 scopes。 |
-| AI Provider | 管理员后台 / AI 配置 | enabled、base URL、OpenAI 兼容 Key、NewAPI 管理 Key、模型、临时 Key TTL / 配额。 |
-| 通知供应商 | 管理员后台 / 通知配置 | Resend API Key / 发件人、VAPID public/private key、VAPID subject。 |
-| LINUX DO Credit | 管理员后台 / 充值配置 | enabled、网关地址、PID、KEY、1 LDC 兑换积分倍率，默认 10。 |
+| 配置域          | 后台位置                 | 可配置内容                                                                       |
+| --------------- | ------------------------ | -------------------------------------------------------------------------------- |
+| GitHub App      | 管理员后台 / GitHub 应用 | enabled、App 名称、Client ID / Secret、Callback URL、OAuth 端点和 scopes。       |
+| AI Provider     | 管理员后台 / AI 配置     | enabled、base URL、OpenAI 兼容 Key、NewAPI 管理 Key、模型、临时 Key TTL / 配额。 |
+| 通知供应商      | 管理员后台 / 通知配置    | Resend API Key / 发件人、VAPID public/private key、VAPID subject。               |
+| LINUX DO Credit | 管理员后台 / 充值配置    | enabled、网关地址、PID、KEY、1 LDC 兑换积分倍率，默认 10。                       |
 
 仍需要保留的 Worker Secret：
 
