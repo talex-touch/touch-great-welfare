@@ -1,5 +1,6 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
+import { markdownToSafeHtml } from '~/utils/markdown'
 import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
 import { loadWelfareState, saveWelfareState } from './welfare-persistence'
 
@@ -1190,11 +1191,7 @@ function normalizeResourceItems(applicationId: string, items: SubmitResourceAppl
 }
 
 function buildResourceDescription(payload: SubmitResourceApplicationPayload) {
-  return [
-    `<p>${sanitizeRichText(payload.businessBackground || payload.reason)}</p>`,
-    `<p><strong>申请原因：</strong>${sanitizeRichText(payload.reason)}</p>`,
-    payload.costCenter ? `<p><strong>成本归属：</strong>${sanitizeRichText(payload.costCenter)}</p>` : '',
-  ].filter(Boolean).join('')
+  return markdownToSafeHtml(payload.reason || payload.businessBackground)
 }
 
 function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTermIds: ResourceTermId[], userId: string, acceptedAt: string) {
@@ -1598,9 +1595,7 @@ export function useWelfareStore() {
     if (!title)
       throw new Error('请填写申请标题')
     if (!isDraft && !payload.reason.trim())
-      throw new Error('请填写申请原因')
-    if (!isDraft && !payload.businessBackground.trim())
-      throw new Error('请填写业务背景')
+      throw new Error('请填写申请说明')
     if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('附件总大小不能超过 200MB')
     if (!resourceTypes.length)

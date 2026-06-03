@@ -5,9 +5,10 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { canApplyResourceType, formatBytes, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, resourceAvailabilityLabel } from '~/composables/welfare'
+import { canApplyResourceType, formatBytes, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
+import MarkdownEditor from './MarkdownEditor.vue'
 
 const {
   currentUser,
@@ -34,6 +35,7 @@ const currentStep = ref<'types' | 'materials' | 'terms'>('types')
 const applicationDraftKey = 'welfare:resource-application-draft'
 const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
+const visibleResourceTypeConfigs = computed(() => resourceTypeConfigs.value.filter(config => isResourceTypeAvailable(config.resourceType)))
 const groupedResourceItems = computed(() => resourceApplicationForm.selectedResourceTypes.map(resourceType => ({
   config: resourceTypeConfigs.value.find(item => item.resourceType === resourceType),
   items: resourceApplicationItems.value.filter(item => item.resourceType === resourceType),
@@ -63,11 +65,6 @@ function isSelectedResourceType(resourceType: ResourceType) {
 function isResourceTypeAvailable(resourceType: ResourceType) {
   const config = resourceConfig(resourceType)
   return !!config && canApplyResourceType(config, currentUserLevelPriority.value)
-}
-
-function resourceTypeUnavailableText(resourceType: ResourceType) {
-  const config = resourceConfig(resourceType)
-  return config ? resourceAvailabilityLabel(config, currentUserLevelPriority.value) : '暂时不提供申请'
 }
 
 function sanitizeSelectedResourceTypes() {
@@ -169,32 +166,25 @@ onMounted(() => {
       <div v-else class="mt-6 space-y-6">
         <template v-if="currentStep === 'types'">
           <DataNotice mode="compact" title="申请提交与免责确认" timing="before" />
-          <div class="gap-4 grid md:grid-cols-2 xl:grid-cols-3">
+          <div class="gap-2 grid md:grid-cols-3 xl:grid-cols-4">
             <button
-              v-for="config in resourceTypeConfigs"
+              v-for="config in visibleResourceTypeConfigs"
               :key="config.resourceType"
               type="button"
-              class="p-5 text-left border rounded-3xl transition relative overflow-hidden"
-              :class="isResourceTypeAvailable(config.resourceType)
-                ? (isSelectedResourceType(config.resourceType) ? 'border-emerald-400 bg-emerald-50 shadow-lg shadow-emerald-500/10 dark:bg-emerald-500/10' : 'border-black/8 bg-white hover:border-slate-400 dark:border-white/10 dark:bg-[#151820]')
-                : (config.availability === 'level_required' ? 'border-red-300 bg-white opacity-75 cursor-not-allowed dark:border-red-400/40 dark:bg-[#151820]' : 'border-amber-300 bg-amber-50/40 opacity-70 cursor-not-allowed dark:border-amber-400/40 dark:bg-amber-950/10')"
-              :disabled="!isResourceTypeAvailable(config.resourceType)"
+              class="p-2.5 text-left border rounded-2xl transition relative overflow-hidden"
+              :class="isSelectedResourceType(config.resourceType) ? 'border-emerald-400 bg-emerald-50 shadow-md shadow-emerald-500/10 dark:bg-emerald-500/10' : 'border-black/8 bg-white hover:border-slate-400 dark:border-white/10 dark:bg-[#151820]'"
               @click="toggleResourceType(config.resourceType)"
             >
-              <div v-if="!isResourceTypeAvailable(config.resourceType)" class="pointer-events-none inset-0 absolute" :class="config.availability === 'level_required' ? 'ring-4 ring-inset ring-red-500/80' : 'ring-4 ring-inset ring-amber-400/80'" />
-              <div class="flex items-center justify-between">
-                <span class="text-2xl" :class="config.icon" />
-                <span class="text-xs text-slate-500 fw-800">{{ config.approverGroup }}</span>
+              <div class="flex gap-2 items-center justify-between">
+                <span class="text-lg" :class="config.icon" />
+                <span class="text-[10px] text-slate-500 fw-800">{{ config.approverGroup }}</span>
               </div>
-              <div class="text-lg fw-900 mt-4">
+              <div class="text-sm fw-900 mt-2">
                 {{ config.displayName }}
               </div>
-              <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+              <p class="text-xs text-slate-500 leading-4 mt-1 dark:text-slate-400">
                 {{ config.description }}
               </p>
-              <div v-if="!isResourceTypeAvailable(config.resourceType)" class="text-sm fw-900 mt-4" :class="config.availability === 'level_required' ? 'text-red-600' : 'text-amber-700 dark:text-amber-300'">
-                {{ resourceTypeUnavailableText(config.resourceType) }}
-              </div>
             </button>
           </div>
 
@@ -212,21 +202,13 @@ onMounted(() => {
               <span class="field-label">申请标题</span>
               <TxInput v-model="resourceApplicationForm.title" placeholder="例如：客服 Agent 数据库 + 大模型 + GPU 申请" />
             </label>
-            <label class="gap-2 grid">
-              <span class="field-label">所属项目/系统</span>
-              <TxInput v-model="resourceApplicationForm.projectId" placeholder="项目或系统名称" />
-            </label>
-            <label class="gap-2 grid">
-              <span class="field-label">部门/团队</span>
-              <TxInput v-model="resourceApplicationForm.departmentId" placeholder="部门或团队" />
-            </label>
             <label class="gap-2 grid md:col-span-2">
-              <span class="field-label">申请原因</span>
-              <textarea v-model="resourceApplicationForm.reason" class="form-textarea" rows="3" placeholder="为什么需要这些资源？" />
-            </label>
-            <label class="gap-2 grid md:col-span-2">
-              <span class="field-label">业务背景</span>
-              <textarea v-model="resourceApplicationForm.businessBackground" class="form-textarea" rows="3" placeholder="业务场景、影响范围、公益/研发目标" />
+              <span class="field-label">申请说明</span>
+              <MarkdownEditor
+                v-model="resourceApplicationForm.reason"
+                :min-height="280"
+                placeholder="请用 Markdown 说明申请原因、业务背景、影响范围、公益/研发目标。可粘贴百度网盘等外链，例如：[补充材料](https://pan.baidu.com/...)；图片建议作为下方附件上传。"
+              />
             </label>
             <label class="gap-2 grid">
               <span class="field-label">紧急程度</span>
@@ -237,14 +219,6 @@ onMounted(() => {
             <label class="gap-2 grid">
               <span class="field-label">期望生效时间</span>
               <TxInput v-model="resourceApplicationForm.expectedEffectiveAt" placeholder="例如：2026-06-10 10:00" />
-            </label>
-            <label class="gap-2 grid">
-              <span class="field-label">成本归属</span>
-              <TxInput v-model="resourceApplicationForm.costCenter" placeholder="成本中心 / 项目预算" />
-            </label>
-            <label class="gap-2 grid">
-              <span class="field-label">负责人</span>
-              <TxInput v-model="resourceApplicationForm.ownerId" placeholder="负责人用户 ID 或姓名" />
             </label>
             <label class="gap-2 grid md:col-span-2">
               <span class="field-label">默认有效期</span>
@@ -323,10 +297,13 @@ onMounted(() => {
 
           <div>
             <div class="mb-2 flex gap-3 items-center justify-between">
-              <span class="field-label">附件 / 补充材料</span>
+              <span class="field-label">Markdown 附件 / 图片</span>
               <span class="field-hint">{{ formatBytes(totalApplicationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
             </div>
-            <TxFileUploader v-model="applicationFiles" :max="20" button-text="选择资料" drop-text="拖拽资料到这里" hint-text="总大小需控制在 200MB 内" />
+            <TxFileUploader v-model="applicationFiles" :max="20" button-text="上传附件" drop-text="图片和补充材料都拖拽到这里" hint-text="图片、Markdown 附件和补充材料都上传到这里；全部文件总大小不超过 200MB。也可在申请说明里填写百度网盘等外链。" />
+            <p class="field-hint mt-2">
+              支持把截图、说明文档、Markdown 文件等统一作为附件上传；如文件过大或已在网盘，可在上方 Markdown 说明中放链接。
+            </p>
           </div>
 
           <div class="flex flex-wrap gap-3 justify-between">

@@ -7,6 +7,7 @@ const ALLOWED_TAGS = new Set([
   'EM',
   'H3',
   'H4',
+  'IMG',
   'LI',
   'OL',
   'P',
@@ -27,6 +28,14 @@ function escapeHtml(value: string) {
 function sanitizeHref(value: string) {
   const trimmed = value.trim()
   if (/^(?:https?:|mailto:)/i.test(trimmed))
+    return trimmed
+
+  return ''
+}
+
+function sanitizeImageSrc(value: string) {
+  const trimmed = value.trim()
+  if (/^https?:/i.test(trimmed))
     return trimmed
 
   return ''
@@ -61,15 +70,32 @@ export function sanitizeRichText(value = '') {
       continue
     }
 
+    const href = element.tagName === 'A' ? (element as HTMLAnchorElement).href : ''
+    const imageSrc = element.tagName === 'IMG' ? (element as HTMLImageElement).src : ''
+    const imageAlt = element.tagName === 'IMG' ? (element as HTMLImageElement).alt.trim() : ''
+
     for (const attr of Array.from(element.attributes))
       element.removeAttribute(attr.name)
 
     if (element.tagName === 'A') {
-      const href = sanitizeHref((element as HTMLAnchorElement).href)
-      if (href) {
-        element.setAttribute('href', href)
+      const safeHref = sanitizeHref(href)
+      if (safeHref) {
+        element.setAttribute('href', safeHref)
         element.setAttribute('target', '_blank')
         element.setAttribute('rel', 'noreferrer')
+      }
+      else {
+        unwrapElement(element)
+      }
+    }
+
+    if (element.tagName === 'IMG') {
+      const src = sanitizeImageSrc(imageSrc)
+      if (src) {
+        element.setAttribute('src', src)
+        if (imageAlt)
+          element.setAttribute('alt', imageAlt)
+        element.setAttribute('loading', 'lazy')
       }
       else {
         unwrapElement(element)

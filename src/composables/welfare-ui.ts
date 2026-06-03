@@ -557,7 +557,7 @@ export function useWelfareUiState() {
       departmentId: resourceApplicationForm.departmentId,
       projectId: resourceApplicationForm.projectId,
       reason: resourceApplicationForm.reason,
-      businessBackground: resourceApplicationForm.businessBackground,
+      businessBackground: resourceApplicationForm.reason,
       urgency: resourceApplicationForm.urgency,
       expectedEffectiveAt: resourceApplicationForm.expectedEffectiveAt,
       costCenter: resourceApplicationForm.costCenter,

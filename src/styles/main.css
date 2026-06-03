@@ -412,6 +412,15 @@ select {
   text-decoration: underline;
 }
 
+.rich-text-view img,
+.student-markdown-preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.75rem 0;
+  border-radius: 12px;
+}
+
 .rich-link-popover {
   display: grid;
   gap: 0.5rem;
