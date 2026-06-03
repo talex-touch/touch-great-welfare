@@ -300,25 +300,6 @@ export const adminTabItems = [
 export const activeAdminTab = ref<(typeof ADMIN_TABS)[keyof typeof ADMIN_TABS]>(ADMIN_TABS.login)
 export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
 
-export const applicationTypeCards = [
-  {
-    type: 'resource' as const,
-    title: '资源申请',
-    icon: 'i-carbon-assembly-cluster',
-    cost: 0,
-    originalCost: 0,
-    desc: '多选数据库、大模型 API、研发基础设施；一单多资源、逐项审批、人工开通。',
-  },
-  {
-    type: 'code' as const,
-    title: '旧版 LLMApi',
-    icon: 'i-carbon-code',
-    cost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
-    originalCost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
-    desc: '兼容旧版 Codex/LLMApi 单项额度申请；新申请建议使用“资源申请”。',
-  },
-]
-
 export const pricingSummary = {
   activityName: ACTIVITY_NAME,
   activityDiscountRate: ACTIVITY_DISCOUNT_RATE,
@@ -1148,7 +1129,6 @@ export function useWelfareUiState() {
     selectedSection,
     activeAdminTab,
     adminTabItems,
-    applicationTypeCards,
     resourceTypeConfigs,
     resourceTerms: RESOURCE_TERMS,
     selectedResourceTerms,

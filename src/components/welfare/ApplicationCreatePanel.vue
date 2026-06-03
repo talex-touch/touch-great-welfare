@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { RequestKind, ResourceTermId, ResourceType } from '~/composables/welfare'
+import type { ResourceTermId, ResourceType } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxStep, TxSteps } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -11,9 +11,7 @@ import DataNotice from './DataNotice.vue'
 
 const {
   currentUser,
-  applicationForm,
   applicationFiles,
-  applicationTypeCards,
   resourceApplicationForm,
   resourceApplicationItems,
   resourceTypeConfigs,
@@ -22,7 +20,6 @@ const {
   activeRequestCount,
   canCreateRequest,
   userLevelCard,
-  submitApplicationWithAiReview,
   submitResourceApplication,
   addResourceApplicationItem,
   removeResourceApplicationItem,
@@ -34,9 +31,7 @@ const {
 const router = useRouter()
 const { runSafely } = useWelfareFeedback()
 const currentStep = ref<'types' | 'materials' | 'terms'>('types')
-const legacyMode = ref(false)
 const applicationDraftKey = 'welfare:resource-application-draft'
-const selectedTypeCard = computed(() => applicationTypeCards.find(item => item.type === applicationForm.type))
 const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
 const groupedResourceItems = computed(() => resourceApplicationForm.selectedResourceTypes.map(resourceType => ({
@@ -94,11 +89,6 @@ function toggleResourceType(resourceType: ResourceType) {
   ensureSelectedResourceItems()
 }
 
-function selectLegacyType(type: RequestKind) {
-  applicationForm.type = type
-  legacyMode.value = type !== 'resource'
-}
-
 function nextToMaterials() {
   sanitizeSelectedResourceTypes()
   currentStep.value = 'materials'
@@ -139,16 +129,6 @@ function onSubmitResourceApplication() {
     resetApplicationFiles()
     router.push('/dashboard/apply')
   }, '资源申请已提交，等待各审批组逐项审批')
-}
-
-function onSubmitLegacyApplication() {
-  runSafely(async () => {
-    if (applicationForm.type !== 'code')
-      throw new Error('旧版入口仅保留 LLMApi 申请')
-    await submitApplicationWithAiReview()
-    resetApplicationFiles()
-    router.push('/dashboard/apply')
-  }, '旧版申请已提交')
 }
 
 onMounted(() => {
@@ -216,29 +196,6 @@ onMounted(() => {
                 {{ resourceTypeUnavailableText(config.resourceType) }}
               </div>
             </button>
-          </div>
-
-          <details class="p-4 border border-black/8 rounded-2xl dark:border-white/10">
-            <summary class="fw-900 cursor-pointer">
-              兼容旧版申请入口
-            </summary>
-            <div class="mt-4 gap-3 grid md:grid-cols-3">
-              <button v-for="item in applicationTypeCards.filter(card => card.type === 'code')" :key="item.type" type="button" class="p-4 text-left border rounded-2xl dark:border-white/10" @click="selectLegacyType(item.type)">
-                <b>{{ item.title }}</b>
-                <p class="text-xs text-slate-500 mt-1">
-                  {{ item.desc }}
-                </p>
-              </button>
-            </div>
-          </details>
-
-          <div v-if="legacyMode" class="text-amber-900 p-4 rounded-2xl bg-amber-50 dark:text-amber-100 dark:bg-amber-950/30">
-            已选择旧版 {{ selectedTypeCard?.title }}。本次将按旧流程提交，不支持混合资源。
-            <div class="mt-3 flex justify-end">
-              <TxButton variant="primary" @click="onSubmitLegacyApplication">
-                提交旧版申请
-              </TxButton>
-            </div>
           </div>
 
           <div class="flex flex-wrap gap-3 items-center justify-end">
