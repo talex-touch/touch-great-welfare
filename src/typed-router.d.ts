@@ -48,8 +48,15 @@ declare module 'vue-router/auto-routes' {
       | '/dashboard/'
       | '/dashboard/admin'
       | '/dashboard/apply'
+      | '/dashboard/apply/[id]'
+      | '/dashboard/apply/create'
+      | '/dashboard/notification-settings'
+      | '/dashboard/notifications'
+      | '/dashboard/open-source'
       | '/dashboard/profile'
       | '/dashboard/student'
+      | '/dashboard/student/create'
+      | '/dashboard/wallet'
     >,
     '/dashboard/': RouteRecordInfo<
       '/dashboard/',
@@ -70,6 +77,42 @@ declare module 'vue-router/auto-routes' {
       '/dashboard/apply',
       Record<never, never>,
       Record<never, never>,
+      | '/dashboard/apply/[id]'
+      | '/dashboard/apply/create'
+    >,
+    '/dashboard/apply/[id]': RouteRecordInfo<
+      '/dashboard/apply/[id]',
+      '/dashboard/apply/:id',
+      { id: ParamValue<true> },
+      { id: ParamValue<false> },
+      | never
+    >,
+    '/dashboard/apply/create': RouteRecordInfo<
+      '/dashboard/apply/create',
+      '/dashboard/apply/create',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/notification-settings': RouteRecordInfo<
+      '/dashboard/notification-settings',
+      '/dashboard/notification-settings',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/notifications': RouteRecordInfo<
+      '/dashboard/notifications',
+      '/dashboard/notifications',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/open-source': RouteRecordInfo<
+      '/dashboard/open-source',
+      '/dashboard/open-source',
+      Record<never, never>,
+      Record<never, never>,
       | never
     >,
     '/dashboard/profile': RouteRecordInfo<
@@ -84,6 +127,20 @@ declare module 'vue-router/auto-routes' {
       '/dashboard/student',
       Record<never, never>,
       Record<never, never>,
+      | '/dashboard/student/create'
+    >,
+    '/dashboard/student/create': RouteRecordInfo<
+      '/dashboard/student/create',
+      '/dashboard/student/create',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/wallet': RouteRecordInfo<
+      '/dashboard/wallet',
+      '/dashboard/wallet',
+      Record<never, never>,
+      Record<never, never>,
       | never
     >,
     '/hi/[name]': RouteRecordInfo<
@@ -91,6 +148,13 @@ declare module 'vue-router/auto-routes' {
       '/hi/:name',
       { name: ParamValue<true> },
       { name: ParamValue<false> },
+      | never
+    >,
+    '/init': RouteRecordInfo<
+      '/init',
+      '/init',
+      Record<never, never>,
+      Record<never, never>,
       | never
     >,
     '/login': RouteRecordInfo<
@@ -131,8 +195,15 @@ declare module 'vue-router/auto-routes' {
         | '/dashboard/'
         | '/dashboard/admin'
         | '/dashboard/apply'
+        | '/dashboard/apply/[id]'
+        | '/dashboard/apply/create'
+        | '/dashboard/notification-settings'
+        | '/dashboard/notifications'
+        | '/dashboard/open-source'
         | '/dashboard/profile'
         | '/dashboard/student'
+        | '/dashboard/student/create'
+        | '/dashboard/wallet'
       views:
         | 'default'
     }
@@ -151,6 +222,38 @@ declare module 'vue-router/auto-routes' {
     'src/pages/dashboard/apply.vue': {
       routes:
         | '/dashboard/apply'
+        | '/dashboard/apply/[id]'
+        | '/dashboard/apply/create'
+      views:
+        | 'default'
+    }
+    'src/pages/dashboard/apply/[id].vue': {
+      routes:
+        | '/dashboard/apply/[id]'
+      views:
+        | never
+    }
+    'src/pages/dashboard/apply/create.vue': {
+      routes:
+        | '/dashboard/apply/create'
+      views:
+        | never
+    }
+    'src/pages/dashboard/notification-settings.vue': {
+      routes:
+        | '/dashboard/notification-settings'
+      views:
+        | never
+    }
+    'src/pages/dashboard/notifications.vue': {
+      routes:
+        | '/dashboard/notifications'
+      views:
+        | never
+    }
+    'src/pages/dashboard/open-source.vue': {
+      routes:
+        | '/dashboard/open-source'
       views:
         | never
     }
@@ -163,12 +266,31 @@ declare module 'vue-router/auto-routes' {
     'src/pages/dashboard/student.vue': {
       routes:
         | '/dashboard/student'
+        | '/dashboard/student/create'
+      views:
+        | 'default'
+    }
+    'src/pages/dashboard/student/create.vue': {
+      routes:
+        | '/dashboard/student/create'
+      views:
+        | never
+    }
+    'src/pages/dashboard/wallet.vue': {
+      routes:
+        | '/dashboard/wallet'
       views:
         | never
     }
     'src/pages/hi/[name].vue': {
       routes:
         | '/hi/[name]'
+      views:
+        | never
+    }
+    'src/pages/init.vue': {
+      routes:
+        | '/init'
       views:
         | never
     }

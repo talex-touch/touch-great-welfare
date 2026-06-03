@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { TxAvatar, TxButton, TxCard, TxInput, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
-import { computed } from 'vue'
+import { TxAvatar, TxButton, TxCheckbox, TxInput, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { useWelfareUiState } from '~/composables/welfare-ui'
+import { pricingSummary, useWelfareUiState } from '~/composables/welfare-ui'
+import DataNotice from './DataNotice.vue'
 
 const route = useRoute()
 const router = useRouter()
+const isBootstrapRoute = computed(() => route.path === '/init')
 const redirectPath = computed(() => {
   const redirect = route.query.redirect
   if (typeof redirect !== 'string' || !redirect.startsWith('/'))
     return undefined
 
-  if (redirect.startsWith('//') || redirect.startsWith('/login'))
+  if (redirect.startsWith('//') || redirect.startsWith('/login') || redirect.startsWith('/init'))
     return undefined
 
   return redirect
@@ -22,18 +24,19 @@ const {
   hasAdmin,
   currentUser,
   isAdmin,
-  oauthReady,
+  githubAppConfigForm,
   adminForm,
-  loginForm,
-  rechargeForm,
   selectedSection,
   createAdmin,
   loginAsAdmin,
-  mockOauthLogin,
-  rechargeCurrentUser,
+  startGitHubLogin,
+  refreshGitHubAppConfig,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
+const isUserConsentDialogOpen = ref(false)
+const hasUserConsent = ref(false)
+const githubLoginReady = computed(() => githubAppConfigForm.enabled && githubAppConfigForm.configured)
 
 function onCreateAdmin() {
   runSafely(() => {
@@ -43,10 +46,26 @@ function onCreateAdmin() {
 }
 
 function onOauthLogin() {
-  runSafely(() => {
-    mockOauthLogin(loginForm)
-    router.push(redirectPath.value ?? '/dashboard/apply')
-  }, 'OAuth 登录成功')
+  runSafely(async () => {
+    await startGitHubLogin(redirectPath.value ?? '/dashboard/apply')
+  }, '正在跳转 GitHub 授权')
+}
+
+function openUserConsentDialog() {
+  hasUserConsent.value = false
+  isUserConsentDialogOpen.value = true
+}
+
+function closeUserConsentDialog() {
+  isUserConsentDialogOpen.value = false
+}
+
+function confirmOauthLogin() {
+  if (!hasUserConsent.value)
+    return
+
+  closeUserConsentDialog()
+  onOauthLogin()
 }
 
 function onLoginAsAdmin() {
@@ -56,26 +75,23 @@ function onLoginAsAdmin() {
   }, '已切换到管理员')
 }
 
-function onRecharge() {
-  runSafely(() => rechargeCurrentUser(rechargeForm.amount), '积分充值已模拟到账')
-}
-
-function goDashboard(section: 'admin' | 'apply' | 'profile') {
+function goDashboard(section: 'admin' | 'apply' | 'profile' | 'wallet') {
   selectedSection.value = section
   router.push(`/dashboard/${section}`)
 }
+
+onMounted(() => {
+  refreshGitHubAppConfig().catch(() => {})
+})
 </script>
 
 <template>
-  <TxCard class="solid-panel" background="pure" shadow="medium" :padding="24" :radius="32">
+  <div class="w-full">
     <div v-if="!hasAdmin" class="space-y-5">
       <div>
         <div class="text-2xl fw-900">
           首次访问：创建管理员
         </div>
-        <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-          系统检测到没有管理员。第一个访问者需要创建后台账号，后续可配置 OAuth 与审核队列。
-        </p>
       </div>
       <label class="gap-2 grid">
         <span class="field-label">管理员名称</span>
@@ -92,31 +108,25 @@ function goDashboard(section: 'admin' | 'apply' | 'profile') {
 
     <div v-else-if="!currentUser" class="space-y-5">
       <div>
+        <TxStatusBadge v-if="isBootstrapRoute" text="已完成初始化" status="success" class="mb-3" />
         <div class="flex gap-3 items-center justify-between">
           <div class="text-2xl fw-900">
-            OAuth 登录入口
+            账号登录
           </div>
-          <TxStatusBadge :text="oauthReady ? '已配置' : '未配置'" :status="oauthReady ? 'success' : 'warning'" />
+          <TxStatusBadge :text="githubLoginReady ? 'GitHub App 已配置' : '未配置'" :status="githubLoginReady ? 'success' : 'warning'" />
         </div>
         <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-          当前为前端原型：OAuth 按钮会模拟授权登录。真实环境只需把此处替换为后端授权跳转。
+          系统已创建管理员账号；请从这里登录，/init 仅用于首次初始化。
         </p>
       </div>
-      <div v-if="!oauthReady" class="text-sm text-amber-800 leading-6 p-4 border border-amber-400/30 rounded-2xl bg-amber-50 dark:text-amber-200">
-        请先使用管理员进入后台配置 OAuth Client ID，普通用户才能登录。
+      <div v-if="!githubLoginReady" class="text-sm text-amber-800 leading-6 p-4 border border-amber-400/30 rounded-2xl bg-amber-50 dark:text-amber-200">
+        请先使用管理员进入后台配置 GitHub App Client ID / Secret，普通用户才能使用 GitHub 授权登录。
       </div>
-      <label class="gap-2 grid">
-        <span class="field-label">显示名称</span>
-        <TxInput v-model="loginForm.displayName" placeholder="你的名字" />
-      </label>
-      <label class="gap-2 grid">
-        <span class="field-label">邮箱</span>
-        <TxInput v-model="loginForm.email" type="email" placeholder="you@example.com" />
-      </label>
+      <DataNotice mode="compact" title="注册登录前请确认" />
       <div class="gap-3 grid sm:grid-cols-2">
-        <TxButton block variant="primary" :disabled="!oauthReady" @click="onOauthLogin">
+        <TxButton block variant="primary" :disabled="!githubLoginReady" @click="openUserConsentDialog">
           <span class="i-carbon-logo-github" />
-          使用 OAuth 登录
+          GitHub App 授权登录
         </TxButton>
         <TxButton block variant="secondary" @click="onLoginAsAdmin">
           管理员后台
@@ -148,23 +158,58 @@ function goDashboard(section: 'admin' | 'apply' | 'profile') {
           {{ currentUser.points.toLocaleString('zh-CN') }}
         </div>
         <div class="text-xs mt-3 op70">
-          Code 1 / Image 10 / Pro 审核通过后 100；学生认证审核扣 10，成功返还。
+          LLMApi 可选 Codex / ClaudeCode 等模型，不同模型价格由管理员配置；{{ pricingSummary.activityName }}：Image {{ pricingSummary.currentRequestCost.image }} / Pro {{ pricingSummary.currentRequestCost.pro }}；学生认证审核扣 {{ pricingSummary.studentReviewFee }}，成功返还。
         </div>
       </div>
-      <div v-if="!isAdmin" class="gap-3 grid sm:grid-cols-[1fr_auto]">
-        <TxInput v-model="rechargeForm.amount" type="number" placeholder="充值积分" />
-        <TxButton variant="primary" @click="onRecharge">
-          充值预留
-        </TxButton>
-      </div>
       <div class="gap-3 grid sm:grid-cols-2">
-        <TxButton block variant="secondary" @click="goDashboard(isAdmin ? 'admin' : 'apply')">
-          {{ isAdmin ? '进入审核后台' : '提交公益申请' }}
+        <TxButton block variant="secondary" @click="goDashboard('apply')">
+          提交公益申请
         </TxButton>
         <TxButton block variant="ghost" @click="goDashboard('profile')">
           完善个人信息
         </TxButton>
       </div>
+      <TxButton v-if="!isAdmin" block variant="ghost" @click="goDashboard('wallet')">
+        私人钱包
+      </TxButton>
     </div>
-  </TxCard>
+
+    <Teleport to="body">
+      <Transition name="dialog-shell">
+        <div v-if="isUserConsentDialogOpen" class="px-4 py-6 bg-slate-950/46 flex items-center inset-0 justify-center fixed z-50 backdrop-blur-sm" @click.self="closeUserConsentDialog">
+          <div class="dialog-surface solid-panel p-6 rounded-3xl max-h-[calc(100vh-3rem)] max-w-3xl w-full overflow-auto">
+            <div class="flex gap-4 items-start justify-between">
+              <div>
+                <h3 class="text-2xl fw-900 tracking-tight">
+                  注册登录确认
+                </h3>
+                <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                  首次 GitHub App 授权会创建账号并同步 GitHub 公开资料；再次登录会更新最后登录时间。
+                </p>
+              </div>
+              <button class="icon-btn shrink-0" title="关闭" @click="closeUserConsentDialog">
+                <span class="i-carbon-close" />
+              </button>
+            </div>
+
+            <div class="mt-6 space-y-5">
+              <DataNotice mode="full" title="注册、登录与数据处理免责说明" />
+              <label class="consent-check">
+                <TxCheckbox v-model="hasUserConsent" variant="checkmark" aria-label="同意注册登录与数据处理免责说明" />
+                <span>我确认以上信息均由我自愿提供，并理解确认登录即视为同意云端保存、7 天保留、免费服务限制和保密材料自理等说明。</span>
+              </label>
+              <div class="flex flex-wrap gap-3 justify-end">
+                <TxButton variant="ghost" @click="closeUserConsentDialog">
+                  取消
+                </TxButton>
+                <TxButton variant="primary" :disabled="!hasUserConsent" @click="confirmOauthLogin">
+                  确认并跳转 GitHub
+                </TxButton>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+  </div>
 </template>

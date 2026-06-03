@@ -1,0 +1,3 @@
+<template>
+  <NotificationSettingsPanel />
+</template>

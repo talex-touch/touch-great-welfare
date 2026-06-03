@@ -21,10 +21,11 @@ const { toastMessage } = useWelfareFeedback()
       </div>
 
       <footer class="text-sm text-slate-500 mt-12 pt-6 border-t border-black/8 flex flex-wrap gap-4 items-center justify-between dark:text-slate-400 dark:border-white/10">
-        <div>Built with antfu/vitesse-lite, Vue 3, UnoCSS and @talex-touch/tuffex.</div>
         <div class="flex gap-3 items-center">
-          <a class="underline underline-offset-4" href="https://github.com/antfu-collective/vitesse-lite" target="_blank" rel="noreferrer">Vitesse Lite</a>
+          <span>Powered by <a class="underline underline-offset-4" href="https://blog.tagzxia.com" target="_blank" rel="noreferrer">TaGzxia</a>.</span>
+          <span>Built with <a class="underline underline-offset-4" href="https://github.com/talex-touch/tuffex" target="_blank" rel="noreferrer">tuffex</a>.</span>
         </div>
+        <div>Link Welfare Copyright 2026</div>
       </footer>
     </div>
 

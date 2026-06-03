@@ -1,6 +1,6 @@
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
-import type { CrowdReviewDecision, RejectApplicationOptions, RequestKind } from './welfare'
+import type { CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType } from './welfare'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, loadAiConfig, saveAiConfig } from './ai'
@@ -39,8 +39,11 @@ import {
   PRO_STANDARD_PROCESSING_HOURS,
   REQUEST_COST,
   resolveLlmApiModel,
+  RESOURCE_TERMS,
+  RESOURCE_TYPE_CONFIGS,
   STORAGE_EXTENSION_COST,
   STUDENT_REVIEW_FEE,
+  termsForResourceTypes,
   useWelfareStore,
 } from './welfare'
 import { saveWelfareState } from './welfare-persistence'
@@ -175,6 +178,39 @@ export const applicationForm = reactive({
   llmApiBudgetUsd: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd,
 })
 
+export const resourceApplicationForm = reactive({
+  title: '资源申请',
+  departmentId: '',
+  projectId: '',
+  reason: '',
+  businessBackground: '',
+  urgency: 'normal' as 'normal' | 'urgent' | 'emergency',
+  expectedEffectiveAt: '',
+  costCenter: '',
+  ownerId: '',
+  duration: '30 天',
+  selectedResourceTypes: ['database'] as ResourceType[],
+  acceptedTermIds: [] as ResourceTermId[],
+})
+
+export const resourceApplicationItems = ref<Array<{
+  id: string
+  resourceType: ResourceType
+  resourceSubtype: string
+  payload: Record<string, any>
+  requestedQuota?: string
+  requestedPermission?: string
+  duration?: string
+}>>([])
+
+export const resourceReviewDrafts = reactive<Record<string, {
+  status: Exclude<ResourceApprovalStatus, 'pending'>
+  note: string
+  approvedPayloadText: string
+}>>({})
+
+export const resourceProvisionDrafts = reactive<Record<string, string>>({})
+
 export const applicationFiles = ref<UploadLikeFile[]>([])
 
 export const studentForm = reactive({
@@ -266,12 +302,20 @@ export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
 
 export const applicationTypeCards = [
   {
+    type: 'resource' as const,
+    title: '资源申请',
+    icon: 'i-carbon-assembly-cluster',
+    cost: 0,
+    originalCost: 0,
+    desc: '多选数据库、大模型 API、研发基础设施；一单多资源、逐项审批、人工开通。',
+  },
+  {
     type: 'code' as const,
-    title: 'LLMApi',
+    title: '旧版 LLMApi',
     icon: 'i-carbon-code',
     cost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
     originalCost: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd * DEFAULT_LLM_API_MODELS[0].pointsPerUsd,
-    desc: '可选择 Codex、ClaudeCode 及国内外模型，不同模型价格不同，管理员后台可配置。',
+    desc: '兼容旧版 Codex/LLMApi 单项额度申请；新申请建议使用“资源申请”。',
   },
   {
     type: 'image' as const,
@@ -346,6 +390,8 @@ export function useWelfareUiState() {
   })
   const selectedLlmApiRequiresExtendedReview = computed(() => applicationForm.type === 'code' && llmApiRequiresExtendedReview(selectedLlmApiBudgetUsd.value, selectedLlmApiModel.value))
   const selectedCodexRequiresExtendedReview = selectedLlmApiRequiresExtendedReview
+  const resourceTypeConfigs = computed(() => RESOURCE_TYPE_CONFIGS.filter(item => item.enabled))
+  const selectedResourceTerms = computed(() => termsForResourceTypes(resourceApplicationForm.selectedResourceTypes))
   const heroProgress = computed(() => Math.min(100, Math.round((welfare.state.users.length / 12) * 100) + 24))
   const pendingCount = computed(() => welfare.pendingApplications.value.length + welfare.pendingStudentVerifications.value.length)
   const latestTransactions = computed(() => {
@@ -392,6 +438,10 @@ export function useWelfareUiState() {
       applicationForm.title = '公益项目架构与实现支持'
       applicationForm.description = '<p>希望获得面向校园公益项目的完整技术建议、代码审阅或架构答复。</p>'
     }
+    if (type === 'resource') {
+      applicationForm.title = '资源申请'
+      applicationForm.description = '<p>请按资源类型填写申请材料，并在提交前确认自动合并的条款。</p>'
+    }
     applicationForm.waiveRejectionReviewFee = false
   })
 
@@ -404,8 +454,13 @@ export function useWelfareUiState() {
       completed: '已结束',
       closed: '已关闭',
       rejected: '已退回',
+      submitted: '已提交',
+      in_review: '资源审批中',
+      approved: '已通过',
+      partial_approved: '部分通过',
+      cancelled: '已取消',
+      draft: '草稿',
       pending: '待审核',
-      approved: '已认证',
     }
     return map[status] ?? status
   }
@@ -413,20 +468,187 @@ export function useWelfareUiState() {
   function statusTone(status: string) {
     if (['answered', 'completed', 'closed', 'approved'].includes(status))
       return 'success'
-    if (['pending_review', 'processing', 'pending'].includes(status))
+    if (status === 'partial_approved')
+      return 'info'
+    if (['pending_review', 'processing', 'pending', 'submitted', 'in_review', 'draft'].includes(status))
       return 'warning'
-    if (status === 'rejected')
+    if (['rejected', 'cancelled'].includes(status))
       return 'danger'
     return 'info'
   }
 
   function typeIcon(type: RequestKind) {
+    if (type === 'resource')
+      return 'i-carbon-assembly-cluster'
     return type === 'code' ? 'i-carbon-code' : type === 'image' ? 'i-carbon-image' : 'i-carbon-star'
   }
 
   function resetApplicationFiles() {
     applicationFiles.value = []
   }
+
+  function defaultResourcePayload(resourceType: ResourceType) {
+    if (resourceType === 'database') {
+      return {
+        name: '',
+        environment: 'dev',
+        permission: 'readonly',
+        sensitiveData: false,
+        reason: '',
+        operationScope: '',
+        duration: resourceApplicationForm.duration,
+      }
+    }
+    if (resourceType === 'llm_api_quota') {
+      return {
+        model: '',
+        monthlyTokens: 1000000,
+        rateLimit: '60 RPM / 10 TPM',
+        budgetLimit: 100,
+        usageScenario: '',
+        uploadsUserData: false,
+        containsSensitiveInfo: false,
+        logRetention: '脱敏留存 30 天',
+      }
+    }
+    return {
+      specification: '',
+      quantity: 1,
+      environment: 'dev',
+      project: resourceApplicationForm.projectId,
+      costCenter: resourceApplicationForm.costCenter,
+      owner: resourceApplicationForm.ownerId,
+      duration: resourceApplicationForm.duration,
+      accessScope: '',
+      purpose: '',
+    }
+  }
+
+  function addResourceApplicationItem(resourceType: ResourceType) {
+    const config = RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === resourceType)
+    if (!config)
+      throw new Error('资源类型不存在')
+    if (!resourceApplicationForm.selectedResourceTypes.includes(resourceType))
+      resourceApplicationForm.selectedResourceTypes.push(resourceType)
+
+    const payload = defaultResourcePayload(resourceType)
+    resourceApplicationItems.value.push({
+      id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      resourceType,
+      resourceSubtype: config.subtypes[0],
+      payload,
+      requestedPermission: typeof payload.permission === 'string' ? payload.permission : undefined,
+      requestedQuota: resourceType === 'llm_api_quota' ? String(payload.monthlyTokens) : undefined,
+      duration: typeof payload.duration === 'string' ? payload.duration : undefined,
+    })
+  }
+
+  function removeResourceApplicationItem(id: string) {
+    resourceApplicationItems.value = resourceApplicationItems.value.filter(item => item.id !== id)
+  }
+
+  function ensureSelectedResourceItems() {
+    for (const resourceType of resourceApplicationForm.selectedResourceTypes) {
+      if (!resourceApplicationItems.value.some(item => item.resourceType === resourceType))
+        addResourceApplicationItem(resourceType)
+    }
+    resourceApplicationItems.value = resourceApplicationItems.value.filter(item => resourceApplicationForm.selectedResourceTypes.includes(item.resourceType))
+  }
+
+  function syncResourceAcceptedTerms() {
+    const required = selectedResourceTerms.value.map(term => term.id)
+    resourceApplicationForm.acceptedTermIds = resourceApplicationForm.acceptedTermIds.filter(id => required.includes(id))
+  }
+
+  function resetResourceApplicationForm() {
+    resourceApplicationForm.title = '资源申请'
+    resourceApplicationForm.departmentId = ''
+    resourceApplicationForm.projectId = ''
+    resourceApplicationForm.reason = ''
+    resourceApplicationForm.businessBackground = ''
+    resourceApplicationForm.urgency = 'normal'
+    resourceApplicationForm.expectedEffectiveAt = ''
+    resourceApplicationForm.costCenter = ''
+    resourceApplicationForm.ownerId = welfare.currentUser.value?.id ?? ''
+    resourceApplicationForm.duration = '30 天'
+    resourceApplicationForm.selectedResourceTypes = ['database']
+    resourceApplicationForm.acceptedTermIds = []
+    resourceApplicationItems.value = []
+    addResourceApplicationItem('database')
+  }
+
+  async function submitResourceApplication(saveAsDraft = false) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+    ensureSelectedResourceItems()
+    if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
+      throw new Error('请确认所有自动合并的条款')
+
+    welfare.submitResourceApplication({
+      title: resourceApplicationForm.title,
+      departmentId: resourceApplicationForm.departmentId,
+      projectId: resourceApplicationForm.projectId,
+      reason: resourceApplicationForm.reason,
+      businessBackground: resourceApplicationForm.businessBackground,
+      urgency: resourceApplicationForm.urgency,
+      expectedEffectiveAt: resourceApplicationForm.expectedEffectiveAt,
+      costCenter: resourceApplicationForm.costCenter,
+      ownerId: resourceApplicationForm.ownerId || welfare.currentUser.value.id,
+      duration: resourceApplicationForm.duration,
+      selectedResourceTypes: resourceApplicationForm.selectedResourceTypes,
+      resourceItems: resourceApplicationItems.value,
+      acceptedTermIds: resourceApplicationForm.acceptedTermIds,
+      attachments: applicationFiles.value,
+      saveAsDraft,
+    })
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+  }
+
+  function resourceReviewDraftFor(itemId: string) {
+    resourceReviewDrafts[itemId] ??= {
+      status: 'approved',
+      note: '',
+      approvedPayloadText: '{}',
+    }
+    return resourceReviewDrafts[itemId]
+  }
+
+  function approveResourceItem(applicationId: string, itemId: string) {
+    const draft = resourceReviewDraftFor(itemId)
+    let approvedPayload: Record<string, unknown> | undefined
+    if (draft.status === 'adjusted_approved') {
+      try {
+        approvedPayload = JSON.parse(draft.approvedPayloadText || '{}') as Record<string, any>
+      }
+      catch {
+        throw new Error('调整后通过的批准内容必须是合法 JSON')
+      }
+    }
+    welfare.reviewApplicationItem({
+      applicationId,
+      itemId,
+      status: draft.status,
+      approvedPayload,
+      rejectReason: draft.note,
+    })
+    delete resourceReviewDrafts[itemId]
+  }
+
+  function completeResourceProvision(applicationId: string, itemId: string) {
+    welfare.completeResourceProvision({
+      applicationId,
+      itemId,
+      note: resourceProvisionDrafts[itemId],
+    })
+    delete resourceProvisionDrafts[itemId]
+  }
+
+  watch(() => resourceApplicationForm.selectedResourceTypes.slice(), () => {
+    ensureSelectedResourceItems()
+    syncResourceAcceptedTerms()
+  }, { immediate: true })
 
   function resetStudentFiles() {
     studentFiles.value = []
@@ -910,6 +1132,10 @@ export function useWelfareUiState() {
     notificationsLoading,
     lastRechargeStatus,
     applicationForm,
+    resourceApplicationForm,
+    resourceApplicationItems,
+    resourceReviewDrafts,
+    resourceProvisionDrafts,
     applicationFiles,
     studentForm,
     studentFiles,
@@ -925,6 +1151,9 @@ export function useWelfareUiState() {
     activeAdminTab,
     adminTabItems,
     applicationTypeCards,
+    resourceTypeConfigs,
+    resourceTerms: RESOURCE_TERMS,
+    selectedResourceTerms,
     pricingSummary,
     llmApiBudgetOptions,
     llmApiReviewLimits,
@@ -950,6 +1179,14 @@ export function useWelfareUiState() {
     statusTone,
     typeIcon,
     resetApplicationFiles,
+    addResourceApplicationItem,
+    removeResourceApplicationItem,
+    ensureSelectedResourceItems,
+    resetResourceApplicationForm,
+    submitResourceApplication,
+    resourceReviewDraftFor,
+    approveResourceItem,
+    completeResourceProvision,
     resetStudentFiles,
     crowdReviewDraftFor,
     submitCrowdReviewDraft,

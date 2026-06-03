@@ -6,7 +6,7 @@ import SideNav from './SideNav.vue'
   <section class="mt-6 flex-1 gap-6 grid lg:grid-cols-[260px_1fr]">
     <SideNav />
 
-    <main class="min-w-0 space-y-6">
+    <main class="dashboard-content min-w-0 space-y-6">
       <RouterView />
     </main>
   </section>
