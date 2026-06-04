@@ -473,6 +473,13 @@ export const PRO_EXPEDITED_PROCESSING_HOURS = 48
 export const PRO_EXPEDITE_COST = 1100
 export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
 export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'claude-code', 'mimo'] as const
+export const LLM_API_MODEL_COST_MULTIPLIERS: Record<typeof LLM_API_ALLOWED_MODEL_KEYS[number], number> = {
+  'codex': 1,
+  'claude-code': 10,
+  'mimo': 0.1,
+}
+export const RESOURCE_DEFAULT_DURATION = '申请通过之日起至次日凌晨三点'
+export const RESOURCE_DURATION_EXTENSION_COST = 20000
 export const LLM_API_EXTENDED_REVIEW_THRESHOLD_USD = 100
 export const LLM_API_STANDARD_PROCESSING_HOURS = 24
 export const LLM_API_EXTENDED_PROCESSING_HOURS = 72
@@ -500,7 +507,7 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     region: 'global',
     description: '适合长上下文代码分析、重构和复杂推理。',
     enabled: true,
-    pointsPerUsd: 12,
+    pointsPerUsd: 100,
     defaultBudgetUsd: 10,
     minBudgetUsd: 10,
     maxBudgetUsd: 1000,
@@ -516,7 +523,7 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     region: 'global',
     description: '适合轻量代码任务、快速原型和日常开发辅助。',
     enabled: true,
-    pointsPerUsd: 10,
+    pointsPerUsd: 1,
     defaultBudgetUsd: 10,
     minBudgetUsd: 10,
     maxBudgetUsd: 1000,
@@ -674,6 +681,7 @@ export function normalizeLlmApiModelPricings(value: unknown): LlmApiModelPricing
     const model = normalizeLlmApiModelPricing({ ...fallback, ...sourceByKey.get(fallback.key), key: fallback.key, name: fallback.name })
     return {
       ...model,
+      pointsPerUsd: fallback.pointsPerUsd,
       provider: String(sourceByKey.get(fallback.key)?.provider || fallback.provider).trim() || fallback.provider,
       description: String(sourceByKey.get(fallback.key)?.description || fallback.description).trim() || fallback.description,
       region: sourceByKey.get(fallback.key)?.region && ['domestic', 'global', 'custom'].includes(String(sourceByKey.get(fallback.key)?.region)) ? sourceByKey.get(fallback.key)!.region as LlmApiModelRegion : fallback.region,
@@ -1135,6 +1143,23 @@ function assertKnownResourceType(resourceType: ResourceType) {
   return config
 }
 
+function resourceDurationExtensionCost(duration?: string) {
+  return !duration || duration === RESOURCE_DEFAULT_DURATION ? 0 : RESOURCE_DURATION_EXTENSION_COST
+}
+
+function estimatedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
+  const durationCost = resourceDurationExtensionCost(item.duration || readString(item.payload, 'duration'))
+  if (item.resourceType === 'llm_api_quota') {
+    const model = resolveLlmApiModel(readString(item.payload, 'model'))
+    const budgetCost = calculateLlmApiCostPoints(Number(item.payload.budgetLimit || model.defaultBudgetUsd), model)
+    const rateCost = calculateLlmApiRateLimitChangeCost(Number(item.payload.rpmLimit || model.rpmLimit), model.rpmLimit, Number(item.payload.tpmLimit || model.tpmLimit), model.tpmLimit)
+    return budgetCost + rateCost + durationCost
+  }
+  if (item.resourceType === 'database')
+    return 1000 + (item.payload.sensitiveData ? 3000 : 0) + durationCost
+  return 800 * Math.max(1, Number(item.payload.quantity || 1)) + durationCost
+}
+
 function validateResourceItemInput(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
   const config = assertKnownResourceType(item.resourceType)
   if (!item.resourceSubtype || !config.subtypes.includes(item.resourceSubtype))
@@ -1175,6 +1200,13 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
     item.payload.containsPrivacy = false
     item.payload.logRetention = 0
   }
+
+  const duration = item.duration?.trim() || readString(item.payload, 'duration') || RESOURCE_DEFAULT_DURATION
+  item.duration = duration
+  item.payload.duration = duration
+  item.payload.durationExtensionCost = resourceDurationExtensionCost(duration)
+  item.payload.estimatedCost = estimatedResourceItemCost(item)
+  item.payload.discountedEstimatedCost = calculateActivityPrice(item.payload.estimatedCost)
 
   if (['git_repository', 'cicd', 'vpn', 'ip_allowlist', 'server', 'gpu', 'k8s_namespace', 'object_storage'].includes(item.resourceType)) {
     if (!readString(item.payload, 'purpose'))

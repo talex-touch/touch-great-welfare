@@ -41,6 +41,7 @@ import {
   PRO_STANDARD_PROCESSING_HOURS,
   REQUEST_COST,
   resolveLlmApiModel,
+  RESOURCE_DEFAULT_DURATION,
   RESOURCE_TERMS,
   RESOURCE_TYPE_CONFIGS,
   STORAGE_EXTENSION_COST,
@@ -192,7 +193,7 @@ export const resourceApplicationForm = reactive({
   expectedEffectiveAt: '',
   costCenter: '',
   ownerId: '',
-  duration: '30 天',
+  duration: RESOURCE_DEFAULT_DURATION,
   selectedResourceTypes: ['database'] as ResourceType[],
   acceptedTermIds: [] as ResourceTermId[],
 })
@@ -471,6 +472,7 @@ export function useWelfareUiState() {
       tpmLimit: model.tpmLimit,
       defaultRpmLimit: model.rpmLimit,
       defaultTpmLimit: model.tpmLimit,
+      duration: RESOURCE_DEFAULT_DURATION,
       usageScenario: '',
       uploadsUserData: false,
       uploadUserData: false,
@@ -489,7 +491,7 @@ export function useWelfareUiState() {
         sensitiveData: false,
         reason: '',
         operationScope: '',
-        duration: resourceApplicationForm.duration,
+        duration: RESOURCE_DEFAULT_DURATION,
       }
     }
     if (resourceType === 'llm_api_quota')
@@ -501,7 +503,7 @@ export function useWelfareUiState() {
       project: resourceApplicationForm.projectId,
       costCenter: resourceApplicationForm.costCenter,
       owner: resourceApplicationForm.ownerId,
-      duration: resourceApplicationForm.duration,
+      duration: RESOURCE_DEFAULT_DURATION,
       accessScope: '',
       purpose: '',
     }
@@ -553,7 +555,7 @@ export function useWelfareUiState() {
     resourceApplicationForm.expectedEffectiveAt = ''
     resourceApplicationForm.costCenter = ''
     resourceApplicationForm.ownerId = welfare.currentUser.value?.id ?? ''
-    resourceApplicationForm.duration = '30 天'
+    resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
     resourceApplicationForm.selectedResourceTypes = ['database']
     resourceApplicationForm.acceptedTermIds = []
     resourceApplicationItems.value = []
