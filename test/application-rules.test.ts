@@ -42,9 +42,10 @@ describe('application billing rules', async () => {
     expect(calculateApplicationPrepaidCost('pro', true, true, ACTIVITY_START_AT)).toBe(120 + 300 + PRO_EXPEDITE_COST)
   })
 
-  it('calculates codex budget at 10 points per dollar', () => {
-    expect(calculateCodexCostPoints(CODEX_DEFAULT_BUDGET_USD)).toBe(CODEX_DEFAULT_BUDGET_USD * CODEX_POINTS_PER_USD)
-    expect(calculateCodexCostPoints(1000)).toBe(10000)
+  it('calculates codex budget with accelerated growth after 100 USD', () => {
+    expect(calculateCodexCostPoints(CODEX_DEFAULT_BUDGET_USD)).toBeGreaterThanOrEqual(CODEX_DEFAULT_BUDGET_USD * 10)
+    expect(calculateCodexCostPoints(100)).toBe(1200)
+    expect(calculateCodexCostPoints(1000)).toBeGreaterThan(1000 * CODEX_POINTS_PER_USD)
   })
 
   it('extends retention by another 7 days when storage service is selected', () => {

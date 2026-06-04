@@ -705,8 +705,20 @@ export function normalizeLlmApiBudgetUsd(value: unknown, model: LlmApiModelPrici
   return Math.max(model.minBudgetUsd, Math.min(model.maxBudgetUsd, amount))
 }
 
+export function calculateLlmApiBaseBudgetCostPoints(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  const budget = normalizeLlmApiBudgetUsd(budgetUsd, model)
+  if (budget <= 100)
+    return Math.ceil(budget * 12)
+
+  const over = budget - 100
+  return Math.ceil(1200 + over * 15 + 3 * over ** 1.35)
+}
+
 export function calculateLlmApiCostPoints(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
-  return normalizeLlmApiBudgetUsd(budgetUsd, model) * model.pointsPerUsd
+  const budget = normalizeLlmApiBudgetUsd(budgetUsd, model)
+  const multiplier = Math.max(0.1, model.pointsPerUsd / DEFAULT_LLM_API_MODELS[0].pointsPerUsd)
+  const acceleratedCost = calculateLlmApiBaseBudgetCostPoints(budget, model) * multiplier
+  return Math.max(Math.ceil(budget * 10), Math.ceil(acceleratedCost))
 }
 
 export function calculateLlmApiRateLimitChangeCost(newRPM: number, defaultRPM: number, newTPM: number, defaultTPM: number) {

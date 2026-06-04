@@ -5,7 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiRateLimitChangeCost, canApplyResourceType, formatBytes, LLM_API_MODEL_COST_MULTIPLIERS, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST } from '~/composables/welfare'
+import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, canApplyResourceType, formatBytes, LLM_API_MODEL_COST_MULTIPLIERS, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
@@ -154,8 +154,10 @@ function itemModelMultiplier(item: { payload: Record<string, any> }) {
 }
 
 function itemBaseEstimate(item: { resourceType: ResourceType, payload: Record<string, any>, duration?: string }) {
-  if (item.resourceType === 'llm_api_quota')
-    return Number(item.payload.budgetLimit || 10) * 10 * itemModelMultiplier(item)
+  if (item.resourceType === 'llm_api_quota') {
+    const model = llmModelForItem(item)
+    return model ? calculateLlmApiCostPoints(Number(item.payload.budgetLimit || 10), model) : Number(item.payload.budgetLimit || 10) * 10 * itemModelMultiplier(item)
+  }
   if (item.resourceType === 'database')
     return 1000 + (item.payload.sensitiveData ? 3000 : 0)
   return 800 * Math.max(1, Number(item.payload.quantity || 1))
