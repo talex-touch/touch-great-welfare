@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import type { ResourceTermId, ResourceType } from '~/composables/welfare'
-import { TxButton, TxCard, TxCheckbox, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxStep, TxSteps } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxCheckbox, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider, TxStep, TxSteps } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { canApplyResourceType, formatBytes, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES } from '~/composables/welfare'
+import { calculateLlmApiRateLimitChangeCost, canApplyResourceType, formatBytes, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
-import MarkdownEditor from './MarkdownEditor.vue'
+import RichTextEditor from './RichTextEditor.vue'
 
 const {
   currentUser,
@@ -20,6 +20,7 @@ const {
   totalApplicationBytes,
   activeRequestCount,
   canCreateRequest,
+  enabledLlmApiModels,
   userLevelCard,
   submitResourceApplication,
   addResourceApplicationItem,
@@ -53,6 +54,74 @@ const urgencyOptions = [
   { value: 'urgent', label: '紧急' },
   { value: 'emergency', label: '应急' },
 ]
+const llmBudgetMarks = [10, 100, 500, 1000]
+
+function formatUsd(value: number) {
+  return `$${Number(value || 0).toLocaleString('en-US')}`
+}
+
+function llmModelForItem(item: { payload: Record<string, any> }) {
+  return enabledLlmApiModels.value.find(model => model.key === item.payload.model)
+    ?? enabledLlmApiModels.value[0]
+}
+
+function sanitizeLlmItem(item: { payload: Record<string, any>, requestedQuota?: string, resourceSubtype?: string }) {
+  const model = llmModelForItem(item)
+  if (!model)
+    return
+
+  if (item.payload.model !== model.key)
+    item.payload.model = model.key
+  item.resourceSubtype = model.key
+  item.payload.modelName = model.name
+  item.payload.budgetLimit = Math.max(model.minBudgetUsd, Math.min(model.maxBudgetUsd, Number(item.payload.budgetLimit || model.defaultBudgetUsd)))
+  item.payload.rpmLimit = Math.max(1, Math.trunc(Number(item.payload.rpmLimit || model.rpmLimit)))
+  item.payload.tpmLimit = Math.max(1, Math.trunc(Number(item.payload.tpmLimit || model.tpmLimit)))
+  item.payload.defaultRpmLimit = model.rpmLimit
+  item.payload.defaultTpmLimit = model.tpmLimit
+  item.payload.uploadsUserData = false
+  item.payload.uploadUserData = false
+  item.payload.containsSensitiveInfo = false
+  item.payload.containsPrivacy = false
+  item.payload.logRetention = 0
+  item.requestedQuota = formatUsd(item.payload.budgetLimit)
+}
+
+function onLlmModelChange(item: { payload: Record<string, any>, requestedQuota?: string, resourceSubtype?: string }) {
+  const model = llmModelForItem(item)
+  if (!model)
+    return
+
+  item.payload.model = model.key
+  item.resourceSubtype = model.key
+  item.payload.modelName = model.name
+  item.payload.budgetLimit = model.defaultBudgetUsd
+  item.payload.rpmLimit = model.rpmLimit
+  item.payload.tpmLimit = model.tpmLimit
+  item.payload.defaultRpmLimit = model.rpmLimit
+  item.payload.defaultTpmLimit = model.tpmLimit
+  item.requestedQuota = formatUsd(model.defaultBudgetUsd)
+}
+
+function sanitizeLlmItems() {
+  for (const item of resourceApplicationItems.value) {
+    if (item.resourceType === 'llm_api_quota')
+      sanitizeLlmItem(item)
+  }
+}
+
+function llmRateChangeCost(item: { payload: Record<string, any> }) {
+  const model = llmModelForItem(item)
+  if (!model)
+    return 0
+
+  return calculateLlmApiRateLimitChangeCost(
+    Number(item.payload.rpmLimit || model.rpmLimit),
+    Number(item.payload.defaultRpmLimit || model.rpmLimit),
+    Number(item.payload.tpmLimit || model.tpmLimit),
+    Number(item.payload.defaultTpmLimit || model.tpmLimit),
+  )
+}
 
 function resourceConfig(resourceType: ResourceType) {
   return resourceTypeConfigs.value.find(item => item.resourceType === resourceType)
@@ -93,6 +162,7 @@ function nextToMaterials() {
 
 function nextToTerms() {
   ensureSelectedResourceItems()
+  sanitizeLlmItems()
   currentStep.value = 'terms'
 }
 
@@ -112,6 +182,7 @@ function cancelCreate() {
 
 function onSaveDraft() {
   runSafely(async () => {
+    sanitizeLlmItems()
     await submitResourceApplication(true)
     clearLocalDraft(applicationDraftKey)
     resetApplicationFiles()
@@ -121,6 +192,7 @@ function onSaveDraft() {
 
 function onSubmitResourceApplication() {
   runSafely(async () => {
+    sanitizeLlmItems()
     await submitResourceApplication(false)
     clearLocalDraft(applicationDraftKey)
     resetApplicationFiles()
@@ -132,6 +204,7 @@ onMounted(() => {
   resetResourceApplicationForm()
   restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
   sanitizeSelectedResourceTypes()
+  sanitizeLlmItems()
   persistLocalDraft(applicationDraftKey, resourceApplicationForm)
 })
 </script>
@@ -204,10 +277,10 @@ onMounted(() => {
             </label>
             <label class="gap-2 grid md:col-span-2">
               <span class="field-label">申请说明</span>
-              <MarkdownEditor
+              <RichTextEditor
                 v-model="resourceApplicationForm.reason"
                 :min-height="280"
-                placeholder="请用 Markdown 说明申请原因、业务背景、影响范围、公益/研发目标。可粘贴百度网盘等外链，例如：[补充材料](https://pan.baidu.com/...)；图片建议作为下方附件上传。"
+                placeholder="请说明申请原因、业务背景、影响范围、公益/研发目标。可粘贴百度网盘等外链；图片建议作为下方附件上传。"
               />
             </label>
             <label class="gap-2 grid">
@@ -265,19 +338,32 @@ onMounted(() => {
                       <label class="gap-2 grid"><span class="field-label">权限级别</span><TxSelect v-model="item.requestedPermission" panel-background="pure"><TxSelectItem v-for="option in databasePermissionOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect></label>
                       <label class="gap-2 grid"><span class="field-label">有效期</span><TxInput v-model="item.duration" /></label>
                       <label class="option-check md:col-span-2"><TxCheckbox v-model="item.payload.sensitiveData" variant="checkmark" /><span><b>涉及敏感数据</b><small>生产库、用户信息或受限数据需勾选。</small></span></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">申请原因</span><textarea v-model="item.payload.reason" class="form-textarea" rows="2" /></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">操作范围说明</span><textarea v-model="item.payload.operationScope" class="form-textarea" rows="2" placeholder="读取哪些表、执行哪些操作、是否需要变更数据" /></label>
+                      <label class="gap-2 grid md:col-span-2"><span class="field-label">申请原因</span><RichTextEditor v-model="item.payload.reason" :min-height="120" placeholder="说明申请原因" /></label>
+                      <label class="gap-2 grid md:col-span-2"><span class="field-label">操作范围说明</span><RichTextEditor v-model="item.payload.operationScope" :min-height="120" placeholder="读取哪些表、执行哪些操作、是否需要变更数据" /></label>
                     </template>
 
                     <template v-else-if="item.resourceType === 'llm_api_quota'">
-                      <label class="gap-2 grid"><span class="field-label">模型/模型族</span><TxInput v-model="item.payload.model" placeholder="gpt-4.1-mini / deepseek-chat" /></label>
-                      <label class="gap-2 grid"><span class="field-label">月 Token 额度</span><TxNumberInput v-model="item.payload.monthlyTokens" :min="1" :step="100000" :controls="false" /></label>
-                      <label class="gap-2 grid"><span class="field-label">RPM/TPM 或并发</span><TxInput v-model="item.payload.rateLimit" /></label>
-                      <label class="gap-2 grid"><span class="field-label">预算上限</span><TxNumberInput v-model="item.payload.budgetLimit" :min="0" :step="10" :controls="false" /></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">使用场景</span><textarea v-model="item.payload.usageScenario" class="form-textarea" rows="2" /></label>
-                      <label class="option-check"><TxCheckbox v-model="item.payload.uploadsUserData" variant="checkmark" /><span><b>上传用户数据</b><small>如需上传，应说明脱敏方式。</small></span></label>
-                      <label class="option-check"><TxCheckbox v-model="item.payload.containsSensitiveInfo" variant="checkmark" /><span><b>包含隐私/代码/商业机密</b><small>勾选后审批会重点关注合规。</small></span></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">日志留存/脱敏要求</span><TxInput v-model="item.payload.logRetention" /></label>
+                      <label class="gap-2 grid"><span class="field-label">大模型</span><TxSelect v-model="item.payload.model" panel-background="pure" @update:model-value="onLlmModelChange(item)"><TxSelectItem v-for="model in enabledLlmApiModels" :key="model.key" :value="model.key" :label="model.name" /></TxSelect></label>
+                      <div class="gap-2 grid">
+                        <span class="field-label">默认 RPM / TPM</span><div class="rate-default-card">
+                          默认 RPM {{ llmModelForItem(item)?.rpmLimit ?? '-' }} · 默认 TPM {{ llmModelForItem(item)?.tpmLimit ?? '-' }}
+                        </div>
+                      </div>
+                      <label class="gap-2 grid"><span class="field-label">RPM</span><TxNumberInput v-model="item.payload.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" /></label>
+                      <label class="gap-2 grid"><span class="field-label">TPM</span><TxNumberInput v-model="item.payload.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" /></label>
+                      <div v-if="llmRateChangeCost(item)" class="rate-warning md:col-span-2">
+                        <b>修改 RPM / TPM 会消耗大量积分：约 {{ llmRateChangeCost(item).toLocaleString('zh-CN') }} 积分</b><span>该消耗不享受任何折扣；请谨慎调整，费用很高很高。最终实际扣费以后端结算为准。</span>
+                      </div>
+                      <div class="gap-3 grid md:col-span-2">
+                        <div class="flex flex-wrap gap-3 items-center justify-between">
+                          <span class="field-label">Token 额度</span><b>{{ formatUsd(item.payload.budgetLimit) }}</b>
+                        </div><TxSlider v-model="item.payload.budgetLimit" :min="10" :max="1000" :step="10" :show-value="false" :format-value="formatUsd" /><div class="quota-marks">
+                          <span v-for="mark in llmBudgetMarks" :key="mark">{{ formatUsd(mark) }}</span>
+                        </div><p v-if="item.payload.budgetLimit > 100" class="field-hint text-amber-600 dark:text-amber-300">
+                          超过 $100 的额度申请需要更长时间审核
+                        </p>
+                      </div>
+                      <label class="gap-2 grid md:col-span-2"><span class="field-label">使用场景</span><RichTextEditor v-model="item.payload.usageScenario" :min-height="140" placeholder="说明项目用途、调用场景、预估消耗和收益" /></label>
                     </template>
 
                     <template v-else>
@@ -287,7 +373,7 @@ onMounted(() => {
                       <label class="gap-2 grid"><span class="field-label">有效期</span><TxInput v-model="item.duration" /></label>
                       <label class="gap-2 grid"><span class="field-label">项目</span><TxInput v-model="item.payload.project" /></label>
                       <label class="gap-2 grid"><span class="field-label">成本归属</span><TxInput v-model="item.payload.costCenter" /></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">访问范围或用途说明</span><textarea v-model="item.payload.purpose" class="form-textarea" rows="2" /></label>
+                      <label class="gap-2 grid md:col-span-2"><span class="field-label">访问范围或用途说明</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" placeholder="说明访问范围、用途和必要性" /></label>
                     </template>
                   </div>
                 </div>

@@ -1,6 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
-import { markdownToSafeHtml } from '~/utils/markdown'
 import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
 import { loadWelfareState, saveWelfareState } from './welfare-persistence'
 
@@ -35,6 +34,7 @@ export interface LlmApiModelPricing {
   maxBudgetUsd: number
   ipLimit: number
   rpmLimit: number
+  tpmLimit: number
   concurrencyLimit: number
 }
 
@@ -167,6 +167,10 @@ export interface WelfareApplication {
   llmApiPointRate?: number
   llmApiIpLimit?: number
   llmApiRpmLimit?: number
+  llmApiTpmLimit?: number
+  llmApiCustomRpmLimit?: number
+  llmApiCustomTpmLimit?: number
+  llmApiRateLimitChangeCost?: number
   llmApiConcurrencyLimit?: number
   llmApiRequiresExtendedReview?: boolean
   /** @deprecated use llmApiBudgetUsd */
@@ -295,6 +299,8 @@ export interface SubmitApplicationPayload {
   waiveRejectionReviewFee?: boolean
   llmApiModelKey?: string
   llmApiBudgetUsd?: number
+  llmApiCustomRpmLimit?: number
+  llmApiCustomTpmLimit?: number
   /** @deprecated use llmApiBudgetUsd */
   codexBudgetUsd?: number
 }
@@ -466,6 +472,7 @@ export const PRO_STANDARD_PROCESSING_HOURS = 72
 export const PRO_EXPEDITED_PROCESSING_HOURS = 48
 export const PRO_EXPEDITE_COST = 1100
 export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
+export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'claude-code', 'mimo'] as const
 export const LLM_API_EXTENDED_REVIEW_THRESHOLD_USD = 100
 export const LLM_API_STANDARD_PROCESSING_HOURS = 24
 export const LLM_API_EXTENDED_PROCESSING_HOURS = 72
@@ -483,6 +490,7 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     maxBudgetUsd: 1000,
     ipLimit: 2,
     rpmLimit: 2,
+    tpmLimit: 10000,
     concurrencyLimit: 1,
   },
   {
@@ -498,40 +506,27 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     maxBudgetUsd: 1000,
     ipLimit: 2,
     rpmLimit: 2,
+    tpmLimit: 10000,
     concurrencyLimit: 1,
   },
   {
-    key: 'deepseek',
-    name: 'DeepSeek',
-    provider: 'DeepSeek',
-    region: 'domestic',
-    description: '国内模型通道，适合通用代码问答与较低成本场景。',
+    key: 'mimo',
+    name: 'Mimo',
+    provider: 'Mimo',
+    region: 'global',
+    description: '适合轻量代码任务、快速原型和日常开发辅助。',
     enabled: true,
-    pointsPerUsd: 6,
+    pointsPerUsd: 10,
     defaultBudgetUsd: 10,
     minBudgetUsd: 10,
     maxBudgetUsd: 1000,
     ipLimit: 2,
     rpmLimit: 3,
-    concurrencyLimit: 1,
-  },
-  {
-    key: 'qwen',
-    name: 'Qwen',
-    provider: 'Alibaba Cloud',
-    region: 'domestic',
-    description: '国内模型通道，适合中文材料理解与代码辅助。',
-    enabled: true,
-    pointsPerUsd: 5,
-    defaultBudgetUsd: 10,
-    minBudgetUsd: 10,
-    maxBudgetUsd: 1000,
-    ipLimit: 2,
-    rpmLimit: 3,
+    tpmLimit: 12000,
     concurrencyLimit: 1,
   },
 ]
-export const LLM_API_BUDGET_OPTIONS = [10, 25, 50, 100, 250, 500, 1000] as const
+export const LLM_API_BUDGET_OPTIONS = [10, 100, 500, 1000] as const
 export const RESOURCE_TERMS: ResourceTermConfig[] = [
   {
     id: 'general_resource_terms',
@@ -560,7 +555,7 @@ export const RESOURCE_TERMS: ResourceTermConfig[] = [
 ]
 export const RESOURCE_TYPE_CONFIGS: ResourceTypeConfig[] = [
   { resourceType: 'database', displayName: '数据库', category: 'database', description: 'MySQL / PostgreSQL / Redis 权限或实例访问。', icon: 'i-carbon-data-base', enabled: true, availability: 'available', subtypes: ['mysql', 'postgresql', 'redis'], termsIds: ['database_security_terms'], approverGroup: 'DBA' },
-  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'OpenAI、Anthropic、Gemini、DeepSeek、通义等 API 额度。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['openai', 'anthropic', 'google_gemini', 'deepseek', 'qwen', 'doubao', 'zhipu', 'moonshot', 'minimax'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
+  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'Codex、ClaudeCode、Mimo 三选一额度。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['codex', 'claude-code', 'mimo'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
   { resourceType: 'git_repository', displayName: 'Git 仓库权限', category: 'access', description: '代码仓库只读、开发者、维护者权限。', icon: 'i-carbon-logo-github', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['gitlab', 'github', 'gitee'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
   { resourceType: 'cicd', displayName: 'CI/CD 权限', category: 'access', description: '流水线执行、配置、部署权限。', icon: 'i-carbon-continuous-deployment', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['pipeline', 'runner', 'deployment'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
   { resourceType: 'vpn', displayName: 'VPN', category: 'access', description: '内网访问 VPN 权限。', icon: 'i-carbon-vpn', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['personal', 'project'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
@@ -664,32 +659,30 @@ export function normalizeLlmApiModelPricing(model: Partial<LlmApiModelPricing>):
     maxBudgetUsd,
     ipLimit: Math.max(1, Math.min(50, Math.trunc(Number(model.ipLimit || fallback.ipLimit)))),
     rpmLimit: Math.max(1, Math.min(1000, Math.trunc(Number(model.rpmLimit || fallback.rpmLimit)))),
+    tpmLimit: Math.max(1, Math.min(10_000_000, Math.trunc(Number(model.tpmLimit || fallback.tpmLimit || 10000)))),
     concurrencyLimit: Math.max(1, Math.min(100, Math.trunc(Number(model.concurrencyLimit || fallback.concurrencyLimit)))),
   }
 }
 
 export function normalizeLlmApiModelPricings(value: unknown): LlmApiModelPricing[] {
   const source = Array.isArray(value) && value.length ? value : DEFAULT_LLM_API_MODELS
-  const seen = new Set<string>()
-  const normalized: LlmApiModelPricing[] = []
+  const sourceByKey = new Map(source
+    .filter((item): item is Partial<LlmApiModelPricing> => !!item && typeof item === 'object')
+    .map(item => [String(item.key || '').trim(), item]))
 
-  for (const item of source) {
-    if (!item || typeof item !== 'object')
-      continue
-
-    const model = normalizeLlmApiModelPricing(item as Partial<LlmApiModelPricing>)
-    if (seen.has(model.key))
-      continue
-
-    seen.add(model.key)
-    normalized.push(model)
-  }
-
-  return normalized.length ? normalized : DEFAULT_LLM_API_MODELS.map(item => ({ ...item }))
+  return DEFAULT_LLM_API_MODELS.map((fallback) => {
+    const model = normalizeLlmApiModelPricing({ ...fallback, ...sourceByKey.get(fallback.key), key: fallback.key, name: fallback.name })
+    return {
+      ...model,
+      provider: String(sourceByKey.get(fallback.key)?.provider || fallback.provider).trim() || fallback.provider,
+      description: String(sourceByKey.get(fallback.key)?.description || fallback.description).trim() || fallback.description,
+      region: sourceByKey.get(fallback.key)?.region && ['domestic', 'global', 'custom'].includes(String(sourceByKey.get(fallback.key)?.region)) ? sourceByKey.get(fallback.key)!.region as LlmApiModelRegion : fallback.region,
+    }
+  })
 }
 
 export function resolveLlmApiModel(modelKey?: string, models: readonly LlmApiModelPricing[] = DEFAULT_LLM_API_MODELS) {
-  const enabledModels = models.filter(item => item.enabled)
+  const enabledModels = normalizeLlmApiModelPricings(models).filter(item => item.enabled)
   return enabledModels.find(item => item.key === modelKey)
     ?? enabledModels.find(item => item.key === LLM_API_DEFAULT_MODEL_KEY)
     ?? enabledModels[0]
@@ -706,6 +699,15 @@ export function normalizeLlmApiBudgetUsd(value: unknown, model: LlmApiModelPrici
 
 export function calculateLlmApiCostPoints(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
   return normalizeLlmApiBudgetUsd(budgetUsd, model) * model.pointsPerUsd
+}
+
+export function calculateLlmApiRateLimitChangeCost(newRPM: number, defaultRPM: number, newTPM: number, defaultTPM: number) {
+  const rpmDiff = Math.abs(Math.trunc(Number(newRPM)) - Math.trunc(Number(defaultRPM)))
+  const tpmDiff = Math.abs(Math.trunc(Number(newTPM)) - Math.trunc(Number(defaultTPM)))
+  if (!rpmDiff && !tpmDiff)
+    return 0
+
+  return 10000 + rpmDiff * 200 + Math.ceil(tpmDiff / 1000) * 500
 }
 
 export function llmApiRequiresExtendedReview(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
@@ -840,6 +842,10 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       llmApiPointRate: application.llmApiPointRate ?? llmApiModel?.pointsPerUsd,
       llmApiIpLimit: application.llmApiIpLimit ?? llmApiModel?.ipLimit,
       llmApiRpmLimit: application.llmApiRpmLimit ?? llmApiModel?.rpmLimit,
+      llmApiTpmLimit: application.llmApiTpmLimit ?? llmApiModel?.tpmLimit,
+      llmApiCustomRpmLimit: application.llmApiCustomRpmLimit,
+      llmApiCustomTpmLimit: application.llmApiCustomTpmLimit,
+      llmApiRateLimitChangeCost: application.llmApiRateLimitChangeCost,
       llmApiConcurrencyLimit: application.llmApiConcurrencyLimit ?? llmApiModel?.concurrencyLimit,
       llmApiRequiresExtendedReview: application.llmApiRequiresExtendedReview ?? (llmApiBudgetUsd && llmApiModel ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined),
       codexBudgetUsd,
@@ -1149,16 +1155,25 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
   }
 
   if (item.resourceType === 'llm_api_quota') {
-    if (!readString(item.payload, 'model'))
-      throw new Error('请填写大模型模型/模型族')
-    const monthlyTokens = Number(item.payload.monthlyTokens)
-    if (!Number.isFinite(monthlyTokens) || monthlyTokens <= 0)
-      throw new Error('大模型月 Token 额度必须大于 0')
+    const modelKey = readString(item.payload, 'model')
+    if (!LLM_API_ALLOWED_MODEL_KEYS.includes(modelKey as typeof LLM_API_ALLOWED_MODEL_KEYS[number]))
+      throw new Error('大模型只能选择 Codex、ClaudeCode 或 Mimo')
     const budget = Number(item.payload.budgetLimit)
-    if (!Number.isFinite(budget) || budget < 0)
-      throw new Error('大模型预算上限不合法')
+    if (!Number.isFinite(budget) || budget < 10 || budget > 1000)
+      throw new Error('大模型 Token 额度必须在 $10 到 $1000 之间')
+    const rpm = Number(item.payload.rpmLimit)
+    if (!Number.isFinite(rpm) || rpm <= 0)
+      throw new Error('大模型 RPM 必须大于 0')
+    const tpm = Number(item.payload.tpmLimit)
+    if (!Number.isFinite(tpm) || tpm <= 0)
+      throw new Error('大模型 TPM 必须大于 0')
     if (!readString(item.payload, 'usageScenario'))
       throw new Error('请填写大模型使用场景')
+    item.payload.uploadsUserData = false
+    item.payload.uploadUserData = false
+    item.payload.containsSensitiveInfo = false
+    item.payload.containsPrivacy = false
+    item.payload.logRetention = 0
   }
 
   if (['git_repository', 'cicd', 'vpn', 'ip_allowlist', 'server', 'gpu', 'k8s_namespace', 'object_storage'].includes(item.resourceType)) {
@@ -1191,7 +1206,7 @@ function normalizeResourceItems(applicationId: string, items: SubmitResourceAppl
 }
 
 function buildResourceDescription(payload: SubmitResourceApplicationPayload) {
-  return markdownToSafeHtml(payload.reason || payload.businessBackground)
+  return sanitizeRichText(payload.reason || payload.businessBackground)
 }
 
 function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTermIds: ResourceTermId[], userId: string, acceptedAt: string) {
@@ -1505,6 +1520,9 @@ export function useWelfareStore() {
     const pricing = buildPricingSnapshot(payload.type, createdAt)
     const llmApiModel = payload.type === 'code' ? resolveLlmApiModel(payload.llmApiModelKey ?? (payload.codexBudgetUsd ? 'codex' : undefined)) : undefined
     const llmApiBudgetUsd = payload.type === 'code' && llmApiModel ? normalizeLlmApiBudgetUsd(payload.llmApiBudgetUsd ?? payload.codexBudgetUsd, llmApiModel) : undefined
+    const llmApiCustomRpmLimit = llmApiModel && payload.llmApiCustomRpmLimit !== undefined ? Math.max(1, Math.trunc(Number(payload.llmApiCustomRpmLimit))) : undefined
+    const llmApiCustomTpmLimit = llmApiModel && payload.llmApiCustomTpmLimit !== undefined ? Math.max(1, Math.trunc(Number(payload.llmApiCustomTpmLimit))) : undefined
+    const llmApiRateLimitChangeCost = llmApiModel ? calculateLlmApiRateLimitChangeCost(llmApiCustomRpmLimit ?? llmApiModel.rpmLimit, llmApiModel.rpmLimit, llmApiCustomTpmLimit ?? llmApiModel.tpmLimit, llmApiModel.tpmLimit) : 0
     const cost = llmApiBudgetUsd && llmApiModel ? calculateLlmApiCostPoints(llmApiBudgetUsd, llmApiModel) : pricing.cost
     const codexBudgetUsd = llmApiModel?.key === 'codex' ? llmApiBudgetUsd : undefined
     const storageExtended = payload.type !== 'code' && !!payload.extendStorage
@@ -1549,6 +1567,10 @@ export function useWelfareStore() {
       llmApiPointRate: llmApiModel?.pointsPerUsd,
       llmApiIpLimit: llmApiModel?.ipLimit,
       llmApiRpmLimit: llmApiModel?.rpmLimit,
+      llmApiTpmLimit: llmApiModel?.tpmLimit,
+      llmApiCustomRpmLimit,
+      llmApiCustomTpmLimit,
+      llmApiRateLimitChangeCost,
       llmApiConcurrencyLimit: llmApiModel?.concurrencyLimit,
       llmApiRequiresExtendedReview: llmApiBudgetUsd && llmApiModel ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined,
       codexBudgetUsd,

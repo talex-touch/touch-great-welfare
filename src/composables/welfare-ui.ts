@@ -25,6 +25,7 @@ import {
   calculateActivityPrice,
   calculateApplicationPrepaidCost,
   calculateLlmApiCostPoints,
+  calculateLlmApiRateLimitChangeCost,
   DEFAULT_LLM_API_MODELS,
   LLM_API_BUDGET_OPTIONS,
   LLM_API_DEFAULT_MODEL_KEY,
@@ -34,6 +35,7 @@ import {
   llmApiRequiresExtendedReview,
   MAX_ACTIVE_USER_REQUESTS,
   normalizeLlmApiBudgetUsd,
+  normalizeLlmApiModelPricings,
   PRO_EXPEDITE_COST,
   PRO_EXPEDITED_PROCESSING_HOURS,
   PRO_STANDARD_PROCESSING_HOURS,
@@ -126,7 +128,7 @@ export const aiConfigForm = reactive({
   newapiUserId: '',
   temporaryKeyTtlMinutes: 60,
   temporaryKeyQuota: 100,
-  llmApiModels: [...DEFAULT_LLM_API_MODELS],
+  llmApiModels: DEFAULT_LLM_API_MODELS.map(model => ({ ...model })),
   configured: false,
   loading: false,
   message: '',
@@ -176,6 +178,8 @@ export const applicationForm = reactive({
   waiveRejectionReviewFee: false,
   llmApiModelKey: LLM_API_DEFAULT_MODEL_KEY,
   llmApiBudgetUsd: DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd,
+  llmApiCustomRpmLimit: DEFAULT_LLM_API_MODELS[0].rpmLimit,
+  llmApiCustomTpmLimit: DEFAULT_LLM_API_MODELS[0].tpmLimit,
 })
 
 export const resourceApplicationForm = reactive({
@@ -346,6 +350,7 @@ export function useWelfareUiState() {
   const selectedLlmApiModel = computed(() => resolveLlmApiModel(applicationForm.llmApiModelKey, aiConfigForm.llmApiModels))
   const selectedLlmApiBudgetUsd = computed(() => normalizeLlmApiBudgetUsd(applicationForm.llmApiBudgetUsd, selectedLlmApiModel.value))
   const selectedCodexBudgetUsd = selectedLlmApiBudgetUsd
+  const selectedLlmApiRateLimitChangeCost = computed(() => calculateLlmApiRateLimitChangeCost(applicationForm.llmApiCustomRpmLimit, selectedLlmApiModel.value.rpmLimit, applicationForm.llmApiCustomTpmLimit, selectedLlmApiModel.value.tpmLimit))
   const selectedCost = computed(() => applicationForm.type === 'code' ? calculateLlmApiCostPoints(selectedLlmApiBudgetUsd.value, selectedLlmApiModel.value) : calculateActivityPrice(REQUEST_COST[applicationForm.type]))
   const selectedPrepaidCost = computed(() => {
     if (applicationForm.type === 'code')
@@ -394,6 +399,8 @@ export function useWelfareUiState() {
       applicationForm.title = 'LLMApi 额度申请'
       applicationForm.description = '<p>请说明需要使用 LLMApi 的项目、预计用途、模型选择、仓库上下文和希望获得的额度。</p>'
       applicationForm.llmApiBudgetUsd = model.defaultBudgetUsd
+      applicationForm.llmApiCustomRpmLimit = model.rpmLimit
+      applicationForm.llmApiCustomTpmLimit = model.tpmLimit
     }
     if (type === 'image') {
       applicationForm.title = '图片公益物料支持'
@@ -454,7 +461,26 @@ export function useWelfareUiState() {
     applicationFiles.value = []
   }
 
-  function defaultResourcePayload(resourceType: ResourceType) {
+  function defaultLlmApiPayload() {
+    const model = resolveLlmApiModel(LLM_API_DEFAULT_MODEL_KEY, aiConfigForm.llmApiModels)
+    return {
+      model: model.key,
+      modelName: model.name,
+      budgetLimit: model.defaultBudgetUsd,
+      rpmLimit: model.rpmLimit,
+      tpmLimit: model.tpmLimit,
+      defaultRpmLimit: model.rpmLimit,
+      defaultTpmLimit: model.tpmLimit,
+      usageScenario: '',
+      uploadsUserData: false,
+      uploadUserData: false,
+      containsSensitiveInfo: false,
+      containsPrivacy: false,
+      logRetention: 0,
+    }
+  }
+
+  function defaultResourcePayload(resourceType: ResourceType): Record<string, any> {
     if (resourceType === 'database') {
       return {
         name: '',
@@ -466,18 +492,8 @@ export function useWelfareUiState() {
         duration: resourceApplicationForm.duration,
       }
     }
-    if (resourceType === 'llm_api_quota') {
-      return {
-        model: '',
-        monthlyTokens: 1000000,
-        rateLimit: '60 RPM / 10 TPM',
-        budgetLimit: 100,
-        usageScenario: '',
-        uploadsUserData: false,
-        containsSensitiveInfo: false,
-        logRetention: '脱敏留存 30 天',
-      }
-    }
+    if (resourceType === 'llm_api_quota')
+      return defaultLlmApiPayload()
     return {
       specification: '',
       quantity: 1,
@@ -498,14 +514,14 @@ export function useWelfareUiState() {
     if (!resourceApplicationForm.selectedResourceTypes.includes(resourceType))
       resourceApplicationForm.selectedResourceTypes.push(resourceType)
 
-    const payload = defaultResourcePayload(resourceType)
+    const payload: Record<string, any> = defaultResourcePayload(resourceType)
     resourceApplicationItems.value.push({
       id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       resourceType,
       resourceSubtype: config.subtypes[0],
       payload,
       requestedPermission: typeof payload.permission === 'string' ? payload.permission : undefined,
-      requestedQuota: resourceType === 'llm_api_quota' ? String(payload.monthlyTokens) : undefined,
+      requestedQuota: resourceType === 'llm_api_quota' ? `$${payload.budgetLimit}` : undefined,
       duration: typeof payload.duration === 'string' ? payload.duration : undefined,
     })
   }
@@ -796,7 +812,7 @@ export function useWelfareUiState() {
     aiConfigForm.newapiUserId = config.newapiUserId
     aiConfigForm.temporaryKeyTtlMinutes = config.temporaryKeyTtlMinutes
     aiConfigForm.temporaryKeyQuota = config.temporaryKeyQuota
-    aiConfigForm.llmApiModels = config.llmApiModels
+    aiConfigForm.llmApiModels = normalizeLlmApiModelPricings(config.llmApiModels)
     aiConfigForm.configured = config.configured
     aiConfigForm.envPreview = config.env
   }
@@ -921,6 +937,8 @@ export function useWelfareUiState() {
           waiveRejectionReviewFee: applicationForm.waiveRejectionReviewFee,
           llmApiModelKey: applicationForm.llmApiModelKey,
           llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
+          llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
+          llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
         })
     if (!application || application.type !== 'image')
       throw new Error('图片申请不存在')
@@ -951,6 +969,8 @@ export function useWelfareUiState() {
       waiveRejectionReviewFee: applicationForm.waiveRejectionReviewFee,
       llmApiModelKey: applicationForm.llmApiModelKey,
       llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
+      llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
+      llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
     })
     await saveWelfareState(welfare.state)
     try {
@@ -1147,6 +1167,7 @@ export function useWelfareUiState() {
     selectedCost,
     selectedPrepaidCost,
     selectedLlmApiBudgetUsd,
+    selectedLlmApiRateLimitChangeCost,
     selectedLlmApiRequiresExtendedReview,
     selectedCodexBudgetUsd,
     selectedCodexRequiresExtendedReview,

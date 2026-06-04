@@ -71,7 +71,7 @@ onMounted(async () => {
             {{ currentUser.points.toLocaleString('zh-CN') }}
           </div>
           <div class="text-xs mt-3 op70">
-            所有公益申请均采用预扣费制度：LLMApi 可选 Codex、ClaudeCode 及国内外模型，不同模型价格由管理员配置；超过 $100 需要更长审核，且没有延长存储服务。{{ pricingSummary.activityName }} 至 {{ formatDate(pricingSummary.activityEndsAt) }}：Image {{ pricingSummary.currentRequestCost.image }} / Pro {{ pricingSummary.currentRequestCost.pro }}。Pro 原价 {{ pricingSummary.requestCost.pro.toLocaleString('zh-CN') }}，3 天处理，加速 {{ pricingSummary.proExpediteCost }} 积分到 2 天；学生认证审核扣 {{ pricingSummary.studentReviewFee }}，成功返还。
+            所有公益申请均采用预扣费制度：LLMApi 仅可选 Codex / ClaudeCode / Mimo；超过 $100 需要更长审核，RPM/TPM 改动会额外消耗大量积分且不享受折扣。{{ pricingSummary.activityName }} 至 {{ formatDate(pricingSummary.activityEndsAt) }}：Image {{ pricingSummary.currentRequestCost.image }} / Pro {{ pricingSummary.currentRequestCost.pro }}。Pro 原价 {{ pricingSummary.requestCost.pro.toLocaleString('zh-CN') }}，3 天处理，加速 {{ pricingSummary.proExpediteCost }} 积分到 2 天；学生认证审核扣 {{ pricingSummary.studentReviewFee }}，成功返还。
           </div>
         </div>
         <div class="gap-3 grid sm:grid-cols-[1fr_auto]">

@@ -28,8 +28,7 @@ describe('resource application platform rules', async () => {
       'object_storage',
     ])
     expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'database')?.subtypes).toEqual(['mysql', 'postgresql', 'redis'])
-    expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'llm_api_quota')?.subtypes).toContain('deepseek')
-    expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'llm_api_quota')?.subtypes).toContain('openai')
+    expect(RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === 'llm_api_quota')?.subtypes).toEqual(['codex', 'claude-code', 'mimo'])
   })
 
   it('marks gated and temporarily unavailable resources', () => {

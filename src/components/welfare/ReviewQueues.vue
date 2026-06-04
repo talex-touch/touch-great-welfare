@@ -231,7 +231,7 @@ onMounted(() => {
                 </label>
                 <label class="gap-2 grid">
                   <span class="field-label">说明 / 驳回原因</span>
-                  <textarea v-model="resourceReviewDraftFor(resourceItem.id).note" class="form-textarea" rows="2" placeholder="驳回时必填；通过可填写开通备注。" />
+                  <RichTextEditor v-model="resourceReviewDraftFor(resourceItem.id).note" :min-height="110" placeholder="驳回时必填；通过可填写开通备注。" />
                 </label>
                 <label v-if="resourceReviewDraftFor(resourceItem.id).status === 'adjusted_approved'" class="gap-2 grid md:col-span-2">
                   <span class="field-label">批准后的额度/权限 JSON</span>
@@ -249,7 +249,7 @@ onMounted(() => {
                   人工开通：{{ provisionStatusText(resourceItem.provisionStatus) }}
                 </div>
                 <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-2 grid md:grid-cols-[1fr_auto]">
-                  <textarea v-model="resourceProvisionDrafts[resourceItem.id]" class="form-textarea" rows="2" placeholder="记录开通结果、账号、备注或交付方式" />
+                  <RichTextEditor v-model="resourceProvisionDrafts[resourceItem.id]" :min-height="100" placeholder="记录开通结果、账号、备注或交付方式" />
                   <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
                     标记已开通
                   </TxButton>

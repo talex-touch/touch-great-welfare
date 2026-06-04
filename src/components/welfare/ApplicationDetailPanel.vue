@@ -178,9 +178,13 @@ function handleComplete() {
               <b>{{ application.llmApiIpLimit ?? '-' }} 个</b>
             </div>
             <div class="application-detail-stat">
-              <span>RPM / 并发</span>
-              <b>{{ application.llmApiRpmLimit ?? '-' }} / {{ application.llmApiConcurrencyLimit ?? '-' }}</b>
+              <span>默认 RPM / TPM</span>
+              <b>{{ application.llmApiRpmLimit ?? '-' }} / {{ application.llmApiTpmLimit ?? '-' }}</b>
             </div>
+          </div>
+          <div v-if="application.llmApiRateLimitChangeCost" class="rate-warning mt-4">
+            <b>RPM / TPM 已申请改为 {{ application.llmApiCustomRpmLimit ?? application.llmApiRpmLimit }} / {{ application.llmApiCustomTpmLimit ?? application.llmApiTpmLimit }}，预估额外消耗 {{ formatPoints(application.llmApiRateLimitChangeCost) }}</b>
+            <span>该消耗不享受折扣，最终以接口返回或后端结算为准。</span>
           </div>
         </div>
 

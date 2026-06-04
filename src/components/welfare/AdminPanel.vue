@@ -1317,7 +1317,7 @@ onMounted(() => {
                     LLMApi 模型价格
                   </div>
                   <p class="field-hint mt-1">
-                    用户可选择 Codex、ClaudeCode 和其他国内外模型；这里配置每个模型的价格、额度、IP、RPM 与并发限制。
+                    用户只能选择 Codex / ClaudeCode / Mimo；这里配置每个模型的价格、默认额度、IP、默认 RPM/TPM 与并发限制。
                   </p>
                 </div>
                 <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
@@ -1337,7 +1337,7 @@ onMounted(() => {
                     </div>
                     <TxCheckbox v-model="model.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" label="启用" />
                   </div>
-                  <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-6">
+                  <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-7">
                     <label class="gap-2 grid">
                       <span class="field-label">价格（积分/USD）</span>
                       <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
@@ -1360,6 +1360,10 @@ onMounted(() => {
                         <TxNumberInput v-model="model.ipLimit" :min="1" :max="50" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                         <TxNumberInput v-model="model.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                       </div>
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">默认 TPM</span>
+                      <TxNumberInput v-model="model.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                     </label>
                     <label class="gap-2 grid">
                       <span class="field-label">并发</span>
