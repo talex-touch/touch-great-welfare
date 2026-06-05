@@ -14,15 +14,27 @@ const {
   currentUser,
   currentUserLevelCard,
   profileForm,
-  temporaryAiKey,
-  temporaryAiKeyExpiresAt,
+  temporaryAiKeyForm,
+  temporaryAiKeys,
+  generatedTemporaryAiKey,
+  sub2ApiConfigForm,
+  sub2ApiKeyForm,
+  sub2ApiKeys,
+  generatedSub2ApiKey,
   updateCurrentProfile,
   generateTemporaryAiKey,
+  refreshTemporaryAiKeys,
+  revokeTemporaryAiKey,
+  refreshSub2ApiKeys,
+  generateSub2ApiKey,
+  revokeSub2ApiKey,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
 const profileDraftKey = 'welfare:profile-draft'
 const isProfileDialogOpen = ref(false)
+const pendingTemporaryAiDeleteId = ref('')
+const pendingSub2ApiDeleteId = ref('')
 let stopProfileDraft: (() => void) | undefined
 
 const userInitial = computed(() => currentUser.value?.profile.displayName.slice(0, 1).toUpperCase() ?? '?')
@@ -70,6 +82,34 @@ function createTemporaryKey() {
   runSafely(() => generateTemporaryAiKey(), '临时 API Key 已生成')
 }
 
+function deleteTemporaryKey(keyId: string) {
+  if (pendingTemporaryAiDeleteId.value !== keyId) {
+    pendingTemporaryAiDeleteId.value = keyId
+    return
+  }
+
+  runSafely(async () => {
+    await revokeTemporaryAiKey(keyId)
+    pendingTemporaryAiDeleteId.value = ''
+  }, 'NewAPI Key 已删除')
+}
+
+function createSub2ApiGatewayKey() {
+  runSafely(() => generateSub2ApiKey(), 'Sub2API Key 已生成')
+}
+
+function deleteSub2ApiGatewayKey(keyId: string) {
+  if (pendingSub2ApiDeleteId.value !== keyId) {
+    pendingSub2ApiDeleteId.value = keyId
+    return
+  }
+
+  runSafely(async () => {
+    await revokeSub2ApiKey(keyId)
+    pendingSub2ApiDeleteId.value = ''
+  }, 'Sub2API Key 已删除')
+}
+
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape')
     closeProfileDialog()
@@ -78,6 +118,8 @@ function onKeydown(event: KeyboardEvent) {
 onMounted(() => {
   restoreLocalDraft(profileDraftKey, profileForm)
   stopProfileDraft = persistLocalDraft(profileDraftKey, profileForm)
+  refreshTemporaryAiKeys().catch(() => {})
+  refreshSub2ApiKeys().catch(() => {})
   window.addEventListener('keydown', onKeydown)
 })
 
@@ -209,22 +251,158 @@ onUnmounted(() => {
       </div>
     </TxCard>
 
-    <TxCard class="solid-panel" background="pure" :padding="20" :radius="28">
-      <h3 class="text-xl fw-900">
-        临时 API Key
-      </h3>
-      <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-        用于短时调用 NewAPI 映射能力，Key 只展示一次。
-      </p>
-      <TxButton class="mt-4" variant="secondary" :disabled="!currentUser" @click="createTemporaryKey">
-        生成临时 Key
-      </TxButton>
-      <div v-if="temporaryAiKey" class="text-xs leading-5 mt-4 p-3 rounded-2xl bg-slate-100 break-all dark:bg-white/10">
-        <div class="fw-800">
-          {{ temporaryAiKey }}
+    <TxCard class="solid-panel xl:col-span-2" background="pure" :padding="20" :radius="28">
+      <div class="flex flex-wrap gap-3 items-start justify-between">
+        <div>
+          <h3 class="text-xl fw-900">
+            NewAPI Key
+          </h3>
+          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+            生成用于 OpenAI 兼容客户端的 NewAPI 临时密钥，明文只展示一次。
+          </p>
         </div>
-        <div class="text-slate-500 mt-2">
-          过期时间：{{ formatDate(temporaryAiKeyExpiresAt) }}
+        <TxStatusBadge :text="temporaryAiKeyForm.configured ? '已接通' : '未配置'" :status="temporaryAiKeyForm.configured ? 'success' : 'warning'" size="sm" />
+      </div>
+
+      <div class="mt-5 gap-4 grid lg:grid-cols-5">
+        <label class="gap-2 grid lg:col-span-2">
+          <span class="field-label">Key 名称</span>
+          <TxInput v-model="temporaryAiKeyForm.name" :disabled="!currentUser || !temporaryAiKeyForm.configured || temporaryAiKeyForm.loading" />
+        </label>
+        <label class="gap-2 grid">
+          <span class="field-label">额度</span>
+          <TxInput v-model="temporaryAiKeyForm.quota" type="number" :disabled="!currentUser || !temporaryAiKeyForm.configured || temporaryAiKeyForm.loading" />
+        </label>
+        <label class="gap-2 grid">
+          <span class="field-label">有效分钟</span>
+          <TxInput v-model="temporaryAiKeyForm.ttlMinutes" type="number" :disabled="!currentUser || !temporaryAiKeyForm.configured || temporaryAiKeyForm.loading" />
+        </label>
+        <div class="flex items-end">
+          <TxButton class="w-full" variant="primary" :disabled="!currentUser || !temporaryAiKeyForm.configured || temporaryAiKeyForm.loading" @click="createTemporaryKey">
+            {{ temporaryAiKeyForm.loading ? '处理中...' : '生成 Key' }}
+          </TxButton>
+        </div>
+      </div>
+
+      <div v-if="generatedTemporaryAiKey" class="text-xs leading-5 mt-4 p-3 rounded-2xl bg-emerald-50 break-all dark:bg-emerald-950/30">
+        <div class="text-emerald-700 fw-900 dark:text-emerald-200">
+          {{ generatedTemporaryAiKey }}
+        </div>
+        <div class="text-slate-500 mt-2 dark:text-slate-400">
+          明文只在当前页面展示一次，请立即保存到客户端配置。
+        </div>
+      </div>
+
+      <div v-if="temporaryAiKeyForm.message" class="text-xs leading-5 mt-4 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+        {{ temporaryAiKeyForm.message }}
+      </div>
+
+      <div class="admin-table mt-5">
+        <div class="admin-table-row admin-table-head grid-cols-[minmax(0,1.5fr)_120px_120px_120px_auto]">
+          <span>名称</span>
+          <span>额度</span>
+          <span>状态</span>
+          <span>过期</span>
+          <span>操作</span>
+        </div>
+        <div v-if="!temporaryAiKeys.length" class="admin-empty">
+          暂无 NewAPI Key
+        </div>
+        <div v-for="item in temporaryAiKeys" :key="item.id" class="admin-table-row grid-cols-[minmax(0,1.5fr)_120px_120px_120px_auto]">
+          <div class="min-w-0">
+            <div class="fw-800 truncate">
+              {{ item.name }}
+            </div>
+            <div class="text-xs text-slate-500 break-all dark:text-slate-400">
+              {{ item.keyMasked }}
+            </div>
+          </div>
+          <span>{{ item.quota }}</span>
+          <TxStatusBadge :text="item.status === 'active' ? '可用' : item.status === 'expired' ? '已过期' : '已删除'" :status="item.status === 'active' ? 'success' : 'warning'" size="sm" />
+          <span>{{ formatDate(item.expiresAt) }}</span>
+          <TxButton size="sm" variant="danger" :disabled="item.status !== 'active' || temporaryAiKeyForm.loading" @click="deleteTemporaryKey(item.id)">
+            {{ pendingTemporaryAiDeleteId === item.id ? '确认删除' : '删除' }}
+          </TxButton>
+        </div>
+      </div>
+    </TxCard>
+
+    <TxCard class="solid-panel xl:col-span-2" background="pure" :padding="20" :radius="28">
+      <div class="flex flex-wrap gap-3 items-start justify-between">
+        <div>
+          <h3 class="text-xl fw-900">
+            Sub2API Key
+          </h3>
+          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+            生成用于 Codex / ClaudeCode / OpenAI 兼容客户端的网关密钥。
+          </p>
+        </div>
+        <TxStatusBadge :text="sub2ApiConfigForm.configured ? '已接通' : '未配置'" :status="sub2ApiConfigForm.configured ? 'success' : 'warning'" size="sm" />
+      </div>
+
+      <div class="mt-5 gap-4 grid lg:grid-cols-6">
+        <label class="gap-2 grid lg:col-span-2">
+          <span class="field-label">Key 名称</span>
+          <TxInput v-model="sub2ApiKeyForm.name" :disabled="!currentUser || !sub2ApiConfigForm.configured || sub2ApiKeyForm.loading" />
+        </label>
+        <label class="gap-2 grid">
+          <span class="field-label">额度 USD</span>
+          <TxInput v-model="sub2ApiKeyForm.quotaUsd" type="number" :disabled="!currentUser || !sub2ApiConfigForm.configured || sub2ApiKeyForm.loading" />
+        </label>
+        <label class="gap-2 grid">
+          <span class="field-label">有效期天数</span>
+          <TxInput v-model="sub2ApiKeyForm.expiresInDays" type="number" :disabled="!currentUser || !sub2ApiConfigForm.configured || sub2ApiKeyForm.loading" />
+        </label>
+        <label class="gap-2 grid">
+          <span class="field-label">分组 ID</span>
+          <TxInput v-model="sub2ApiKeyForm.groupId" type="number" :disabled="!currentUser || !sub2ApiConfigForm.configured || sub2ApiKeyForm.loading" placeholder="默认" />
+        </label>
+        <div class="flex items-end">
+          <TxButton class="w-full" variant="primary" :disabled="!currentUser || !sub2ApiConfigForm.configured || sub2ApiKeyForm.loading" @click="createSub2ApiGatewayKey">
+            {{ sub2ApiKeyForm.loading ? '处理中...' : '生成 Key' }}
+          </TxButton>
+        </div>
+      </div>
+
+      <div v-if="generatedSub2ApiKey" class="text-xs leading-5 mt-4 p-3 rounded-2xl bg-emerald-50 break-all dark:bg-emerald-950/30">
+        <div class="text-emerald-700 fw-900 dark:text-emerald-200">
+          {{ generatedSub2ApiKey }}
+        </div>
+        <div class="text-slate-500 mt-2 dark:text-slate-400">
+          明文只在当前页面展示一次，请立即保存到客户端配置。
+        </div>
+      </div>
+
+      <div v-if="sub2ApiKeyForm.message" class="text-xs leading-5 mt-4 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+        {{ sub2ApiKeyForm.message }}
+      </div>
+
+      <div class="admin-table mt-5">
+        <div class="admin-table-row admin-table-head grid-cols-[minmax(0,1.5fr)_120px_120px_120px_auto]">
+          <span>名称</span>
+          <span>额度</span>
+          <span>状态</span>
+          <span>过期</span>
+          <span>操作</span>
+        </div>
+        <div v-if="!sub2ApiKeys.length" class="admin-empty">
+          暂无 Sub2API Key
+        </div>
+        <div v-for="item in sub2ApiKeys" :key="item.id" class="admin-table-row grid-cols-[minmax(0,1.5fr)_120px_120px_120px_auto]">
+          <div class="min-w-0">
+            <div class="fw-800 truncate">
+              {{ item.name }}
+            </div>
+            <div class="text-xs text-slate-500 break-all dark:text-slate-400">
+              {{ item.keyMasked }}
+            </div>
+          </div>
+          <span>${{ item.quotaUsd }}</span>
+          <TxStatusBadge :text="item.status === 'active' ? '可用' : '已删除'" :status="item.status === 'active' ? 'success' : 'warning'" size="sm" />
+          <span>{{ item.expiresAt ? formatDate(item.expiresAt) : '长期' }}</span>
+          <TxButton size="sm" variant="danger" :disabled="item.status !== 'active' || sub2ApiKeyForm.loading" @click="deleteSub2ApiGatewayKey(item.id)">
+            {{ pendingSub2ApiDeleteId === item.id ? '确认删除' : '删除' }}
+          </TxButton>
         </div>
       </div>
     </TxCard>

@@ -21,6 +21,7 @@ declare module 'vue' {
     DashboardLayout: typeof import('./src/components/welfare/DashboardLayout.vue')['default']
     DataNotice: typeof import('./src/components/welfare/DataNotice.vue')['default']
     HeroPanel: typeof import('./src/components/welfare/HeroPanel.vue')['default']
+    MarkdownEditor: typeof import('./src/components/welfare/MarkdownEditor.vue')['default']
     NotificationSettingsPanel: typeof import('./src/components/welfare/NotificationSettingsPanel.vue')['default']
     NotificationsPanel: typeof import('./src/components/welfare/NotificationsPanel.vue')['default']
     OpenSourcePanel: typeof import('./src/components/welfare/OpenSourcePanel.vue')['default']

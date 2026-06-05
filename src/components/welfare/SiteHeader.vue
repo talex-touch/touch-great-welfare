@@ -6,8 +6,21 @@ import { useWelfareUiState } from '~/composables/welfare-ui'
 
 const route = useRoute()
 const router = useRouter()
-const { currentUser, logout, unreadNotificationCount, refreshNotifications } = useWelfareUiState()
+const { currentUser, logout, unreadNotificationCount, refreshNotifications, selectedSection } = useWelfareUiState()
 const isUserMenuOpen = ref(false)
+const userMenuNavItems = [
+  { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
+  { key: 'wallet', path: '/dashboard/wallet', icon: 'i-carbon-wallet', label: '钱包充值' },
+  { key: 'openSource', path: '/dashboard/open-source', icon: 'i-carbon-logo-github', label: '开源认证' },
+] as const
+const accountMenuNavItems = [
+  { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人信息' },
+  { key: 'notifications', path: '/dashboard/notifications', icon: 'i-carbon-notification', label: '消息中心' },
+  { key: 'notificationSettings', path: '/dashboard/notification-settings', icon: 'i-carbon-settings', label: '通知设置' },
+] as const
+const adminMenuNavItems = [
+  { key: 'admin', path: '/dashboard/admin', icon: 'i-carbon-data-center', label: '管理员后台' },
+] as const
 const userInitial = computed(() => currentUser.value?.profile.displayName.slice(0, 1).toUpperCase() ?? '?')
 const userRoleText = computed(() => {
   if (currentUser.value?.role === 'admin')
@@ -28,6 +41,12 @@ function closeUserMenu() {
 function goNotifications() {
   closeUserMenu()
   router.push('/dashboard/notifications')
+}
+
+function goUserMenuItem(item: (typeof userMenuNavItems)[number] | (typeof accountMenuNavItems)[number] | (typeof adminMenuNavItems)[number]) {
+  selectedSection.value = item.key
+  closeUserMenu()
+  router.push(item.path)
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -116,6 +135,45 @@ onUnmounted(() => {
                   <span class="text-xs text-emerald-700 px-2 py-1 rounded-full bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-400/10">{{ userRoleText }}</span>
                   <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUser.points.toLocaleString('zh-CN') }}</span>
                 </div>
+              </div>
+              <div class="py-1 border-b border-black/8 dark:border-white/10">
+                <button
+                  v-for="item in userMenuNavItems"
+                  :key="item.key"
+                  class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                  :class="route.path === item.path || route.path.startsWith(`${item.path}/`) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                  @click="goUserMenuItem(item)"
+                >
+                  <span :class="item.icon" />
+                  {{ item.label }}
+                </button>
+              </div>
+              <div class="py-1 border-b border-black/8 dark:border-white/10">
+                <button
+                  v-for="item in accountMenuNavItems"
+                  :key="item.key"
+                  class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                  :class="route.path === item.path || route.path.startsWith(`${item.path}/`) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                  @click="goUserMenuItem(item)"
+                >
+                  <span :class="item.icon" />
+                  {{ item.label }}
+                  <span v-if="item.key === 'notifications' && unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 ml-auto px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center">
+                    {{ unreadNotificationCount }}
+                  </span>
+                </button>
+              </div>
+              <div v-if="currentUser.role === 'admin'" class="py-1 border-b border-black/8 dark:border-white/10">
+                <button
+                  v-for="item in adminMenuNavItems"
+                  :key="item.key"
+                  class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                  :class="route.path === item.path || route.path.startsWith(`${item.path}/`) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                  @click="goUserMenuItem(item)"
+                >
+                  <span :class="item.icon" />
+                  {{ item.label }}
+                </button>
               </div>
               <button class="text-sm fw-800 mt-1 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="onLogout">
                 <span class="i-carbon-logout" />

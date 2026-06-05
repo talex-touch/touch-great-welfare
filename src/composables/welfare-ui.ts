@@ -1,9 +1,11 @@
+import type { TemporaryKeyView } from './ai'
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
+import type { Sub2ApiKeyView } from './sub2api'
 import type { CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType } from './welfare'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
-import { createApplicationReview, createImageJob, createTemporaryAiKey, loadAiConfig, saveAiConfig } from './ai'
+import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, saveAiConfig } from './ai'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
   loadNotificationProviderConfig,
@@ -18,6 +20,7 @@ import {
   urlBase64ToUint8Array,
 } from './notifications'
 import { createRechargeOrder, loadRechargeConfig, loadRechargeStatus, saveRechargeConfig } from './recharge'
+import { createSub2ApiKey, deleteSub2ApiKey, loadSub2ApiConfig, loadSub2ApiKeys, saveSub2ApiConfig, testSub2ApiConfig } from './sub2api'
 import {
   ACTIVITY_DISCOUNT_RATE,
   ACTIVITY_END_AT,
@@ -138,6 +141,50 @@ export const aiConfigForm = reactive({
 
 export const temporaryAiKey = ref('')
 export const temporaryAiKeyExpiresAt = ref('')
+export const temporaryAiKeyForm = reactive({
+  name: 'Touch Great Welfare NewAPI Key',
+  ttlMinutes: 60,
+  quota: 100,
+  configured: false,
+  loading: false,
+  message: '',
+})
+export const temporaryAiKeys = ref<TemporaryKeyView[]>([])
+export const generatedTemporaryAiKey = ref('')
+
+export const sub2ApiConfigForm = reactive({
+  enabled: true,
+  baseUrl: '',
+  adminApiKey: '',
+  adminApiKeyMasked: '',
+  databaseUrl: '',
+  databaseUrlMasked: '',
+  defaultGroupId: '' as number | string,
+  defaultQuotaUsd: 10,
+  defaultExpiresInDays: 30,
+  defaultRateLimit5h: 0,
+  defaultRateLimit1d: 0,
+  defaultRateLimit7d: 0,
+  configured: false,
+  loading: false,
+  testing: false,
+  message: '',
+})
+
+export const sub2ApiKeyForm = reactive({
+  name: 'Touch Great Welfare API Key',
+  quotaUsd: 10,
+  expiresInDays: 30,
+  groupId: '' as number | string,
+  rateLimit5h: 0,
+  rateLimit1d: 0,
+  rateLimit7d: 0,
+  loading: false,
+  message: '',
+})
+
+export const sub2ApiKeys = ref<Sub2ApiKeyView[]>([])
+export const generatedSub2ApiKey = ref('')
 
 export const notificationSettingsForm = reactive({
   emailEnabled: false,
@@ -282,6 +329,7 @@ export const ADMIN_TABS = {
   login: '登录配置',
   github: 'GitHub 应用',
   ai: 'AI 配置',
+  sub2api: 'Sub2API',
   notifications: '通知配置',
   ldc: '充值配置',
   users: '用户管理',
@@ -294,6 +342,7 @@ export const adminTabItems = [
   { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
   { key: 'github', name: ADMIN_TABS.github, icon: 'i-carbon-logo-github' },
   { key: 'ai', name: ADMIN_TABS.ai, icon: 'i-carbon-ai-status' },
+  { key: 'sub2api', name: ADMIN_TABS.sub2api, icon: 'i-carbon-api-1' },
   { key: 'notifications', name: ADMIN_TABS.notifications, icon: 'i-carbon-notification' },
   { key: 'ldc', name: ADMIN_TABS.ldc, icon: 'i-carbon-wallet' },
   { key: 'users', name: ADMIN_TABS.users, icon: 'i-carbon-user-multiple' },
@@ -862,6 +911,211 @@ export function useWelfareUiState() {
     }
   }
 
+  function applySub2ApiConfig(config: Awaited<ReturnType<typeof loadSub2ApiConfig>>) {
+    sub2ApiConfigForm.enabled = config.enabled
+    sub2ApiConfigForm.baseUrl = config.baseUrl
+    sub2ApiConfigForm.adminApiKey = ''
+    sub2ApiConfigForm.adminApiKeyMasked = config.adminApiKeyMasked
+    sub2ApiConfigForm.databaseUrl = ''
+    sub2ApiConfigForm.databaseUrlMasked = config.databaseUrlMasked
+    sub2ApiConfigForm.defaultGroupId = config.defaultGroupId ?? ''
+    sub2ApiConfigForm.defaultQuotaUsd = config.defaultQuotaUsd
+    sub2ApiConfigForm.defaultExpiresInDays = config.defaultExpiresInDays
+    sub2ApiConfigForm.defaultRateLimit5h = config.defaultRateLimit5h
+    sub2ApiConfigForm.defaultRateLimit1d = config.defaultRateLimit1d
+    sub2ApiConfigForm.defaultRateLimit7d = config.defaultRateLimit7d
+    sub2ApiConfigForm.configured = config.configured
+
+    sub2ApiKeyForm.quotaUsd = config.defaultQuotaUsd
+    sub2ApiKeyForm.expiresInDays = config.defaultExpiresInDays
+    sub2ApiKeyForm.groupId = config.defaultGroupId ?? ''
+    sub2ApiKeyForm.rateLimit5h = config.defaultRateLimit5h
+    sub2ApiKeyForm.rateLimit1d = config.defaultRateLimit1d
+    sub2ApiKeyForm.rateLimit7d = config.defaultRateLimit7d
+  }
+
+  async function refreshSub2ApiConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    sub2ApiConfigForm.loading = true
+    try {
+      applySub2ApiConfig(await loadSub2ApiConfig(welfare.currentUser.value.id))
+    }
+    finally {
+      sub2ApiConfigForm.loading = false
+    }
+  }
+
+  async function persistSub2ApiConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    sub2ApiConfigForm.loading = true
+    sub2ApiConfigForm.message = ''
+    try {
+      const result = await saveSub2ApiConfig(welfare.currentUser.value.id, {
+        enabled: sub2ApiConfigForm.enabled,
+        baseUrl: sub2ApiConfigForm.baseUrl,
+        adminApiKey: sub2ApiConfigForm.adminApiKey,
+        databaseUrl: sub2ApiConfigForm.databaseUrl,
+        defaultGroupId: sub2ApiConfigForm.defaultGroupId,
+        defaultQuotaUsd: Number(sub2ApiConfigForm.defaultQuotaUsd),
+        defaultExpiresInDays: Number(sub2ApiConfigForm.defaultExpiresInDays),
+        defaultRateLimit5h: Number(sub2ApiConfigForm.defaultRateLimit5h),
+        defaultRateLimit1d: Number(sub2ApiConfigForm.defaultRateLimit1d),
+        defaultRateLimit7d: Number(sub2ApiConfigForm.defaultRateLimit7d),
+      })
+      applySub2ApiConfig(result)
+      sub2ApiConfigForm.message = 'Sub2API 配置已保存'
+    }
+    finally {
+      sub2ApiConfigForm.loading = false
+    }
+  }
+
+  async function verifySub2ApiConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    sub2ApiConfigForm.testing = true
+    sub2ApiConfigForm.message = ''
+    try {
+      await testSub2ApiConfig(welfare.currentUser.value.id)
+      sub2ApiConfigForm.message = 'Sub2API 连接测试通过'
+    }
+    finally {
+      sub2ApiConfigForm.testing = false
+    }
+  }
+
+  async function refreshSub2ApiKeys() {
+    if (!welfare.currentUser.value)
+      return
+
+    sub2ApiKeyForm.loading = true
+    try {
+      const result = await loadSub2ApiKeys(welfare.currentUser.value.id)
+      sub2ApiKeys.value = result.keys
+      applySub2ApiConfig(result.config)
+    }
+    finally {
+      sub2ApiKeyForm.loading = false
+    }
+  }
+
+  async function generateSub2ApiKey() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    generatedSub2ApiKey.value = ''
+    sub2ApiKeyForm.loading = true
+    sub2ApiKeyForm.message = ''
+    try {
+      const result = await createSub2ApiKey(welfare.currentUser.value.id, {
+        name: sub2ApiKeyForm.name,
+        quotaUsd: Number(sub2ApiKeyForm.quotaUsd),
+        expiresInDays: Number(sub2ApiKeyForm.expiresInDays),
+        groupId: sub2ApiKeyForm.groupId,
+        rateLimit5h: Number(sub2ApiKeyForm.rateLimit5h),
+        rateLimit1d: Number(sub2ApiKeyForm.rateLimit1d),
+        rateLimit7d: Number(sub2ApiKeyForm.rateLimit7d),
+      })
+      generatedSub2ApiKey.value = result.key
+      sub2ApiKeyForm.message = 'Sub2API Key 已生成'
+      await refreshSub2ApiKeys()
+    }
+    finally {
+      sub2ApiKeyForm.loading = false
+    }
+  }
+
+  async function revokeSub2ApiKey(keyId: string) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    sub2ApiKeyForm.loading = true
+    sub2ApiKeyForm.message = ''
+    try {
+      await deleteSub2ApiKey(welfare.currentUser.value.id, keyId)
+      sub2ApiKeyForm.message = 'Sub2API Key 已删除'
+      await refreshSub2ApiKeys()
+    }
+    finally {
+      sub2ApiKeyForm.loading = false
+    }
+  }
+
+  function applyTemporaryAiKeyConfig(config: Awaited<ReturnType<typeof loadTemporaryAiKeys>>['config']) {
+    temporaryAiKeyForm.configured = config.enabled && config.configured
+    temporaryAiKeyForm.ttlMinutes = config.temporaryKeyTtlMinutes
+    temporaryAiKeyForm.quota = config.temporaryKeyQuota
+  }
+
+  async function refreshTemporaryAiKeys() {
+    if (!welfare.currentUser.value)
+      return
+
+    temporaryAiKeyForm.loading = true
+    try {
+      const result = await loadTemporaryAiKeys(welfare.currentUser.value.id)
+      temporaryAiKeys.value = result.keys
+      applyTemporaryAiKeyConfig(result.config)
+    }
+    finally {
+      temporaryAiKeyForm.loading = false
+    }
+  }
+
+  async function generateTemporaryAiKey() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    generatedTemporaryAiKey.value = ''
+    temporaryAiKey.value = ''
+    temporaryAiKeyExpiresAt.value = ''
+    temporaryAiKeyForm.loading = true
+    temporaryAiKeyForm.message = ''
+    try {
+      const result = await createTemporaryAiKey(welfare.currentUser.value.id, {
+        name: temporaryAiKeyForm.name,
+        ttlMinutes: Number(temporaryAiKeyForm.ttlMinutes),
+        quota: Number(temporaryAiKeyForm.quota),
+      })
+      generatedTemporaryAiKey.value = result.key
+      temporaryAiKey.value = result.key
+      temporaryAiKeyExpiresAt.value = result.expiresAt
+      temporaryAiKeyForm.message = 'NewAPI Key 已生成'
+      await refreshTemporaryAiKeys()
+    }
+    finally {
+      temporaryAiKeyForm.loading = false
+    }
+  }
+
+  async function revokeTemporaryAiKey(keyId: string) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    temporaryAiKeyForm.loading = true
+    temporaryAiKeyForm.message = ''
+    try {
+      await deleteTemporaryAiKey(welfare.currentUser.value.id, keyId)
+      temporaryAiKeyForm.message = 'NewAPI Key 已删除'
+      await refreshTemporaryAiKeys()
+    }
+    finally {
+      temporaryAiKeyForm.loading = false
+    }
+  }
+
   function applyNotificationProviderConfig(config: Awaited<ReturnType<typeof loadNotificationProviderConfig>>) {
     notificationProviderConfigForm.resendApiKey = ''
     notificationProviderConfigForm.resendApiKeyMasked = config.resendApiKeyMasked
@@ -909,16 +1163,6 @@ export function useWelfareUiState() {
     finally {
       notificationProviderConfigForm.loading = false
     }
-  }
-
-  async function generateTemporaryAiKey() {
-    welfare.assertPersistenceReady()
-    if (!welfare.currentUser.value)
-      throw new Error('请先登录')
-
-    const result = await createTemporaryAiKey(welfare.currentUser.value.id)
-    temporaryAiKey.value = result.key
-    temporaryAiKeyExpiresAt.value = result.expiresAt
   }
 
   async function submitImageGenerationApplication(applicationId?: string) {
@@ -1124,9 +1368,16 @@ export function useWelfareUiState() {
     githubAppConfigForm,
     githubAuthorizationForm,
     aiConfigForm,
+    sub2ApiConfigForm,
+    sub2ApiKeyForm,
+    sub2ApiKeys,
+    generatedSub2ApiKey,
     notificationProviderConfigForm,
     temporaryAiKey,
     temporaryAiKeyExpiresAt,
+    temporaryAiKeyForm,
+    temporaryAiKeys,
+    generatedTemporaryAiKey,
     notificationSettingsForm,
     notificationList,
     unreadNotificationCount,
@@ -1203,6 +1454,14 @@ export function useWelfareUiState() {
     startGitHubLogin,
     refreshAiConfig,
     persistAiConfig,
+    refreshSub2ApiConfig,
+    persistSub2ApiConfig,
+    verifySub2ApiConfig,
+    refreshSub2ApiKeys,
+    generateSub2ApiKey,
+    revokeSub2ApiKey,
+    refreshTemporaryAiKeys,
+    revokeTemporaryAiKey,
     refreshNotificationProviderConfig,
     persistNotificationProviderConfig,
     generateTemporaryAiKey,

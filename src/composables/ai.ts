@@ -36,8 +36,43 @@ export interface SaveAiConfigPayload {
 export interface TemporaryKeyResult {
   id: string
   key: string
+  keyMasked: string
+  name: string
   expiresAt: string
   quota: number
+  status: 'active'
+  createdAt: string
+  revokedAt?: string
+}
+
+export interface TemporaryKeyView {
+  id: string
+  upstreamTokenId: string
+  keyMasked: string
+  name: string
+  quota: number
+  status: 'active' | 'expired' | 'revoked'
+  provider: 'newapi'
+  expiresAt: string
+  createdAt: string
+  revokedAt?: string
+}
+
+export interface TemporaryKeysResult {
+  keys: TemporaryKeyView[]
+  config: {
+    enabled: boolean
+    configured: boolean
+    baseUrl: string
+    temporaryKeyTtlMinutes: number
+    temporaryKeyQuota: number
+  }
+}
+
+export interface CreateTemporaryKeyPayload {
+  name?: string
+  ttlMinutes?: number
+  quota?: number
 }
 
 export interface CreateImageResult {
@@ -100,10 +135,20 @@ export function saveAiConfig(adminUserId: string, payload: SaveAiConfigPayload) 
   })
 }
 
-export function createTemporaryAiKey(userId: string) {
+export function loadTemporaryAiKeys(userId: string) {
+  return requestAi<TemporaryKeysResult>('/api/ai/temporary-keys', userId)
+}
+
+export function createTemporaryAiKey(userId: string, payload: CreateTemporaryKeyPayload = {}) {
   return requestAi<TemporaryKeyResult>('/api/ai/temporary-key', userId, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteTemporaryAiKey(userId: string, keyId: string) {
+  return requestAi<{ ok: true }>(`/api/ai/temporary-keys/${encodeURIComponent(keyId)}`, userId, {
+    method: 'DELETE',
   })
 }
 

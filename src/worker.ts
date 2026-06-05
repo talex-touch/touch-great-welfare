@@ -3,6 +3,7 @@ import { handleAiRequest } from './worker/ai'
 import { handleGitHubAppRequest } from './worker/github-app'
 import { handleNotificationRequest } from './worker/notifications'
 import { handleRechargeRequest } from './worker/recharge'
+import { handleSub2ApiRequest } from './worker/sub2api'
 import { handleWebhookRequest } from './worker/webhook'
 import { handleWelfareStateRequest } from './worker/welfare-state'
 
@@ -19,6 +20,8 @@ export default {
       return handleNotificationRequest(request, env)
     if (url.pathname.startsWith('/api/recharge/'))
       return handleRechargeRequest(request, env)
+    if (url.pathname.startsWith('/api/sub2api/'))
+      return handleSub2ApiRequest(request, env)
     if (url.pathname.startsWith('/api/webhooks/'))
       return handleWebhookRequest(request, env)
 

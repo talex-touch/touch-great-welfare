@@ -362,17 +362,17 @@ async function getEffectiveGitHubAppSettings(env: WorkerEnv, request: Request) {
   return {
     enabled: stored
       ? !!stored.enabled
-      : env.GITHUB_APP_ENABLED === 'true',
-    appName: stored?.app_name || env.GITHUB_APP_NAME || '',
-    appSlug: stored?.app_slug || env.GITHUB_APP_SLUG || '',
-    clientId: stored?.client_id || env.GITHUB_APP_CLIENT_ID || '',
-    clientSecret: stored?.client_secret || env.GITHUB_APP_CLIENT_SECRET || '',
-    callbackUrl: getRuntimeCallbackUrl(request, stored?.callback_url || env.GITHUB_APP_CALLBACK_URL || ''),
-    authorizeUrl: stored?.authorize_url || env.GITHUB_APP_AUTHORIZE_URL || DEFAULT_AUTHORIZE_URL,
-    tokenUrl: stored?.token_url || env.GITHUB_APP_TOKEN_URL || DEFAULT_TOKEN_URL,
-    apiBaseUrl: stored?.api_base_url || env.GITHUB_APP_API_BASE_URL || DEFAULT_API_BASE_URL,
-    scopes: stored?.scopes || env.GITHUB_APP_SCOPES || DEFAULT_SCOPES,
-    source: stored ? 'admin' : env.GITHUB_APP_CLIENT_ID && env.GITHUB_APP_CLIENT_SECRET ? 'env' : 'empty',
+      : false,
+    appName: stored?.app_name || '',
+    appSlug: stored?.app_slug || '',
+    clientId: stored?.client_id || '',
+    clientSecret: stored?.client_secret || '',
+    callbackUrl: getRuntimeCallbackUrl(request, stored?.callback_url || ''),
+    authorizeUrl: stored?.authorize_url || DEFAULT_AUTHORIZE_URL,
+    tokenUrl: stored?.token_url || DEFAULT_TOKEN_URL,
+    apiBaseUrl: stored?.api_base_url || DEFAULT_API_BASE_URL,
+    scopes: stored?.scopes || DEFAULT_SCOPES,
+    source: stored ? 'admin' : 'empty',
   }
 }
 
@@ -414,9 +414,9 @@ async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {
     await assertAdminRequest(request, env)
     const payload = await readJson<GitHubAppConfigPayload>(request)
     const stored = await getStoredGitHubAppConfig(env)
-    const clientId = payload.clientId?.trim() || stored?.client_id || env.GITHUB_APP_CLIENT_ID || ''
+    const clientId = payload.clientId?.trim() || stored?.client_id || ''
     const clientSecretForStorage = payload.clientSecret?.trim() || stored?.client_secret || ''
-    const clientSecretForRuntime = clientSecretForStorage || env.GITHUB_APP_CLIENT_SECRET || ''
+    const clientSecretForRuntime = clientSecretForStorage
     const config = {
       enabled: payload.enabled !== false,
       appName: payload.appName?.trim() ?? stored?.app_name ?? '',
@@ -445,7 +445,6 @@ async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {
         GITHUB_APP_NAME: config.appName,
         GITHUB_APP_SLUG: config.appSlug,
         GITHUB_APP_CLIENT_ID: config.clientId,
-        GITHUB_APP_CLIENT_SECRET: '<生产环境建议通过 wrangler secret put GITHUB_APP_CLIENT_SECRET 写入>',
         GITHUB_APP_CALLBACK_URL: config.callbackUrl,
         GITHUB_APP_SCOPES: config.scopes,
       },

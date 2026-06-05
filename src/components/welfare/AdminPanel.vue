@@ -17,6 +17,7 @@ const {
   rechargeConfigForm,
   githubAppConfigForm,
   aiConfigForm,
+  sub2ApiConfigForm,
   notificationProviderConfigForm,
   activeAdminTab,
   adjustUserPoints,
@@ -26,6 +27,9 @@ const {
   persistGitHubAppConfig,
   refreshAiConfig,
   persistAiConfig,
+  refreshSub2ApiConfig,
+  persistSub2ApiConfig,
+  verifySub2ApiConfig,
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
 } = useWelfareUiState()
@@ -1090,6 +1094,22 @@ function saveAiProviderConfig() {
   }, 'AI Provider 配置已保存')
 }
 
+function saveSub2ApiProviderConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistSub2ApiConfig()
+  }, 'Sub2API 配置已保存')
+}
+
+function testSub2ApiProviderConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await verifySub2ApiConfig()
+  }, 'Sub2API 连接测试通过')
+}
+
 function saveNotificationProviderConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -1102,6 +1122,7 @@ onMounted(() => {
   refreshRechargeConfig().catch(() => {})
   refreshGitHubAppConfig().catch(() => {})
   refreshAiConfig().catch(() => {})
+  refreshSub2ApiConfig().catch(() => {})
   refreshNotificationProviderConfig().catch(() => {})
 })
 </script>
@@ -1271,6 +1292,9 @@ onMounted(() => {
             <div class="text-sm mb-5 p-3 rounded-2xl" :class="aiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
               {{ aiConfigForm.configured ? `API Key 已配置：${aiConfigForm.apiKeyMasked}` : '尚未配置 OpenAI 兼容 API Key，AI 调用不可用。' }}
             </div>
+            <p class="text-xs text-slate-500 leading-5 mb-5 dark:text-slate-400">
+              用户侧 NewAPI Key 管理复用这里的 NewAPI 管理 Key、管理地址、用户 ID、默认 TTL 与配额。
+            </p>
             <div class="gap-5 grid lg:grid-cols-2">
               <label class="gap-2 grid lg:col-span-2">
                 <span class="field-label">接口基础地址</span>
@@ -1388,7 +1412,81 @@ onMounted(() => {
               <pre v-if="aiConfigForm.envPreview" class="mt-2 whitespace-pre-wrap break-all">{{ JSON.stringify(aiConfigForm.envPreview, null, 2) }}</pre>
             </div>
             <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-              图片生成结果写入 AI_ASSETS R2；接口密钥保存到服务端加密配置，环境变量仅作为旧部署兜底。
+              图片生成结果写入 AI_ASSETS R2；接口密钥保存到服务端加密配置。
+            </div>
+          </div>
+        </TxTabItem>
+
+        <TxTabItem :name="ADMIN_TABS.sub2api" icon-class="i-carbon-api-1">
+          <template #name>
+            Sub2API
+          </template>
+
+          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+              <span class="i-carbon-api-1" />
+              Sub2API 直连配置
+            </div>
+            <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+              {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在个人信息页生成和删除 API Key。' : '尚未配置 Sub2API 地址或数据库连接。' }}
+            </div>
+            <div class="gap-5 grid lg:grid-cols-2">
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">Sub2API 基础地址</span>
+                <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="https://sub2api.example.com" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">Admin API Key</span>
+                <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
+                <span class="field-hint">用于查询/创建 Sub2API 用户；服务端加密保存。</span>
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">Sub2API 数据库连接</span>
+                <TxInput v-model="sub2ApiConfigForm.databaseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.databaseUrlMasked || 'postgresql://...'" />
+                <span class="field-hint">用于生成/删除 API Key 的受控兜底；只在 Worker 后端使用。</span>
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">默认分组 ID</span>
+                <TxInput v-model="sub2ApiConfigForm.defaultGroupId" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="可选" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">默认额度（USD）</span>
+                <TxInput v-model="sub2ApiConfigForm.defaultQuotaUsd" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">默认有效期（天）</span>
+                <TxInput v-model="sub2ApiConfigForm.defaultExpiresInDays" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">默认 5h 限额（USD）</span>
+                <TxInput v-model="sub2ApiConfigForm.defaultRateLimit5h" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">默认日限额（USD）</span>
+                <TxInput v-model="sub2ApiConfigForm.defaultRateLimit1d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">默认 7 日限额（USD）</span>
+                <TxInput v-model="sub2ApiConfigForm.defaultRateLimit7d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+              </label>
+            </div>
+            <div class="mt-5 flex flex-wrap gap-3 items-center">
+              <label class="text-sm flex gap-2 items-center">
+                <TxCheckbox v-model="sub2ApiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用 Sub2API" />
+                启用 Sub2API
+              </label>
+              <TxButton variant="primary" :disabled="!isAdmin || sub2ApiConfigForm.loading" @click="saveSub2ApiProviderConfig">
+                {{ sub2ApiConfigForm.loading ? '读取 / 保存中...' : '保存 Sub2API 配置' }}
+              </TxButton>
+              <TxButton variant="secondary" :disabled="!isAdmin || sub2ApiConfigForm.testing || sub2ApiConfigForm.loading" @click="testSub2ApiProviderConfig">
+                {{ sub2ApiConfigForm.testing ? '测试中...' : '测试连接' }}
+              </TxButton>
+            </div>
+            <div v-if="sub2ApiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+              {{ sub2ApiConfigForm.message }}
+            </div>
+            <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
+              用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。
             </div>
           </div>
         </TxTabItem>
@@ -1491,8 +1589,6 @@ onMounted(() => {
               回调地址自动使用当前站点：/api/recharge/notify；回跳地址：/api/recharge/return。充值到账以异步通知验签为准。
               <br>
               当前倍率：1 LDC = {{ rechargeConfigForm.pointsPerLdc }} 积分。
-              <br>
-              环境变量仅作为旧部署 fallback；新配置以这里保存的服务端配置为准。
             </div>
           </div>
         </TxTabItem>

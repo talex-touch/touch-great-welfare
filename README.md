@@ -8,6 +8,7 @@
 - 管理员后台配置 GitHub App，用于用户登录和开源认证。
 - 用户通过 GitHub App 完成真实授权登录。
 - 用户积分系统：LINUX DO Credit 充值接入、流水、管理员手动调整。
+- Sub2API 接入：管理员后台配置 Sub2API 地址、Admin API Key 和数据库连接，用户可在个人信息页生成 / 删除网关 API Key。
 - 申请类型全部采用预扣费制度，提交后立即预扣并进入 AI 初审 / 管理员审核：
   - `code`：Codex 额度申请，默认 10 美元，按 10 积分 = 1 美元预扣；用户可自行选择额度，单次最多 1000 美元。
   - `image`：原价 3200 积分，活动期 32 积分，预扣后等待审核，审核通过后调用 AI 图片生成接口。
@@ -98,12 +99,13 @@ Cloudflare binding：
 | `HYPERDRIVE` | 生产        | PostgreSQL Hyperdrive binding，由 `wrangler.production.jsonc` 配置。 |
 | `AI_ASSETS`  | 本地 / 生产 | AI 图片结果 R2 bucket binding。                                      |
 
-业务配置优先在管理员后台保存到服务端数据库，环境变量只作为旧部署 fallback。`wrangler.jsonc` / `wrangler.production.jsonc` 默认不再写业务 vars：
+业务配置全部在管理员后台保存到服务端数据库，`wrangler.jsonc` / `wrangler.production.jsonc` 不再写业务 vars：
 
 | 配置域          | 后台位置                 | 可配置内容                                                                       |
 | --------------- | ------------------------ | -------------------------------------------------------------------------------- |
 | GitHub App      | 管理员后台 / GitHub 应用 | enabled、App 名称、Client ID / Secret、Callback URL、OAuth 端点和 scopes。       |
 | AI Provider     | 管理员后台 / AI 配置     | enabled、base URL、OpenAI 兼容 Key、NewAPI 管理 Key、模型、临时 Key TTL / 配额。 |
+| Sub2API         | 管理员后台 / Sub2API     | enabled、Sub2API 地址、Admin API Key、PostgreSQL 连接、默认分组和 Key 限额。     |
 | 通知供应商      | 管理员后台 / 通知配置    | Resend API Key / 发件人、VAPID public/private key、VAPID subject。               |
 | LINUX DO Credit | 管理员后台 / 充值配置    | enabled、网关地址、PID、KEY、1 LDC 兑换积分倍率，默认 10。                       |
 
@@ -121,7 +123,7 @@ pnpm exec wrangler secret put NOTIFY_SECRET_KEY
 cp .dev.vars.example .dev.vars
 ```
 
-`.env.example` 只作为整理清单和本地工具变量参考；Worker 运行时以管理员后台数据库配置、`.dev.vars` / Worker Secret、Cloudflare binding 为准。旧环境变量仍保留 fallback 读取，方便平滑迁移。
+`.env.example` 只作为整理清单和本地工具变量参考；Worker 运行时以管理员后台数据库配置、`.dev.vars` / Worker Secret、Cloudflare binding 为准。
 
 ## GitHub App 开源认证配置
 
@@ -144,20 +146,7 @@ https://你的域名/api/github-app/callback
 read:user user:email public_repo
 ```
 
-管理员后台会把配置保存到数据库。旧部署仍可通过 Worker 变量 / Secret fallback：
-
-```json
-{
-  "GITHUB_APP_ENABLED": "true",
-  "GITHUB_APP_NAME": "Touch Great Welfare",
-  "GITHUB_APP_SLUG": "touch-great-welfare",
-  "GITHUB_APP_CLIENT_ID": "Iv1.xxxxx",
-  "GITHUB_APP_CALLBACK_URL": "https://你的域名/api/github-app/callback",
-  "GITHUB_APP_SCOPES": "read:user user:email public_repo"
-}
-```
-
-运行时优先使用管理员后台保存的 GitHub App 配置；只有数据库未配置时，才读取 `GITHUB_APP_*` 环境变量 fallback。
+运行时只读取管理员后台保存的 GitHub App 配置，不再读取 `GITHUB_APP_*` 环境变量。
 
 ## LINUX DO Credit 充值配置
 
@@ -169,17 +158,7 @@ read:user user:email public_repo
 
 管理员后台的“LINUX DO Credit 充值”面板可以配置 PID / KEY 和兑换倍率并保存到服务端数据库。本地和生产配置均默认启用充值，但只有配置了商户信息后才可创建订单。默认兑换倍率为 `1 LDC = 10 积分`；订单按 LDC 支付，到账按倍率换算积分。
 
-管理员后台会把 PID / KEY 保存到数据库。旧部署仍可通过 Worker 变量 / Secret fallback：
-
-```json
-{
-  "LDC_PAYMENT_ENABLED": "true",
-  "LDC_GATEWAY_BASE_URL": "https://credit.linux.do/epay",
-  "LDC_POINTS_PER_LDC": "10"
-}
-```
-
-运行时优先使用管理员后台保存的充值配置；只有数据库未配置时，才读取 `LDC_*` 环境变量 fallback。
+运行时只读取管理员后台保存的充值配置，不再读取 `LDC_*` 环境变量。
 
 ## 数据说明
 

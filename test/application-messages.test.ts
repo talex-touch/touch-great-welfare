@@ -22,18 +22,28 @@ describe('application message thread', () => {
     expect(approvedLike).toContain('completed')
   })
 
-  it('RequestStatus type includes the full status flow', () => {
+  it('requestStatus type includes the full status flow', () => {
     const statuses: string[] = [
-      'draft', 'reserved', 'pending_review', 'processing',
-      'answered', 'completed', 'closed', 'rejected',
+      'draft',
+      'reserved',
+      'pending_review',
+      'processing',
+      'answered',
+      'completed',
+      'closed',
+      'rejected',
     ]
     // A valid flow: pending_review → answered → completed
     const flow = statuses.filter(s => ['pending_review', 'answered', 'completed'].includes(s))
     expect(flow).toEqual(['pending_review', 'answered', 'completed'])
   })
 
-  it('ApplicationMessageType covers all conversation types', () => {
-    const types: string[] = ['comment', 'result_submission', 'system']
+  it('applicationMessageType covers all conversation types', () => {
+    const types: string[] = [
+      'comment',
+      'result_submission',
+      'system',
+    ]
     expect(types.length).toBe(3)
     // result_submission is distinct from comment
     expect(types).toContain('result_submission')

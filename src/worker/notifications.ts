@@ -193,7 +193,11 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           user_id text not null,
           key_hash text not null,
           upstream_token_id text,
+          name text,
+          key_masked text,
           quota integer not null,
+          status text not null default 'active',
+          provider text not null default 'newapi',
           expires_at text not null,
           revoked_at text,
           created_at text not null default current_timestamp
@@ -262,6 +266,39 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           updated_at text not null default current_timestamp
         )
       `,
+      `
+        create table if not exists sub2api_config (
+          id text primary key,
+          enabled integer not null default 0,
+          base_url text not null default '',
+          admin_api_key_encrypted text,
+          database_url_encrypted text,
+          default_group_id integer,
+          default_quota_usd real not null default 0,
+          default_expires_in_days integer not null default 30,
+          default_rate_limit_5h real not null default 0,
+          default_rate_limit_1d real not null default 0,
+          default_rate_limit_7d real not null default 0,
+          created_at text not null default current_timestamp,
+          updated_at text not null default current_timestamp
+        )
+      `,
+      `
+        create table if not exists sub2api_key_bindings (
+          id text primary key,
+          user_id text not null,
+          sub2api_user_id text not null,
+          sub2api_key_id text,
+          key_hash text not null,
+          key_masked text not null,
+          name text not null,
+          quota_usd real not null default 0,
+          expires_at text,
+          status text not null,
+          created_at text not null default current_timestamp,
+          revoked_at text
+        )
+      `,
     ]
 
     for (const statement of statements)
@@ -272,6 +309,11 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'ai_provider_config', 'newapi_management_base_url', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'ai_provider_config', 'newapi_user_id', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'ai_provider_config', 'llm_api_models', 'text')
+    await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'name', 'text')
+    await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'key_masked', 'text')
+    await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'status', 'text not null default \'active\'')
+    await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'provider', 'text not null default \'newapi\'')
+    await addD1ColumnIfMissing(env, 'sub2api_config', 'database_url_encrypted', 'text')
     return
   }
 
@@ -336,10 +378,52 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       user_id text not null,
       key_hash text not null,
       upstream_token_id text,
+      name text,
+      key_masked text,
       quota integer not null,
+      status text not null default 'active',
+      provider text not null default 'newapi',
       expires_at timestamptz not null,
       revoked_at timestamptz,
       created_at timestamptz not null default now()
+    )
+  `)
+  await pool.query('alter table ai_temporary_keys add column if not exists name text')
+  await pool.query('alter table ai_temporary_keys add column if not exists key_masked text')
+  await pool.query('alter table ai_temporary_keys add column if not exists status text not null default $1', ['active'])
+  await pool.query('alter table ai_temporary_keys add column if not exists provider text not null default $1', ['newapi'])
+  await pool.query(`
+    create table if not exists sub2api_config (
+      id text primary key,
+      enabled boolean not null default false,
+      base_url text not null default '',
+      admin_api_key_encrypted text,
+      database_url_encrypted text,
+      default_group_id bigint,
+      default_quota_usd numeric(20,8) not null default 0,
+      default_expires_in_days integer not null default 30,
+      default_rate_limit_5h numeric(20,8) not null default 0,
+      default_rate_limit_1d numeric(20,8) not null default 0,
+      default_rate_limit_7d numeric(20,8) not null default 0,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `)
+  await pool.query('alter table sub2api_config add column if not exists database_url_encrypted text')
+  await pool.query(`
+    create table if not exists sub2api_key_bindings (
+      id text primary key,
+      user_id text not null,
+      sub2api_user_id text not null,
+      sub2api_key_id text,
+      key_hash text not null,
+      key_masked text not null,
+      name text not null,
+      quota_usd numeric(20,8) not null default 0,
+      expires_at timestamptz,
+      status text not null,
+      created_at timestamptz not null default now(),
+      revoked_at timestamptz
     )
   `)
   await pool.query(`
@@ -785,15 +869,15 @@ async function decryptProviderSecret(value: string | null | undefined, env: Work
 
 async function getEffectiveNotificationProviderConfig(env: WorkerEnv) {
   const stored = await getNotificationProviderConfig(env)
-  const resendApiKey = await decryptProviderSecret(stored?.resend_api_key_encrypted, env) || env.RESEND_API_KEY || ''
-  const vapidPrivateKey = await decryptProviderSecret(stored?.vapid_private_key_encrypted, env) || env.VAPID_PRIVATE_KEY || ''
+  const resendApiKey = await decryptProviderSecret(stored?.resend_api_key_encrypted, env)
+  const vapidPrivateKey = await decryptProviderSecret(stored?.vapid_private_key_encrypted, env)
   return {
     resendApiKey,
-    resendFromEmail: stored?.resend_from_email || env.RESEND_FROM_EMAIL || '',
-    vapidPublicKey: stored?.vapid_public_key || env.VAPID_PUBLIC_KEY || '',
+    resendFromEmail: stored?.resend_from_email || '',
+    vapidPublicKey: stored?.vapid_public_key || '',
     vapidPrivateKey,
-    vapidSubject: stored?.vapid_subject || env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT,
-    source: stored ? 'admin' as const : (env.RESEND_API_KEY || env.VAPID_PUBLIC_KEY ? 'env' as const : 'empty' as const),
+    vapidSubject: stored?.vapid_subject || DEFAULT_VAPID_SUBJECT,
+    source: stored ? 'admin' as const : 'empty' as const,
   }
 }
 

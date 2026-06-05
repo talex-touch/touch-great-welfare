@@ -8,36 +8,7 @@ export interface WorkerEnv {
   HYPERDRIVE?: {
     connectionString: string
   }
-  LDC_GATEWAY_BASE_URL?: string
-  LDC_PID?: string
-  LDC_KEY?: string
-  LDC_PAYMENT_ENABLED?: string
-  AI_PROVIDER_ENABLED?: string
-  AI_PROVIDER_BASE_URL?: string
-  AI_IMAGE_MODEL?: string
-  AI_REVIEW_MODEL?: string
-  OPENAI_API_KEY?: string
-  NEWAPI_API_KEY?: string
-  NEWAPI_MANAGEMENT_BASE_URL?: string
-  NEWAPI_USER_ID?: string
-  NEWAPI_TEMP_KEY_TTL_MINUTES?: string
-  NEWAPI_TEMP_KEY_QUOTA?: string
-  GITHUB_APP_ENABLED?: string
-  GITHUB_APP_NAME?: string
-  GITHUB_APP_SLUG?: string
-  GITHUB_APP_CLIENT_ID?: string
-  GITHUB_APP_CLIENT_SECRET?: string
-  GITHUB_APP_CALLBACK_URL?: string
-  GITHUB_APP_AUTHORIZE_URL?: string
-  GITHUB_APP_TOKEN_URL?: string
-  GITHUB_APP_API_BASE_URL?: string
-  GITHUB_APP_SCOPES?: string
   NOTIFY_SECRET_KEY?: string
-  RESEND_API_KEY?: string
-  RESEND_FROM_EMAIL?: string
-  VAPID_PUBLIC_KEY?: string
-  VAPID_PRIVATE_KEY?: string
-  VAPID_SUBJECT?: string
 }
 
 const STATE_KEY = 'default'

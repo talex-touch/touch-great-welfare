@@ -50,6 +50,21 @@ interface AiImageJobRow {
   completed_at?: string | Date | null
 }
 
+interface AiTemporaryKeyRow {
+  id: string
+  user_id: string
+  key_hash: string
+  upstream_token_id?: string | null
+  name?: string | null
+  key_masked?: string | null
+  quota: number | string
+  status?: 'active' | 'revoked' | string | null
+  provider?: string | null
+  expires_at: string | Date
+  revoked_at?: string | Date | null
+  created_at: string | Date
+}
+
 interface SaveAiConfigPayload {
   enabled?: boolean
   baseUrl?: string
@@ -68,6 +83,7 @@ interface SaveAiConfigPayload {
 
 interface CreateTemporaryKeyPayload {
   userId?: string
+  name?: string
   ttlMinutes?: number
   quota?: number
 }
@@ -100,6 +116,8 @@ interface OpenAiChatResponse {
 }
 
 interface NewApiTokenResponse {
+  success?: boolean
+  message?: string
   id?: number | string
   key?: string
   token?: string
@@ -107,7 +125,26 @@ interface NewApiTokenResponse {
     id?: number | string
     key?: string
     token?: string
+    items?: NewApiToken[]
   }
+  items?: NewApiToken[]
+}
+
+interface NewApiToken {
+  id?: number | string
+  key?: string
+  token?: string
+  name?: string
+  status?: number | string
+  remain_quota?: number
+  expired_time?: number
+  created_time?: number
+}
+
+interface NewApiPage<T> {
+  items?: T[]
+  data?: T[]
+  total?: number
 }
 
 const DEFAULT_AI_BASE_URL = 'https://api.openai.com/v1'
@@ -138,11 +175,11 @@ async function decryptOptionalSecret(value: string | null | undefined, env: Work
 }
 
 async function getApiKey(env: WorkerEnv, stored?: AiProviderConfigRow | null) {
-  return await decryptOptionalSecret(stored?.api_key_encrypted, env) || env.OPENAI_API_KEY || await decryptOptionalSecret(stored?.newapi_key_encrypted, env) || env.NEWAPI_API_KEY || ''
+  return await decryptOptionalSecret(stored?.api_key_encrypted, env) || await decryptOptionalSecret(stored?.newapi_key_encrypted, env) || ''
 }
 
 async function getNewApiKey(env: WorkerEnv, stored?: AiProviderConfigRow | null) {
-  return await decryptOptionalSecret(stored?.newapi_key_encrypted, env) || env.NEWAPI_API_KEY || ''
+  return await decryptOptionalSecret(stored?.newapi_key_encrypted, env)
 }
 
 async function getStoredAiConfig(env: WorkerEnv) {
@@ -176,6 +213,34 @@ function parseStoredLlmApiModels(value: AiProviderConfigRow['llm_api_models']) {
   }
 }
 
+function numberValue(value: unknown, fallback: number) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function normalizeTemporaryKeyName(value: unknown) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text.slice(0, 50)
+}
+
+function normalizeTemporaryKeyTtl(value: unknown, fallback: number) {
+  return Math.max(5, Math.min(24 * 60, Math.trunc(numberValue(value, fallback))))
+}
+
+function normalizeTemporaryKeyQuota(value: unknown, fallback: number) {
+  return Math.max(1, Math.min(100000, Math.trunc(numberValue(value, fallback))))
+}
+
+function serializePublicAiConfig(config: Awaited<ReturnType<typeof getEffectiveAiConfig>>) {
+  return {
+    enabled: config.enabled,
+    configured: !!config.newapiKey,
+    baseUrl: config.newapiManagementBaseUrl || config.baseUrl,
+    temporaryKeyTtlMinutes: config.temporaryKeyTtlMinutes,
+    temporaryKeyQuota: config.temporaryKeyQuota,
+  }
+}
+
 async function getEffectiveAiConfig(env: WorkerEnv) {
   const stored = await getStoredAiConfig(env)
   const apiKey = await getApiKey(env, stored)
@@ -183,18 +248,18 @@ async function getEffectiveAiConfig(env: WorkerEnv) {
   return {
     enabled: stored
       ? boolValue(stored.enabled)
-      : env.AI_PROVIDER_ENABLED === 'true',
-    baseUrl: normalizeUrlBase(stored?.base_url || env.AI_PROVIDER_BASE_URL || DEFAULT_AI_BASE_URL),
-    imageModel: stored?.image_model || env.AI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL,
-    reviewModel: stored?.review_model || env.AI_REVIEW_MODEL || DEFAULT_REVIEW_MODEL,
+      : false,
+    baseUrl: normalizeUrlBase(stored?.base_url || DEFAULT_AI_BASE_URL),
+    imageModel: stored?.image_model || DEFAULT_IMAGE_MODEL,
+    reviewModel: stored?.review_model || DEFAULT_REVIEW_MODEL,
     apiKey,
     newapiKey,
-    newapiManagementBaseUrl: normalizeUrlBase(stored?.newapi_management_base_url || env.NEWAPI_MANAGEMENT_BASE_URL || ''),
-    newapiUserId: stored?.newapi_user_id || env.NEWAPI_USER_ID || '',
-    temporaryKeyTtlMinutes: Number(stored?.temporary_key_ttl_minutes || env.NEWAPI_TEMP_KEY_TTL_MINUTES || DEFAULT_TEMP_KEY_TTL_MINUTES),
-    temporaryKeyQuota: Number(stored?.temporary_key_quota || env.NEWAPI_TEMP_KEY_QUOTA || DEFAULT_TEMP_KEY_QUOTA),
+    newapiManagementBaseUrl: normalizeUrlBase(stored?.newapi_management_base_url || ''),
+    newapiUserId: stored?.newapi_user_id || '',
+    temporaryKeyTtlMinutes: Number(stored?.temporary_key_ttl_minutes || DEFAULT_TEMP_KEY_TTL_MINUTES),
+    temporaryKeyQuota: Number(stored?.temporary_key_quota || DEFAULT_TEMP_KEY_QUOTA),
     llmApiModels: normalizeLlmApiModelPricings(parseStoredLlmApiModels(stored?.llm_api_models)),
-    source: stored ? 'admin' : env.AI_PROVIDER_BASE_URL || env.AI_IMAGE_MODEL || env.OPENAI_API_KEY || env.NEWAPI_API_KEY ? 'env' : 'empty',
+    source: stored ? 'admin' : 'empty',
     configured: !!apiKey,
   }
 }
@@ -324,31 +389,135 @@ function serializeAiConfig(config: Awaited<ReturnType<typeof getEffectiveAiConfi
       AI_PROVIDER_BASE_URL: config.baseUrl,
       AI_IMAGE_MODEL: config.imageModel,
       AI_REVIEW_MODEL: config.reviewModel,
-      OPENAI_API_KEY: '<兼容旧部署；推荐改用后台加密配置>',
-      NEWAPI_API_KEY: '<兼容旧部署；推荐改用后台加密配置>',
     },
   }
 }
 
-async function insertTemporaryKey(env: WorkerEnv, userId: string, key: string, upstreamTokenId: string, quota: number, expiresAt: string) {
+function normalizeNewApiResponseData<T>(payload: unknown): T {
+  if (payload && typeof payload === 'object' && 'success' in payload && (payload as { success?: boolean }).success === false)
+    throw new Error(String((payload as { message?: string }).message || 'NewAPI 请求失败'))
+  if (payload && typeof payload === 'object' && 'data' in payload)
+    return (payload as { data: T }).data
+  return payload as T
+}
+
+async function callNewApi<T>(
+  config: Awaited<ReturnType<typeof getEffectiveAiConfig>>,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const baseUrl = config.newapiManagementBaseUrl || config.baseUrl
+  if (!baseUrl)
+    throw new Error('NewAPI 管理地址未配置')
+  if (!config.newapiKey)
+    throw new Error('NewAPI 管理 Key 未配置')
+
+  const response = await fetchWithTimeout(`${baseUrl}${path}`, {
+    ...init,
+    headers: {
+      'authorization': `Bearer ${config.newapiKey}`,
+      'content-type': 'application/json',
+      ...(config.newapiUserId ? { 'New-Api-User': config.newapiUserId } : {}),
+      ...init?.headers,
+    },
+  })
+  const text = await response.text()
+  const payload = text ? JSON.parse(text) as unknown : {}
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object' && 'message' in payload
+      ? String((payload as { message?: string }).message)
+      : `NewAPI 请求失败：${response.status}`
+    throw new Error(message)
+  }
+  return normalizeNewApiResponseData<T>(payload)
+}
+
+function extractNewApiTokens(payload: unknown): NewApiToken[] {
+  if (Array.isArray(payload))
+    return payload as NewApiToken[]
+  if (!payload || typeof payload !== 'object')
+    return []
+
+  const page = payload as NewApiPage<NewApiToken> & { rows?: NewApiToken[], records?: NewApiToken[] }
+  return page.items || page.data || page.rows || page.records || []
+}
+
+function extractNewApiTokenKey(payload: unknown) {
+  if (!payload || typeof payload !== 'object')
+    return ''
+
+  const result = payload as NewApiTokenResponse
+  const nested = result.data && !Array.isArray(result.data) ? result.data : undefined
+  return result.key || result.token || nested?.key || nested?.token || ''
+}
+
+function extractNewApiTokenId(payload: unknown) {
+  if (!payload || typeof payload !== 'object')
+    return ''
+
+  const result = payload as NewApiTokenResponse
+  const nested = result.data && !Array.isArray(result.data) ? result.data : undefined
+  return result.id ? String(result.id) : nested?.id ? String(nested.id) : ''
+}
+
+async function findCreatedNewApiToken(config: Awaited<ReturnType<typeof getEffectiveAiConfig>>, name: string) {
+  const result = await callNewApi<unknown>(config, '/api/token/?p=0&page_size=100')
+  const tokens = extractNewApiTokens(result)
+  return tokens.find(item => item.name === name) ?? null
+}
+
+async function readNewApiTokenKey(config: Awaited<ReturnType<typeof getEffectiveAiConfig>>, tokenId: string) {
+  if (!tokenId)
+    return ''
+  const result = await callNewApi<unknown>(config, `/api/token/${encodeURIComponent(tokenId)}/key`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+  return extractNewApiTokenKey(result)
+}
+
+async function deleteNewApiToken(config: Awaited<ReturnType<typeof getEffectiveAiConfig>>, tokenId: string) {
+  if (!tokenId)
+    return
+  await callNewApi<unknown>(config, `/api/token/${encodeURIComponent(tokenId)}`, {
+    method: 'DELETE',
+  })
+}
+
+async function insertTemporaryKey(
+  env: WorkerEnv,
+  userId: string,
+  key: string,
+  upstreamTokenId: string,
+  name: string,
+  quota: number,
+  expiresAt: string,
+) {
   await ensureNotificationSchema(env)
   const id = createId('atk')
   const keyHash = await sha256Hex(key)
+  const keyMasked = maskSecret(key)
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
-        insert into ai_temporary_keys (id, user_id, key_hash, upstream_token_id, quota, expires_at, created_at)
-        values (?1, ?2, ?3, ?4, ?5, ?6, current_timestamp)
+        insert into ai_temporary_keys (
+          id, user_id, key_hash, upstream_token_id, name, key_masked,
+          quota, status, provider, expires_at, created_at
+        )
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', 'newapi', ?8, current_timestamp)
       `)
-      .bind(id, userId, keyHash, upstreamTokenId || null, quota, expiresAt)
+      .bind(id, userId, keyHash, upstreamTokenId || null, name, keyMasked, quota, expiresAt)
       .run()
   }
   else {
     await getPool(env).query(`
-      insert into ai_temporary_keys (id, user_id, key_hash, upstream_token_id, quota, expires_at, created_at)
-      values ($1, $2, $3, $4, $5, $6, now())
-    `, [id, userId, keyHash, upstreamTokenId || null, quota, expiresAt])
+      insert into ai_temporary_keys (
+        id, user_id, key_hash, upstream_token_id, name, key_masked,
+        quota, status, provider, expires_at, created_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, 'active', 'newapi', $8, now())
+    `, [id, userId, keyHash, upstreamTokenId || null, name, keyMasked, quota, expiresAt])
   }
 
   return id
@@ -361,43 +530,142 @@ async function createTemporaryKey(request: Request, env: WorkerEnv) {
   if (!config.enabled)
     throw new Error('AI Provider 未启用')
   if (!config.newapiKey)
-    throw new Error('NEWAPI_API_KEY 未配置，无法生成临时 Key')
+    throw new Error('NewAPI 管理 Key 未配置，无法生成临时 Key')
 
   const targetUserId = auth.user.role === 'admin' && payload.userId?.trim()
     ? payload.userId.trim()
     : auth.user.id
-  const ttlMinutes = Math.max(5, Math.min(24 * 60, Math.trunc(payload.ttlMinutes || config.temporaryKeyTtlMinutes)))
-  const quota = Math.max(1, Math.min(100000, Math.trunc(payload.quota || config.temporaryKeyQuota)))
+  const displayName = normalizeTemporaryKeyName(payload.name) || 'Touch Great Welfare NewAPI Key'
+  const upstreamName = normalizeTemporaryKeyName(`${displayName.slice(0, 24)}-${targetUserId.slice(-8)}-${Date.now()}`)
+  const ttlMinutes = normalizeTemporaryKeyTtl(payload.ttlMinutes, config.temporaryKeyTtlMinutes)
+  const quota = normalizeTemporaryKeyQuota(payload.quota, config.temporaryKeyQuota)
   const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString()
-  const baseUrl = config.newapiManagementBaseUrl || config.baseUrl
-  const response = await fetchWithTimeout(`${baseUrl}/api/token/`, {
+  const result = await callNewApi<unknown>(config, '/api/token/', {
     method: 'POST',
-    headers: {
-      'authorization': `Bearer ${config.newapiKey}`,
-      'content-type': 'application/json',
-      ...(config.newapiUserId ? { 'New-Api-User': config.newapiUserId } : {}),
-    },
     body: JSON.stringify({
-      name: `touch-great-welfare-${targetUserId}-${Date.now()}`,
+      name: upstreamName,
       remain_quota: quota,
       expired_time: Math.floor(new Date(expiresAt).getTime() / 1000),
     }),
   })
-  const result = await response.json().catch(() => ({})) as NewApiTokenResponse
-  if (!response.ok)
-    throw new Error(`NewAPI 临时 Key 创建失败：${response.status}`)
 
-  const key = result.key || result.token || result.data?.key || result.data?.token
+  let upstreamTokenId = extractNewApiTokenId(result)
+  let key = extractNewApiTokenKey(result)
+  if (!upstreamTokenId || !key) {
+    const token = await findCreatedNewApiToken(config, upstreamName)
+    upstreamTokenId = upstreamTokenId || (token?.id ? String(token.id) : '')
+    key = key || await readNewApiTokenKey(config, upstreamTokenId)
+  }
   if (!key)
     throw new Error('NewAPI 未返回临时 Key')
 
-  const id = await insertTemporaryKey(env, targetUserId, key, String(result.id || result.data?.id || ''), quota, expiresAt)
+  const id = await insertTemporaryKey(env, targetUserId, key, upstreamTokenId, displayName, quota, expiresAt)
   return {
     id,
     key,
+    keyMasked: maskSecret(key),
+    name: displayName,
     expiresAt,
     quota,
+    status: 'active',
+    createdAt: now(),
+    revokedAt: undefined,
   }
+}
+
+function mapTemporaryKey(row: AiTemporaryKeyRow) {
+  const status = row.status === 'revoked' || row.revoked_at
+    ? 'revoked'
+    : new Date(toIso(row.expires_at) ?? 0).getTime() <= Date.now()
+      ? 'expired'
+      : 'active'
+  return {
+    id: row.id,
+    upstreamTokenId: row.upstream_token_id || '',
+    keyMasked: row.key_masked || maskSecret(row.key_hash),
+    name: row.name || 'NewAPI Key',
+    quota: numberValue(row.quota, 0),
+    status,
+    provider: 'newapi',
+    expiresAt: toIso(row.expires_at) ?? now(),
+    createdAt: toIso(row.created_at) ?? now(),
+    revokedAt: toIso(row.revoked_at),
+  }
+}
+
+async function listTemporaryKeys(env: WorkerEnv, userId: string) {
+  await ensureNotificationSchema(env)
+  if (shouldUseD1(env)) {
+    const result = await env.LOCAL_DB!
+      .prepare('select * from ai_temporary_keys where user_id = ?1 and provider = ?2 order by created_at desc limit 20')
+      .bind(userId, 'newapi')
+      .all<AiTemporaryKeyRow>()
+    return (result.results ?? []).map(mapTemporaryKey)
+  }
+
+  const result = await getPool(env).query<AiTemporaryKeyRow>(
+    'select * from ai_temporary_keys where user_id = $1 and provider = $2 order by created_at desc limit 20',
+    [userId, 'newapi'],
+  )
+  return result.rows.map(mapTemporaryKey)
+}
+
+async function getActiveTemporaryKey(env: WorkerEnv, userId: string, keyId: string) {
+  await ensureNotificationSchema(env)
+  if (shouldUseD1(env)) {
+    return await env.LOCAL_DB!
+      .prepare('select * from ai_temporary_keys where id = ?1 and user_id = ?2 and provider = ?3 and status = ?4')
+      .bind(keyId, userId, 'newapi', 'active')
+      .first<AiTemporaryKeyRow>()
+  }
+
+  const result = await getPool(env).query<AiTemporaryKeyRow>(
+    'select * from ai_temporary_keys where id = $1 and user_id = $2 and provider = $3 and status = $4',
+    [keyId, userId, 'newapi', 'active'],
+  )
+  return result.rows[0] ?? null
+}
+
+async function revokeTemporaryKey(env: WorkerEnv, keyId: string) {
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare('update ai_temporary_keys set status = ?2, revoked_at = current_timestamp where id = ?1')
+      .bind(keyId, 'revoked')
+      .run()
+    return
+  }
+
+  await getPool(env).query(
+    'update ai_temporary_keys set status = $2, revoked_at = now() where id = $1',
+    [keyId, 'revoked'],
+  )
+}
+
+async function listTemporaryKeysForRequest(request: Request, env: WorkerEnv) {
+  const auth = await getAuthenticatedRequest(request, env)
+  const config = await getEffectiveAiConfig(env)
+  return {
+    keys: await listTemporaryKeys(env, auth.user.id),
+    config: serializePublicAiConfig(config),
+  }
+}
+
+async function deleteTemporaryKey(request: Request, env: WorkerEnv) {
+  const auth = await getAuthenticatedRequest(request, env)
+  const keyId = new URL(request.url).pathname.split('/').pop()?.trim() || ''
+  if (!keyId)
+    throw new Error('NewAPI Key ID 不能为空')
+
+  const key = await getActiveTemporaryKey(env, auth.user.id, keyId)
+  if (!key)
+    throw new Error('NewAPI Key 不存在或已删除')
+
+  const config = await getEffectiveAiConfig(env)
+  if (key.upstream_token_id)
+    await deleteNewApiToken(config, key.upstream_token_id)
+
+  await revokeTemporaryKey(env, key.id)
+  return { ok: true }
 }
 
 async function insertImageJob(env: WorkerEnv, row: {
@@ -880,8 +1148,14 @@ export async function handleAiRequest(request: Request, env: WorkerEnv) {
       return json(serializeAiConfig(await saveAiConfig(env, payload)))
     }
 
+    if (path === '/temporary-keys' && request.method === 'GET')
+      return json(await listTemporaryKeysForRequest(request, env))
+
     if (path === '/temporary-key' && request.method === 'POST')
       return json(await createTemporaryKey(request, env))
+
+    if (path.startsWith('/temporary-keys/') && request.method === 'DELETE')
+      return json(await deleteTemporaryKey(request, env))
 
     if (path === '/reviews' && request.method === 'POST')
       return json(await createApplicationReview(request, env))

@@ -50,10 +50,6 @@ interface RechargeCreatePayload {
   userId?: string
 }
 
-interface WorkerEnvWithRechargeRate extends WorkerEnv {
-  LDC_POINTS_PER_LDC?: string
-}
-
 const ORDER_PREFIX = 'TGW'
 const MAX_JSON_BYTES = 64 * 1024
 const DEFAULT_POINTS_PER_LDC = 10
@@ -139,17 +135,17 @@ function normalizePointsPerLdc(value: unknown) {
   return Math.max(1, Math.min(1000, Math.trunc(rate)))
 }
 
-async function getEffectiveRechargeSettings(env: WorkerEnvWithRechargeRate) {
+async function getEffectiveRechargeSettings(env: WorkerEnv) {
   const stored = await getStoredRechargeConfig(env)
   return {
     enabled: stored
       ? !!stored.enabled
-      : env.LDC_PAYMENT_ENABLED === 'true',
-    gatewayBaseUrl: stored?.gateway_base_url || env.LDC_GATEWAY_BASE_URL || 'https://credit.linux.do/epay',
-    pid: stored?.pid || env.LDC_PID || '',
-    key: stored?.key || env.LDC_KEY || '',
-    pointsPerLdc: normalizePointsPerLdc(stored?.points_per_ldc ?? env.LDC_POINTS_PER_LDC),
-    source: stored ? 'admin' : env.LDC_PID && env.LDC_KEY ? 'env' : 'empty',
+      : false,
+    gatewayBaseUrl: stored?.gateway_base_url || 'https://credit.linux.do/epay',
+    pid: stored?.pid || '',
+    key: stored?.key || '',
+    pointsPerLdc: normalizePointsPerLdc(stored?.points_per_ldc),
+    source: stored ? 'admin' : 'empty',
   }
 }
 
@@ -451,14 +447,8 @@ async function handleRechargeConfig(request: Request, env: WorkerEnv) {
 
     return json({
       ok: true,
-      message: '充值配置已保存到服务端配置；环境变量仅作为旧部署兜底。',
-      env: {
-        LDC_PAYMENT_ENABLED: config.enabled ? 'true' : 'false',
-        LDC_GATEWAY_BASE_URL: config.gatewayBaseUrl,
-        LDC_POINTS_PER_LDC: String(config.pointsPerLdc),
-        LDC_PID: config.pid,
-        LDC_KEY: '<生产环境建议通过 wrangler secret put LDC_KEY 写入>',
-      },
+      message: '充值配置已保存到服务端配置。',
+      env: {},
     })
   }
 
