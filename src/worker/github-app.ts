@@ -528,10 +528,6 @@ function pickEmail(user: GitHubUserResponse, emails: GitHubEmailResponse[]) {
     || `${user.login}@users.noreply.github.com`
 }
 
-function createTransactionId() {
-  return `tx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
 function createUserId(githubId: number) {
   return `github_${githubId}`
 }
@@ -576,19 +572,11 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
         githubAuthorizedAt: now(),
         studentVerified: false,
       },
-      points: 120,
+      points: 0,
       createdAt: now(),
       lastLoginAt: now(),
     }
     state.users.push(localUser)
-    state.transactions.unshift({
-      id: createTransactionId(),
-      userId: localUser.id,
-      delta: 120,
-      type: 'grant',
-      reason: 'GitHub App 首次授权登录体验积分',
-      createdAt: now(),
-    })
   }
   else {
     localUser.lastLoginAt = now()

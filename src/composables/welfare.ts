@@ -1496,21 +1496,13 @@ export function useWelfareStore() {
         githubAuthorized: false,
         studentVerified: false,
       },
-      points: 100000,
+      points: 0,
       createdAt: now(),
       lastLoginAt: now(),
     }
 
     state.users.push(admin)
     state.currentUserId = admin.id
-    state.transactions.unshift({
-      id: createId('tx'),
-      userId: admin.id,
-      delta: 100000,
-      type: 'grant',
-      reason: '首次创建管理员初始化积分',
-      createdAt: now(),
-    })
   }
 
   function loginAsAdmin() {
