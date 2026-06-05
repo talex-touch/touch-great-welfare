@@ -2,7 +2,7 @@ import type { TemporaryKeyView } from './ai'
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
-import type { CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType } from './welfare'
+import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType } from './welfare'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, saveAiConfig } from './ai'
@@ -318,6 +318,7 @@ export const studentEducationLevelOptions = [
 export const studentFiles = ref<UploadLikeFile[]>([])
 
 export const reviewDrafts = reactive<Record<string, string>>({})
+export const supplementDrafts = reactive<Record<string, string>>({})
 export const rejectFraudulentDrafts = reactive<Record<string, boolean>>({})
 export const crowdReviewDrafts = reactive<Record<string, {
   decision: CrowdReviewDecision
@@ -471,6 +472,7 @@ export function useWelfareUiState() {
     const map: Record<string, string> = {
       reserved: '已提交',
       pending_review: '待审核',
+      needs_supplement: '待补充材料',
       processing: '处理中',
       answered: '已答复',
       completed: '已结束',
@@ -494,7 +496,7 @@ export function useWelfareUiState() {
       return 'info'
     if (status === 'partial_approved')
       return 'info'
-    if (['pending_review', 'processing', 'pending', 'submitted', 'in_review', 'draft'].includes(status))
+    if (['pending_review', 'needs_supplement', 'processing', 'pending', 'submitted', 'in_review', 'draft'].includes(status))
       return 'warning'
     if (['rejected', 'cancelled'].includes(status))
       return 'danger'
@@ -712,7 +714,15 @@ export function useWelfareUiState() {
     welfare.completeApplication(applicationId)
   }
 
-  function addApplicationMessage(applicationId: string, type: 'comment' | 'result_submission', content: string, attachments: UploadLikeFile[] = []) {
+  function requestApplicationSupplement(applicationId: string, content: string) {
+    welfare.requestApplicationSupplement(applicationId, content)
+  }
+
+  function submitApplicationSupplement(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
+    welfare.submitApplicationSupplement(applicationId, content, attachments)
+  }
+
+  function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: UploadLikeFile[] = []) {
     welfare.addApplicationMessage(applicationId, type, content, attachments)
   }
 
@@ -1396,6 +1406,7 @@ export function useWelfareUiState() {
     studentGradeOptions,
     studentSchoolSuggestions: STUDENT_SCHOOL_SUGGESTIONS,
     reviewDrafts,
+    supplementDrafts,
     rejectFraudulentDrafts,
     crowdReviewDrafts,
     pointDrafts,
@@ -1444,6 +1455,8 @@ export function useWelfareUiState() {
     submitCrowdReviewDraft,
     rejectApplicationWithOptions,
     completeApplication,
+    requestApplicationSupplement,
+    submitApplicationSupplement,
     addApplicationMessage,
     submitApplicationResult,
     refreshRechargeConfig,

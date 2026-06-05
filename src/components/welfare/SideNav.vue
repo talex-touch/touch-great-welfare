@@ -36,7 +36,7 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
 </script>
 
 <template>
-  <aside class="space-y-3 lg:top-24 lg:self-start lg:sticky">
+  <aside class="space-y-3 lg:self-start lg:top-24 lg:sticky">
     <TxCard class="solid-panel" background="pure" :padding="10" :radius="26">
       <button
         v-for="item in navItems"

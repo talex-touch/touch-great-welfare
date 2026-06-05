@@ -5,8 +5,8 @@ import { loadWelfareState, saveWelfareState } from './welfare-persistence'
 
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
-export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
-export type ApplicationMessageType = 'comment' | 'result_submission' | 'system'
+export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'needs_supplement' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
+export type ApplicationMessageType = 'comment' | 'supplement' | 'result_submission' | 'system'
 export type StudentStatus = 'pending' | 'approved' | 'rejected'
 export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustment' | 'grant'
 export type AiReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_human' | 'failed'
@@ -196,6 +196,8 @@ export interface WelfareApplication {
   expediteCost?: number
   contextAppendCost?: number
   contextAppendUntil?: string
+  postApprovalSupplementLimit?: number
+  postApprovalSupplementCount?: number
   cooldownUntil?: string
   answer?: string
   messages?: ApplicationMessage[]
@@ -779,6 +781,20 @@ export function createFraudRejectionCooldownUntil(reviewedAt: string) {
   return addDays(reviewedAt, REJECTION_FRAUD_COOLDOWN_DAYS)
 }
 
+function proPostApprovalSupplementLimit(application: Pick<WelfareApplication, 'type' | 'postApprovalSupplementLimit'>) {
+  if (application.type !== 'pro')
+    return undefined
+
+  return application.postApprovalSupplementLimit ?? 1
+}
+
+function proPostApprovalSupplementCount(application: Pick<WelfareApplication, 'type' | 'postApprovalSupplementCount'>) {
+  if (application.type !== 'pro')
+    return undefined
+
+  return application.postApprovalSupplementCount ?? 0
+}
+
 function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
@@ -893,6 +909,8 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       expediteCost: application.expediteCost ?? (application.type === 'pro' && expedited ? PRO_EXPEDITE_COST : 0),
       contextAppendCost: application.contextAppendCost ?? (application.type === 'pro' ? PRO_CONTEXT_APPEND_COST : undefined),
       contextAppendUntil: application.contextAppendUntil ?? application.retentionExpiresAt ?? createRetentionExpiresAt(createdAt, storageExtended),
+      postApprovalSupplementLimit: proPostApprovalSupplementLimit(application),
+      postApprovalSupplementCount: proPostApprovalSupplementCount(application),
     }
   })
 
@@ -937,7 +955,7 @@ function userReviewStats(userId: string, source: Pick<WelfareState, 'application
       stats.approved += 1
     if (application.status === 'rejected')
       stats.rejected += 1
-    if (['pending_review', 'processing', 'submitted', 'in_review'].includes(application.status))
+    if (['pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review'].includes(application.status))
       stats.pending += 1
   }
 
@@ -1113,7 +1131,7 @@ export function aggregateResourceApplicationStatus(items: Pick<ApplicationItem, 
 }
 
 function isActiveApplication(status: RequestStatus) {
-  return ['reserved', 'pending_review', 'processing', 'submitted', 'in_review'].includes(status)
+  return ['reserved', 'pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review'].includes(status)
 }
 
 function isActiveStudentVerification(status: StudentStatus) {
@@ -1382,10 +1400,10 @@ export function useWelfareStore() {
     return scoreDiff || right.createdAt.localeCompare(left.createdAt)
   }
   const pendingProApplications = computed(() => state.applications
-    .filter(item => item.type === 'pro' && ['pending_review', 'processing'].includes(item.status))
+    .filter(item => item.type === 'pro' && ['pending_review', 'needs_supplement', 'processing'].includes(item.status))
     .sort(compareReviewPriority))
   const pendingApplications = computed(() => state.applications
-    .filter(item => ['pending_review', 'processing', 'submitted', 'in_review'].includes(item.status))
+    .filter(item => ['pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review'].includes(item.status))
     .sort(compareReviewPriority))
   const pendingStudentVerifications = computed(() => state.studentVerifications
     .filter(item => item.status === 'pending')
@@ -1628,6 +1646,8 @@ export function useWelfareStore() {
       expediteCost,
       contextAppendCost: payload.type === 'pro' ? PRO_CONTEXT_APPEND_COST : undefined,
       contextAppendUntil: createRetentionExpiresAt(createdAt, storageExtended),
+      postApprovalSupplementLimit: payload.type === 'pro' ? 1 : undefined,
+      postApprovalSupplementCount: payload.type === 'pro' ? 0 : undefined,
       createdAt,
     }
 
@@ -1935,6 +1955,72 @@ export function useWelfareStore() {
     })
   }
 
+  function pushApplicationMessage(application: WelfareApplication, type: ApplicationMessageType, content: string, attachments: FileLike[] = []) {
+    if (!application.messages)
+      application.messages = []
+
+    application.messages.push({
+      id: createId('msg'),
+      applicationId: application.id,
+      userId: currentUser.value!.id,
+      type,
+      content,
+      attachments: toAttachmentMeta(attachments),
+      createdAt: now(),
+    })
+  }
+
+  function requestApplicationSupplement(applicationId: string, content: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('只有审核中的申请可以请求补充材料')
+
+    const normalizedContent = sanitizeRichText(content)
+    if (isRichTextEmpty(normalizedContent))
+      throw new Error('请填写补充材料要求')
+
+    application.status = 'needs_supplement'
+    application.processingStartedAt ??= now()
+    pushApplicationMessage(application, 'system', normalizedContent)
+  }
+
+  function submitApplicationSupplement(applicationId: string, content: string, attachments: FileLike[] = []) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (application.userId !== currentUser.value.id)
+      throw new Error('只能补充自己的申请材料')
+    if (!['needs_supplement', 'answered'].includes(application.status))
+      throw new Error('该申请状态不支持补充材料')
+    if (application.status === 'answered') {
+      if (application.type !== 'pro')
+        throw new Error('只有 Pro 申请通过后支持免费补充材料')
+      const limit = proPostApprovalSupplementLimit(application) ?? 0
+      const count = proPostApprovalSupplementCount(application) ?? 0
+      if (count >= limit)
+        throw new Error('本次 Pro 申请的免费补充次数已用完')
+      application.postApprovalSupplementCount = count + 1
+    }
+
+    const normalizedContent = sanitizeRichText(content)
+    if (isRichTextEmpty(normalizedContent))
+      throw new Error('请填写补充材料内容')
+    if (totalBytes(attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('附件总大小不能超过 200MB')
+
+    pushApplicationMessage(application, 'supplement', normalizedContent, attachments)
+    if (application.status === 'needs_supplement')
+      application.status = 'pending_review'
+  }
+
   function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: FileLike[] = []) {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
@@ -1942,8 +2028,12 @@ export function useWelfareStore() {
     const application = state.applications.find(item => item.id === applicationId)
     if (!application)
       throw new Error('申请不存在')
-    if (!['pending_review', 'processing', 'answered'].includes(application.status))
+    if (!['pending_review', 'processing', 'needs_supplement', 'answered'].includes(application.status))
       throw new Error('该申请状态不支持追加消息')
+    if (type === 'supplement') {
+      submitApplicationSupplement(applicationId, content, attachments)
+      return
+    }
 
     const normalizedContent = sanitizeRichText(content)
     if (isRichTextEmpty(normalizedContent))
@@ -1951,18 +2041,7 @@ export function useWelfareStore() {
     if (totalBytes(attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('附件总大小不能超过 200MB')
 
-    if (!application.messages)
-      application.messages = []
-
-    application.messages.push({
-      id: createId('msg'),
-      applicationId: application.id,
-      userId: currentUser.value.id,
-      type,
-      content: normalizedContent,
-      attachments: toAttachmentMeta(attachments),
-      createdAt: now(),
-    })
+    pushApplicationMessage(application, type, normalizedContent, attachments)
   }
 
   function submitApplicationResult(applicationId: string, content: string, attachments: FileLike[] = []) {
@@ -2257,6 +2336,8 @@ export function useWelfareStore() {
     answerApplication,
     rejectApplication,
     completeApplication,
+    requestApplicationSupplement,
+    submitApplicationSupplement,
     addApplicationMessage,
     submitApplicationResult,
     answerProApplication,

@@ -69,6 +69,7 @@ const applicationStatusText: Record<string, string> = {
   draft: '草稿',
   reserved: '已提交',
   pending_review: '待审核',
+  needs_supplement: '待补充材料',
   processing: '处理中',
   answered: '已答复',
   completed: '已完成',
@@ -135,6 +136,7 @@ const applicationStatusFilterOptions = [
   { value: ALL_FILTER, label: '全部状态' },
   { value: 'reserved', label: applicationStatusText.reserved },
   { value: 'pending_review', label: applicationStatusText.pending_review },
+  { value: 'needs_supplement', label: applicationStatusText.needs_supplement },
   { value: 'answered', label: applicationStatusText.answered },
   { value: 'completed', label: applicationStatusText.completed },
   { value: 'rejected', label: applicationStatusText.rejected },
@@ -240,7 +242,7 @@ function signedPoints(value: number) {
 function statusPillClass(status: string) {
   if (['answered', 'approved', 'completed', 'closed', 'success'].includes(status))
     return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
-  if (['pending_review', 'processing', 'pending', 'reserved', 'warning'].includes(status))
+  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning'].includes(status))
     return 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'
   if (['rejected', 'danger'].includes(status))
     return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'
@@ -624,7 +626,7 @@ const selectedUserDetail = computed(() => {
       rechargeIncome: sumTransactions(rechargeIncome),
       manualAdjustment: sumTransactions(manualAdjustments),
       applicationCount: applications.length,
-      pendingApplications: applications.filter(item => ['pending_review', 'processing', 'reserved'].includes(item.status)).length,
+      pendingApplications: applications.filter(item => ['pending_review', 'needs_supplement', 'processing', 'reserved'].includes(item.status)).length,
       rejectedApplications: applications.filter(item => item.status === 'rejected').length,
       studentCount: studentVerifications.length,
       approvedStudents: studentVerifications.filter(item => item.status === 'approved').length,
@@ -685,7 +687,7 @@ const dashboardMetricScope = computed(() => ({
 const dashboardMetrics = computed(() => {
   const { users, applications, studentVerifications, transactions } = dashboardMetricScope.value
   const adminCount = users.filter(user => user.role === 'admin').length
-  const pendingApplicationCount = applications.filter(item => item.status === 'pending_review').length
+  const pendingApplicationCount = applications.filter(item => ['pending_review', 'needs_supplement'].includes(item.status)).length
   const pendingStudentCount = studentVerifications.filter(item => item.status === 'pending').length
   const pointsBalance = users.reduce((sum, user) => sum + user.points, 0)
   const pointsIn = transactions.filter(item => item.delta > 0).reduce((sum, item) => sum + item.delta, 0)
@@ -707,7 +709,7 @@ const dashboardMetrics = computed(() => {
     {
       label: '业务申请',
       value: applications.length.toLocaleString('zh-CN'),
-      note: `${applications.filter(item => item.status === 'pending_review').length} 个待审核 / ${applications.filter(item => item.status === 'answered').length} 个已答复`,
+      note: `${applications.filter(item => ['pending_review', 'needs_supplement'].includes(item.status)).length} 个待处理 / ${applications.filter(item => item.status === 'answered').length} 个已答复`,
       icon: 'i-carbon-data-table',
     },
     {
@@ -749,7 +751,7 @@ const dashboardActivityRows = computed(() => {
       title: application.title,
       user: userDisplayName(application.userId),
       detail: `${applicationTypeText[application.type]} · ${applicationStatusText[application.status]}`,
-      tone: application.status === 'rejected' ? 'danger' : application.status === 'pending_review' ? 'warning' : 'success',
+      tone: application.status === 'rejected' ? 'danger' : ['pending_review', 'needs_supplement'].includes(application.status) ? 'warning' : 'success',
       createdAt: application.createdAt,
     })
   }
@@ -829,7 +831,7 @@ const dataGroups = computed(() => [
   {
     title: '公益申请',
     count: state.applications.length,
-    note: `${state.applications.filter(item => item.status === 'pending_review').length} 个待审核，${state.applications.filter(item => item.status === 'rejected').length} 个已退回`,
+    note: `${state.applications.filter(item => ['pending_review', 'needs_supplement'].includes(item.status)).length} 个待处理，${state.applications.filter(item => item.status === 'rejected').length} 个已退回`,
   },
   {
     title: '学生认证',
@@ -937,7 +939,7 @@ const auditEvents = computed(() => {
       action: '提交申请',
       actor: userDisplayName(application.userId),
       detail: `${applicationTypeText[application.type]} · ${application.title} · ${applicationStatusText[application.status] ?? application.status}`,
-      tone: application.status === 'pending_review' ? 'warning' : 'info',
+      tone: ['pending_review', 'needs_supplement'].includes(application.status) ? 'warning' : 'info',
     })
 
     if (application.reviewedAt) {

@@ -31,6 +31,7 @@ const {
   crowdReviewsFor,
   submitCrowdReviewDraft,
   answerApplication,
+  requestApplicationSupplement,
   rejectApplicationWithOptions,
   approveStudentVerification,
   rejectStudentVerification,
@@ -75,6 +76,14 @@ function onRejectApplication(id: string) {
     rejectApplicationWithOptions(id, reviewDrafts[id] ?? '材料不足或不符合公益支持范围。', { fraudulent })
     delete reviewDrafts[id]
   }, fraudulent ? '已退回申请并记录造假限制' : '已退回申请并按规则处理')
+}
+
+function onRequestSupplement(id: string) {
+  runSafely(() => {
+    requestApplicationSupplement(id, reviewDrafts[id] ?? '请补充项目背景、当前进展、希望支持的具体问题和必要链接。')
+    delete reviewDrafts[id]
+    delete rejectFraudulentDrafts[id]
+  }, '已请求用户补充材料')
 }
 
 function onReviewResourceItem(applicationId: string, itemId: string) {
@@ -282,17 +291,29 @@ onMounted(() => {
               </div>
             </div>
           </div>
-          <RichTextEditor v-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : '给用户的审核答复'" />
-          <label v-if="isAdmin && item.type !== 'resource'" class="option-check mt-4">
+          <div v-if="isAdmin && item.status === 'needs_supplement'" class="text-amber-900 mt-4 p-4 rounded-2xl bg-amber-50 dark:text-amber-100 dark:bg-amber-950/20">
+            <div class="text-sm fw-900 flex gap-2 items-center">
+              <span class="i-carbon-time" />
+              等待用户补充材料
+            </div>
+            <p class="text-xs leading-5 mt-2 opacity-80">
+              用户提交补充后会自动回到待审核队列，补充内容会进入申请详情的协作线程。
+            </p>
+          </div>
+          <RichTextEditor v-else-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : item.type === 'pro' ? '给用户的审核答复，或填写需要补充的具体材料' : '给用户的审核答复'" />
+          <label v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement'" class="option-check mt-4">
             <TxCheckbox v-model="rejectFraudulentDrafts[item.id]" variant="checkmark" aria-label="判定造假或不实包装" />
             <span>
               <b>判定造假或不实包装</b>
               <small>仅在确认存在虚构项目、冒用材料、AI 包装成本人经历、隐瞒关键事实等明显不实情况时勾选；退回后 7 天内不能提交同类申请。</small>
             </span>
           </label>
-          <div v-if="isAdmin && item.type !== 'resource'" class="mt-4 flex flex-wrap gap-3">
+          <div v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement'" class="mt-4 flex flex-wrap gap-3">
             <TxButton variant="primary" @click="onApproveApplication(item.id, item.type)">
               {{ item.type === 'image' ? '通过并生成图片' : '通过并答复' }}
+            </TxButton>
+            <TxButton v-if="item.type === 'pro'" variant="secondary" @click="onRequestSupplement(item.id)">
+              请求补充材料
             </TxButton>
             <TxButton variant="danger" @click="onRejectApplication(item.id)">
               退回

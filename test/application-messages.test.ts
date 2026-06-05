@@ -10,7 +10,7 @@ describe('application message thread', () => {
   it('answered status is excluded from pendingApplications filter', () => {
     // answered apps should NOT appear in the pending review queue
     // they are active (can submit results) but admin has already replied
-    const pendingStatuses = ['pending_review', 'processing', 'submitted', 'in_review']
+    const pendingStatuses = ['pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review']
     expect(pendingStatuses).not.toContain('answered')
     expect(pendingStatuses).not.toContain('completed')
   })
@@ -27,26 +27,29 @@ describe('application message thread', () => {
       'draft',
       'reserved',
       'pending_review',
+      'needs_supplement',
       'processing',
       'answered',
       'completed',
       'closed',
       'rejected',
     ]
-    // A valid flow: pending_review → answered → completed
-    const flow = statuses.filter(s => ['pending_review', 'answered', 'completed'].includes(s))
-    expect(flow).toEqual(['pending_review', 'answered', 'completed'])
+    // A valid flow: pending_review → needs_supplement → answered → completed
+    const flow = statuses.filter(s => ['pending_review', 'needs_supplement', 'answered', 'completed'].includes(s))
+    expect(flow).toEqual(['pending_review', 'needs_supplement', 'answered', 'completed'])
   })
 
   it('applicationMessageType covers all conversation types', () => {
     const types: string[] = [
       'comment',
+      'supplement',
       'result_submission',
       'system',
     ]
-    expect(types.length).toBe(3)
+    expect(types.length).toBe(4)
     // result_submission is distinct from comment
     expect(types).toContain('result_submission')
+    expect(types).toContain('supplement')
     expect(types).toContain('comment')
     expect(types).toContain('system')
   })
@@ -54,7 +57,7 @@ describe('application message thread', () => {
   it('isActiveApplication excludes answered and completed', () => {
     // isActiveApplication controls request creation limits
     // answered/completed apps should NOT block new requests
-    const active = ['reserved', 'pending_review', 'processing', 'submitted', 'in_review']
+    const active = ['reserved', 'pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review']
     expect(active).not.toContain('answered')
     expect(active).not.toContain('completed')
     expect(active).not.toContain('closed')
@@ -64,7 +67,7 @@ describe('application message thread', () => {
   it('completeApplication only valid from answered status', () => {
     // Business rule: can only mark complete if already answered
     const validFrom = 'answered'
-    const invalidFrom = ['pending_review', 'processing', 'completed', 'rejected']
+    const invalidFrom = ['pending_review', 'needs_supplement', 'processing', 'completed', 'rejected']
     expect(invalidFrom).not.toContain(validFrom)
   })
 })

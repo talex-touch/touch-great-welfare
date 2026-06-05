@@ -52,7 +52,7 @@ function backToList() {
   router.push('/dashboard/apply')
 }
 
-function handleSendMessage(type: 'comment' | 'result_submission', content: string) {
+function handleSendMessage(type: 'comment' | 'supplement' | 'result_submission', content: string) {
   if (!application.value)
     return
 
@@ -136,6 +136,10 @@ function handleComplete() {
             <div class="application-detail-stat">
               <span>处理截止</span>
               <b>{{ formatDate(application.processingDueAt) }}</b>
+            </div>
+            <div v-if="application.type === 'pro'" class="application-detail-stat">
+              <span>通过后免费补充</span>
+              <b>{{ Math.max(0, (application.postApprovalSupplementLimit ?? 0) - (application.postApprovalSupplementCount ?? 0)) }}/{{ application.postApprovalSupplementLimit ?? 0 }} 次</b>
             </div>
           </div>
 
@@ -287,6 +291,9 @@ function handleComplete() {
           :application-id="applicationId"
           :application-user-id="application.userId"
           :application-status="application.status"
+          :application-type="application.type"
+          :post-approval-supplement-limit="application.postApprovalSupplementLimit"
+          :post-approval-supplement-count="application.postApprovalSupplementCount"
           @send="handleSendMessage"
         />
 

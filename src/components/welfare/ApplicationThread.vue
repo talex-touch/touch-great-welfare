@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApplicationMessage } from '~/composables/welfare'
-import { TxButton, TxCard } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref, watch } from 'vue'
 import { formatBytes, formatDate, useWelfareStore } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
@@ -12,10 +12,13 @@ const props = defineProps<{
   applicationId: string
   applicationUserId: string
   applicationStatus: string
+  applicationType: string
+  postApprovalSupplementLimit?: number
+  postApprovalSupplementCount?: number
 }>()
 
 const emit = defineEmits<{
-  send: [type: 'comment' | 'result_submission', content: string]
+  send: [type: 'comment' | 'supplement' | 'result_submission', content: string]
 }>()
 
 const welfare = useWelfareStore()
@@ -25,7 +28,14 @@ const newMessage = ref('')
 const sending = ref(false)
 
 const isActive = computed(() =>
-  ['pending_review', 'processing', 'answered'].includes(props.applicationStatus))
+  ['pending_review', 'needs_supplement', 'processing', 'answered'].includes(props.applicationStatus))
+
+const remainingFreeSupplements = computed(() =>
+  Math.max(0, (props.postApprovalSupplementLimit ?? 0) - (props.postApprovalSupplementCount ?? 0)))
+
+const shouldSendSupplement = computed(() =>
+  props.applicationStatus === 'needs_supplement'
+  || (props.applicationType === 'pro' && props.applicationStatus === 'answered' && remainingFreeSupplements.value > 0))
 
 const canPost = computed(() =>
   isActive.value && newMessage.value.trim().length > 0)
@@ -48,7 +58,7 @@ function handleSend() {
     return
 
   sending.value = true
-  emit('send', 'comment', content)
+  emit('send', shouldSendSupplement.value ? 'supplement' : 'comment', content)
   newMessage.value = ''
   sending.value = false
 }
@@ -65,16 +75,60 @@ watch(
 const sortedMessages = computed(() =>
   [...props.messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
 )
+
+const pipelineSteps = computed(() => {
+  const status = props.applicationStatus
+  return [
+    { key: 'pending_review', label: '提交审核', done: ['pending_review', 'needs_supplement', 'processing', 'answered', 'completed'].includes(status), active: status === 'pending_review' },
+    { key: 'needs_supplement', label: '补充材料', done: ['processing', 'answered', 'completed'].includes(status), active: status === 'needs_supplement' },
+    { key: 'answered', label: '通过答复', done: ['answered', 'completed'].includes(status), active: status === 'answered' },
+    { key: 'completed', label: '完成归档', done: status === 'completed', active: status === 'completed' },
+  ]
+})
+
+const inputPlaceholder = computed(() => {
+  if (props.applicationStatus === 'needs_supplement')
+    return '按管理员要求补充材料、说明或链接…'
+  if (props.applicationType === 'pro' && props.applicationStatus === 'answered' && remainingFreeSupplements.value > 0)
+    return '补充一次通过后的材料或回复，本次不扣积分…'
+  return '输入消息…'
+})
 </script>
 
 <template>
   <TxCard class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
-    <h3 class="text-xl fw-900 mb-1">
-      沟通记录
-    </h3>
-    <p class="text-sm text-slate-500 mb-5 dark:text-slate-400">
-      申请人与管理员可以在此沟通，结果提交也会沉淀到此处。
-    </p>
+    <div class="mb-5 flex flex-wrap gap-3 items-start justify-between">
+      <div>
+        <h3 class="text-xl fw-900 mb-1">
+          协作线程
+        </h3>
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+          审核、补充材料、交付结果都会沉淀在同一条时间线中。
+        </p>
+      </div>
+      <TxStatusBadge
+        v-if="applicationType === 'pro'"
+        :text="`免费补充 ${remainingFreeSupplements}/${postApprovalSupplementLimit ?? 0}`"
+        status="info"
+      />
+    </div>
+
+    <div class="mb-5 gap-2 grid md:grid-cols-4">
+      <div
+        v-for="step in pipelineSteps"
+        :key="step.key"
+        class="text-sm px-3 py-2 border rounded-2xl flex gap-2 items-center" :class="[
+          step.active
+            ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/20 dark:text-amber-100'
+            : step.done
+              ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900 dark:border-emerald-400/20 dark:bg-emerald-950/10 dark:text-emerald-100'
+              : 'border-black/8 bg-slate-50 text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400',
+        ]"
+      >
+        <span :class="step.done ? 'i-carbon-checkmark-outline' : step.active ? 'i-carbon-time' : 'i-carbon-circle-dash'" />
+        <span class="fw-800">{{ step.label }}</span>
+      </div>
+    </div>
 
     <!-- Message timeline -->
     <div class="pr-1 max-h-[520px] overflow-y-auto space-y-4" :class="{ 'mb-4': isActive }">
@@ -125,10 +179,10 @@ const sortedMessages = computed(() =>
               ]"
             >
               <!-- Result submission badge -->
-              <div v-if="msg.type === 'result_submission'" class="mb-2 flex gap-1.5 items-center">
-                <span class="i-carbon-result text-xs" />
+              <div v-if="msg.type === 'result_submission' || msg.type === 'supplement'" class="mb-2 flex gap-1.5 items-center">
+                <span :class="msg.type === 'supplement' ? 'i-carbon-document-add text-xs' : 'i-carbon-result text-xs'" />
                 <span class="text-[10px] fw-800 tracking-wider px-1.5 py-0.5 rounded-full bg-white/20 uppercase">
-                  结果提交
+                  {{ msg.type === 'supplement' ? '补充材料' : '结果提交' }}
                 </span>
               </div>
 
@@ -160,12 +214,14 @@ const sortedMessages = computed(() =>
 
     <!-- Input area -->
     <div v-if="isActive" class="pt-4 border-t border-black/8 dark:border-white/10">
-      <RichTextEditor v-model="newMessage" placeholder="输入消息…" :min-height="80" />
+      <RichTextEditor v-model="newMessage" :placeholder="inputPlaceholder" :min-height="96" />
       <div class="mt-3 flex gap-3 items-center justify-between">
-        <span class="text-xs text-slate-400">支持富文本</span>
+        <span class="text-xs text-slate-400">
+          {{ shouldSendSupplement ? '将作为补充材料提交并进入审核时间线' : '支持富文本' }}
+        </span>
         <TxButton variant="primary" size="sm" :disabled="!canPost || sending" @click="handleSend">
           <span class="i-carbon-send" />
-          发送
+          {{ shouldSendSupplement ? '提交补充' : '发送' }}
         </TxButton>
       </div>
     </div>
