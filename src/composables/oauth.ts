@@ -1,6 +1,7 @@
 export interface PublicOAuthProvider {
   id: string
   name: string
+  logoUrl: string
   scopes: string
 }
 
@@ -9,6 +10,7 @@ export interface OAuthProviderConfigView extends PublicOAuthProvider {
   configured: boolean
   clientId: string
   clientSecretMasked: string
+  logoUrl: string
   callbackUrl: string
   authorizeUrl: string
   tokenUrl: string
@@ -20,6 +22,7 @@ export interface SaveOAuthProviderConfigPayload {
   id: string
   enabled: boolean
   name: string
+  logoUrl: string
   clientId: string
   clientSecret: string
   callbackUrl: string

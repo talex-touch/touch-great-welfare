@@ -9,6 +9,7 @@ interface OAuthProviderRecord {
   id: string
   enabled: number | boolean
   name: string
+  logo_url?: string | null
   client_id: string
   client_secret: string
   callback_url: string
@@ -23,6 +24,7 @@ interface OAuthProviderPayload {
   id?: string
   enabled?: boolean
   name?: string
+  logoUrl?: string
   clientId?: string
   clientSecret?: string
   callbackUrl?: string
@@ -193,6 +195,7 @@ async function ensureOAuthSchema(env: WorkerEnv) {
           id text primary key,
           enabled integer not null default 0,
           name text not null,
+          logo_url text not null default '',
           client_id text not null,
           client_secret text not null,
           callback_url text not null,
@@ -206,6 +209,10 @@ async function ensureOAuthSchema(env: WorkerEnv) {
         )
       `)
       .run()
+    await env.LOCAL_DB!
+      .prepare('alter table oauth_provider_config add column logo_url text not null default ""')
+      .run()
+      .catch(() => undefined)
     return
   }
 
@@ -226,6 +233,8 @@ async function ensureOAuthSchema(env: WorkerEnv) {
       updated_at timestamptz not null default now()
     )
   `)
+
+  await getPool(env).query('alter table oauth_provider_config add column if not exists logo_url text not null default \'\'')
 }
 
 async function listStoredProviders(env: WorkerEnv) {
@@ -260,13 +269,14 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
     await env.LOCAL_DB!
       .prepare(`
         insert into oauth_provider_config (
-          id, enabled, name, client_id, client_secret, callback_url,
+          id, enabled, name, logo_url, client_id, client_secret, callback_url,
           authorize_url, token_url, userinfo_url, issuer_url, scopes, updated_at
-        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, current_timestamp)
+        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, current_timestamp)
         on conflict (id)
         do update set
           enabled = excluded.enabled,
           name = excluded.name,
+          logo_url = excluded.logo_url,
           client_id = excluded.client_id,
           client_secret = excluded.client_secret,
           callback_url = excluded.callback_url,
@@ -281,6 +291,7 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
         provider.id,
         provider.enabled ? 1 : 0,
         provider.name,
+        provider.logo_url || '',
         provider.client_id,
         provider.client_secret,
         provider.callback_url,
@@ -296,13 +307,14 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
 
   await getPool(env).query(`
     insert into oauth_provider_config (
-      id, enabled, name, client_id, client_secret, callback_url,
+      id, enabled, name, logo_url, client_id, client_secret, callback_url,
       authorize_url, token_url, userinfo_url, issuer_url, scopes, updated_at
-    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
     on conflict (id)
     do update set
       enabled = excluded.enabled,
       name = excluded.name,
+      logo_url = excluded.logo_url,
       client_id = excluded.client_id,
       client_secret = excluded.client_secret,
       callback_url = excluded.callback_url,
@@ -316,6 +328,7 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
     provider.id,
     !!provider.enabled,
     provider.name,
+    provider.logo_url || '',
     provider.client_id,
     provider.client_secret,
     provider.callback_url,
@@ -352,6 +365,7 @@ function configView(provider: OAuthProviderRecord, request: Request) {
     enabled: !!provider.enabled,
     configured: providerConfigured(provider),
     name: provider.name,
+    logoUrl: provider.logo_url || '',
     clientId: provider.client_id,
     clientSecretMasked: maskSecret(provider.client_secret),
     callbackUrl: runtimeUrl(request, provider.callback_url),
@@ -369,6 +383,7 @@ async function handlePublicProviders(request: Request, env: WorkerEnv) {
     .map(provider => ({
       id: provider.id,
       name: provider.name,
+      logoUrl: provider.logo_url || '',
       scopes: provider.scopes,
     }))
   return json({ providers })
@@ -398,6 +413,7 @@ async function handleProviderConfigs(request: Request, env: WorkerEnv) {
         id,
         enabled: item.enabled !== false,
         name: item.name?.trim() || existing?.name || id,
+        logo_url: item.logoUrl?.trim() || existing?.logo_url || '',
         client_id: item.clientId?.trim() || existing?.client_id || '',
         client_secret: item.clientSecret?.trim() || existing?.client_secret || '',
         callback_url: item.callbackUrl?.trim() || existing?.callback_url || defaultCallbackUrl(request),

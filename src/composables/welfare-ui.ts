@@ -1122,6 +1122,7 @@ export function useWelfareUiState() {
     oauthProviderConfigs.value.push({
       id: `provider-${oauthProviderConfigs.value.length + 1}`,
       name: 'OIDC 登录',
+      logoUrl: '',
       enabled: true,
       configured: false,
       clientId: '',
@@ -1152,6 +1153,7 @@ export function useWelfareUiState() {
         id: provider.id,
         enabled: provider.enabled,
         name: provider.name,
+        logoUrl: provider.logoUrl,
         clientId: provider.clientId,
         clientSecret: provider.clientSecret,
         callbackUrl: provider.callbackUrl,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, StudentVerification, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -29,8 +30,6 @@ const {
   refreshGitHubAppConfig,
   persistGitHubAppConfig,
   refreshOAuthProviderConfigs,
-  addOAuthProviderConfig,
-  removeOAuthProviderConfig,
   persistOAuthProviderConfigs,
   persistApplicationPolicy,
   refreshAiConfig,
@@ -67,6 +66,27 @@ const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 const USER_DETAIL_LIMIT = 6
 const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
 const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
+type EditableOAuthProviderConfig = OAuthProviderConfigView & { clientSecret: string }
+
+const isOAuthProviderDialogOpen = ref(false)
+const oauthProviderDialogMode = ref<'create' | 'edit'>('create')
+const editingOAuthProviderId = ref('')
+const oauthProviderDraft = reactive<EditableOAuthProviderConfig>({
+  id: '',
+  name: '',
+  logoUrl: '',
+  enabled: true,
+  configured: false,
+  clientId: '',
+  clientSecret: '',
+  clientSecretMasked: '',
+  callbackUrl: '',
+  authorizeUrl: '',
+  tokenUrl: '',
+  userInfoUrl: '',
+  issuerUrl: '',
+  scopes: 'openid profile email',
+})
 
 const applicationTypeText: Record<string, string> = {
   code: 'LLMApi 申请',
@@ -1044,8 +1064,114 @@ function onRefreshOAuthProviderConfigs() {
   runSafely(() => refreshOAuthProviderConfigs(), 'OAuth/OIDC 登录源已刷新')
 }
 
-function onSaveOAuthProviderConfigs() {
-  runSafely(() => persistOAuthProviderConfigs(), 'OAuth/OIDC 登录源已保存')
+function defaultOAuthCallbackUrl() {
+  return typeof globalThis.location !== 'undefined' ? `${globalThis.location.origin}/api/oauth/callback` : '/api/oauth/callback'
+}
+
+function resetOAuthProviderDraft(provider?: EditableOAuthProviderConfig) {
+  Object.assign(oauthProviderDraft, provider
+    ? {
+        ...provider,
+        clientSecret: '',
+      }
+    : {
+        id: `provider-${oauthProviderConfigs.value.length + 1}`,
+        name: 'OIDC 登录',
+        logoUrl: '',
+        enabled: true,
+        configured: false,
+        clientId: '',
+        clientSecret: '',
+        clientSecretMasked: '',
+        callbackUrl: defaultOAuthCallbackUrl(),
+        authorizeUrl: '',
+        tokenUrl: '',
+        userInfoUrl: '',
+        issuerUrl: '',
+        scopes: 'openid profile email',
+      })
+}
+
+function openAddOAuthProviderDialog() {
+  oauthProviderDialogMode.value = 'create'
+  editingOAuthProviderId.value = ''
+  resetOAuthProviderDraft()
+  isOAuthProviderDialogOpen.value = true
+}
+
+function openEditOAuthProviderDialog(provider: EditableOAuthProviderConfig) {
+  oauthProviderDialogMode.value = 'edit'
+  editingOAuthProviderId.value = provider.id
+  resetOAuthProviderDraft(provider)
+  isOAuthProviderDialogOpen.value = true
+}
+
+function closeOAuthProviderDialog() {
+  isOAuthProviderDialogOpen.value = false
+}
+
+function oauthProviderPayloadFromDraft(): EditableOAuthProviderConfig {
+  return {
+    id: oauthProviderDraft.id.trim(),
+    name: oauthProviderDraft.name.trim(),
+    logoUrl: oauthProviderDraft.logoUrl.trim(),
+    enabled: oauthProviderDraft.enabled,
+    configured: oauthProviderDraft.configured,
+    clientId: oauthProviderDraft.clientId.trim(),
+    clientSecret: oauthProviderDraft.clientSecret,
+    clientSecretMasked: oauthProviderDraft.clientSecretMasked,
+    callbackUrl: oauthProviderDraft.callbackUrl.trim(),
+    authorizeUrl: oauthProviderDraft.authorizeUrl.trim(),
+    tokenUrl: oauthProviderDraft.tokenUrl.trim(),
+    userInfoUrl: oauthProviderDraft.userInfoUrl.trim(),
+    issuerUrl: oauthProviderDraft.issuerUrl.trim(),
+    scopes: oauthProviderDraft.scopes.trim() || 'openid profile email',
+  }
+}
+
+function saveOAuthProviderDialog() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    const next = oauthProviderPayloadFromDraft()
+    if (!next.id)
+      throw new Error('请填写登录源 ID')
+    if (!next.name)
+      throw new Error('请填写显示名称')
+
+    const duplicated = oauthProviderConfigs.value.some(provider => provider.id !== editingOAuthProviderId.value && provider.id === next.id)
+    if (duplicated)
+      throw new Error(`登录源 ID 重复：${next.id}`)
+
+    if (oauthProviderDialogMode.value === 'edit') {
+      oauthProviderConfigs.value = oauthProviderConfigs.value.map(provider =>
+        provider.id === editingOAuthProviderId.value ? next : provider,
+      )
+    }
+    else {
+      oauthProviderConfigs.value = [next, ...oauthProviderConfigs.value]
+    }
+
+    await persistOAuthProviderConfigs()
+    closeOAuthProviderDialog()
+  }, oauthProviderDialogMode.value === 'edit' ? '登录源已更新' : '登录源已添加')
+}
+
+function removeOAuthProvider(id: string) {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    oauthProviderConfigs.value = oauthProviderConfigs.value.filter(provider => provider.id !== id)
+    await persistOAuthProviderConfigs()
+  }, '登录源已移除')
+}
+
+function persistOAuthProviderListState() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistOAuthProviderConfigs()
+  }, '登录源列表已保存')
 }
 
 function saveApplicationPolicyConfig() {
@@ -1257,7 +1383,7 @@ onMounted(() => {
                 <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="onRefreshOAuthProviderConfigs">
                   刷新
                 </TxButton>
-                <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="addOAuthProviderConfig">
+                <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="openAddOAuthProviderDialog">
                   添加登录源
                 </TxButton>
               </div>
@@ -1267,77 +1393,137 @@ onMounted(() => {
               暂无 OAuth/OIDC 登录源。
             </div>
 
-            <div v-else class="mt-4 space-y-4">
-              <div v-for="provider in oauthProviderConfigs" :key="provider.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
-                <div class="flex flex-wrap gap-3 items-start justify-between">
-                  <div>
-                    <div class="text-base fw-900">
+            <div v-else class="admin-table mt-4">
+              <div class="admin-table-row admin-table-head grid-cols-[minmax(0,1.2fr)_120px_minmax(0,1fr)_120px_auto]">
+                <span>登录源</span>
+                <span>状态</span>
+                <span>授权端点</span>
+                <span>启用</span>
+                <span>操作</span>
+              </div>
+              <div v-for="provider in oauthProviderConfigs" :key="provider.id" class="admin-table-row grid-cols-[minmax(0,1.2fr)_120px_minmax(0,1fr)_120px_auto]">
+                <div class="flex gap-3 min-w-0 items-center">
+                  <span class="oauth-provider-logo">
+                    <img v-if="provider.logoUrl" :src="provider.logoUrl" :alt="provider.name">
+                    <span v-else class="i-carbon-login" />
+                  </span>
+                  <div class="min-w-0">
+                    <div class="fw-900 truncate">
                       {{ provider.name || provider.id }}
                     </div>
-                    <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
-                      {{ provider.id }} · {{ provider.configured ? '配置完整' : '待配置' }}
+                    <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                      {{ provider.id }} · {{ provider.scopes }}
                     </div>
                   </div>
-                  <div class="flex gap-2 items-center">
-                    <label class="option-check compact">
-                      <TxCheckbox v-model="provider.enabled" variant="checkmark" :disabled="!isAdmin || oauthConfigForm.loading" aria-label="启用登录源" />
-                      <span><b>启用</b></span>
-                    </label>
-                    <TxButton size="sm" variant="danger" :disabled="!isAdmin || oauthConfigForm.loading" @click="removeOAuthProviderConfig(provider.id)">
-                      移除
-                    </TxButton>
+                </div>
+                <span class="admin-pill" :class="provider.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+                  {{ provider.configured ? '配置完整' : '待配置' }}
+                </span>
+                <span class="text-xs text-slate-500 truncate dark:text-slate-400">
+                  {{ provider.authorizeUrl || '未填写 Authorize URL' }}
+                </span>
+                <div>
+                  <label class="option-check compact">
+                    <TxCheckbox v-model="provider.enabled" variant="checkmark" :disabled="!isAdmin || oauthConfigForm.loading" aria-label="启用登录源" @change="persistOAuthProviderListState" />
+                    <span><b>{{ provider.enabled ? '启用' : '停用' }}</b></span>
+                  </label>
+                </div>
+                <div class="flex gap-2 justify-end">
+                  <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="openEditOAuthProviderDialog(provider)">
+                    编辑
+                  </TxButton>
+                  <TxButton size="sm" variant="danger" :disabled="!isAdmin || oauthConfigForm.loading" @click="removeOAuthProvider(provider.id)">
+                    移除
+                  </TxButton>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="isOAuthProviderDialogOpen" class="px-4 py-6 bg-slate-950/46 flex items-center inset-0 justify-center fixed z-50 backdrop-blur-sm" @click.self="closeOAuthProviderDialog">
+              <div class="dialog-panel max-h-[90vh] max-w-3xl w-full overflow-y-auto">
+                <div class="flex gap-3 items-start justify-between">
+                  <div>
+                    <h3 class="text-2xl fw-900">
+                      {{ oauthProviderDialogMode === 'edit' ? '编辑登录源' : '添加登录源' }}
+                    </h3>
+                    <p class="field-hint mt-2">
+                      配置保存后会自动刷新登录源列表；Logo URL 会展示在登录页和后台列表。
+                    </p>
                   </div>
+                  <button class="icon-btn shrink-0" title="关闭" @click="closeOAuthProviderDialog">
+                    <span class="i-carbon-close" />
+                  </button>
                 </div>
 
-                <div class="mt-4 gap-4 grid lg:grid-cols-2">
+                <div class="mt-5 gap-4 grid lg:grid-cols-2">
                   <label class="gap-2 grid">
                     <span class="field-label">登录源 ID</span>
-                    <TxInput v-model="provider.id" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="linux-do" />
+                    <TxInput v-model="oauthProviderDraft.id" :disabled="oauthProviderDialogMode === 'edit' || !isAdmin || oauthConfigForm.loading" placeholder="linux-do" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">显示名称</span>
-                    <TxInput v-model="provider.name" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="Linux.do" />
+                    <TxInput v-model="oauthProviderDraft.name" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="Linux.do" />
                   </label>
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">Logo URL</span>
+                    <TxInput v-model="oauthProviderDraft.logoUrl" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="https://example.com/logo.svg" />
+                  </label>
+                  <div class="flex gap-3 items-center lg:col-span-2">
+                    <span class="oauth-provider-logo">
+                      <img v-if="oauthProviderDraft.logoUrl" :src="oauthProviderDraft.logoUrl" :alt="oauthProviderDraft.name">
+                      <span v-else class="i-carbon-login" />
+                    </span>
+                    <label class="option-check compact">
+                      <TxCheckbox v-model="oauthProviderDraft.enabled" variant="checkmark" :disabled="!isAdmin || oauthConfigForm.loading" aria-label="启用登录源" />
+                      <span><b>启用</b></span>
+                    </label>
+                  </div>
                   <label class="gap-2 grid">
                     <span class="field-label">Client ID</span>
-                    <TxInput v-model="provider.clientId" :disabled="!isAdmin || oauthConfigForm.loading" />
+                    <TxInput v-model="oauthProviderDraft.clientId" :disabled="!isAdmin || oauthConfigForm.loading" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Client Secret</span>
-                    <TxInput v-model="provider.clientSecret" type="password" :disabled="!isAdmin || oauthConfigForm.loading" :placeholder="provider.clientSecretMasked || '保存到服务端配置'" />
+                    <TxInput v-model="oauthProviderDraft.clientSecret" type="password" :disabled="!isAdmin || oauthConfigForm.loading" :placeholder="oauthProviderDraft.clientSecretMasked || '保存到服务端配置'" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Callback URL</span>
-                    <TxInput v-model="provider.callbackUrl" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="https://your-domain.com/api/oauth/callback" />
+                    <TxInput v-model="oauthProviderDraft.callbackUrl" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="https://your-domain.com/api/oauth/callback" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Scopes</span>
-                    <TxInput v-model="provider.scopes" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="openid profile email" />
+                    <TxInput v-model="oauthProviderDraft.scopes" :disabled="!isAdmin || oauthConfigForm.loading" placeholder="openid profile email" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Authorize URL</span>
-                    <TxInput v-model="provider.authorizeUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
+                    <TxInput v-model="oauthProviderDraft.authorizeUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Token URL</span>
-                    <TxInput v-model="provider.tokenUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
+                    <TxInput v-model="oauthProviderDraft.tokenUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">UserInfo URL</span>
-                    <TxInput v-model="provider.userInfoUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
+                    <TxInput v-model="oauthProviderDraft.userInfoUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Issuer URL（可选）</span>
-                    <TxInput v-model="provider.issuerUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
+                    <TxInput v-model="oauthProviderDraft.issuerUrl" :disabled="!isAdmin || oauthConfigForm.loading" />
                   </label>
+                </div>
+
+                <div class="mt-5 flex flex-wrap gap-3 justify-end">
+                  <TxButton variant="ghost" @click="closeOAuthProviderDialog">
+                    取消
+                  </TxButton>
+                  <TxButton variant="primary" :disabled="!isAdmin || oauthConfigForm.loading" @click="saveOAuthProviderDialog">
+                    {{ oauthConfigForm.loading ? '保存中...' : oauthProviderDialogMode === 'edit' ? '保存修改' : '添加并刷新' }}
+                  </TxButton>
                 </div>
               </div>
             </div>
 
             <div class="mt-5 flex flex-wrap gap-3 items-center">
-              <TxButton variant="primary" :disabled="!isAdmin || oauthConfigForm.loading" @click="onSaveOAuthProviderConfigs">
-                {{ oauthConfigForm.loading ? '保存中...' : '保存 OAuth/OIDC 登录源' }}
-              </TxButton>
               <span v-if="oauthConfigForm.message" class="text-xs text-slate-500 dark:text-slate-400">
                 {{ oauthConfigForm.message }}
               </span>

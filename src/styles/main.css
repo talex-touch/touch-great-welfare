@@ -667,6 +667,32 @@ select {
   font-size: 1.45rem;
 }
 
+.oauth-provider-logo {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  color: #334155;
+  background: #fff;
+}
+
+.oauth-provider-logo.small {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 8px;
+}
+
+.oauth-provider-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .summary-stat {
   display: grid;
   gap: 0.35rem;
@@ -739,6 +765,12 @@ select {
 
 .dark .order-total-table .is-total {
   background: rgba(15, 23, 42, 0.08);
+}
+
+.dark .oauth-provider-logo {
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .dark .summary-stat {

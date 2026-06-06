@@ -151,7 +151,10 @@ onMounted(() => {
           :disabled="!!oauthLoginForm.loadingProviderId"
           @click="openUserConsentDialog({ type: 'oauth', providerId: provider.id, label: provider.name })"
         >
-          <span class="i-carbon-login" />
+          <span class="oauth-provider-logo small">
+            <img v-if="provider.logoUrl" :src="provider.logoUrl" :alt="provider.name">
+            <span v-else class="i-carbon-login" />
+          </span>
           {{ provider.name }}
         </TxButton>
         <TxButton block variant="secondary" @click="onLoginAsAdmin">
