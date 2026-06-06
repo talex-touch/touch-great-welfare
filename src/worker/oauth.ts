@@ -3,6 +3,7 @@ import type { WelfareState } from '~/composables/welfare'
 import { createUserInviteCode } from '~/composables/welfare'
 import { assertAdminRequest, errorResponse, json, maskSecret, now, readJson } from './auth'
 import { bytesToHex, sha256Hex } from './crypto'
+import { createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface OAuthProviderRecord {
@@ -199,11 +200,17 @@ async function consumeOAuthState(env: WorkerEnv, provider: OAuthProviderRecord, 
   return state
 }
 
-function redirectWithMessage(request: Request, path: string, params: Record<string, string>) {
+function redirectWithMessage(request: Request, path: string, params: Record<string, string>, headers?: HeadersInit) {
   const redirectUrl = new URL(path, getRequestOrigin(request))
   for (const [key, value] of Object.entries(params))
     redirectUrl.searchParams.set(key, value)
-  return Response.redirect(redirectUrl.toString(), 302)
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: redirectUrl.toString(),
+      ...headers,
+    },
+  })
 }
 
 async function ensureOAuthSchema(env: WorkerEnv) {
@@ -623,9 +630,12 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
     }
   }
 
-  state.currentUserId = localUser.id
+  delete state.currentUserId
   await writeWelfareState(env, state)
-  return oauthState.redirect
+  return {
+    redirect: oauthState.redirect,
+    userId: localUser.id,
+  }
 }
 
 async function completeOAuthAuthorization(request: Request, env: WorkerEnv, code: string, stateText: string) {
@@ -654,8 +664,10 @@ async function handleCallback(request: Request, env: WorkerEnv) {
       const state = url.searchParams.get('state') ?? ''
       if (!code)
         throw new Error('OAuth 未返回授权 code')
-      const redirect = await completeOAuthAuthorization(request, env, code, state)
-      return redirectWithMessage(request, redirect, { oauth_login: 'success' })
+      const result = await completeOAuthAuthorization(request, env, code, state)
+      return redirectWithMessage(request, result.redirect, { oauth_login: 'success' }, {
+        'set-cookie': await createSessionCookie(request, env, result.userId),
+      })
     }
     catch (error) {
       return redirectWithMessage(request, '/login', {
@@ -667,8 +679,10 @@ async function handleCallback(request: Request, env: WorkerEnv) {
 
   if (request.method === 'POST') {
     const payload = await readJson<CallbackPayload>(request)
-    const redirect = await completeOAuthAuthorization(request, env, payload.code ?? '', payload.state ?? '')
-    return json({ ok: true, redirect })
+    const result = await completeOAuthAuthorization(request, env, payload.code ?? '', payload.state ?? '')
+    return json({ ok: true, redirect: result.redirect }, 200, {
+      'set-cookie': await createSessionCookie(request, env, result.userId),
+    })
   }
 
   return json({ error: 'Method Not Allowed' }, 405)

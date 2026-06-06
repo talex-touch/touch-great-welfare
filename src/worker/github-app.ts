@@ -2,6 +2,7 @@ import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
 import { createUserInviteCode } from '~/composables/welfare'
 import { bytesToHex } from './crypto'
+import { authenticatedUserId, createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface GitHubAppConfigRecord {
@@ -88,11 +89,12 @@ const stateSigner = {
   key: undefined as CryptoKey | undefined,
 }
 
-function json(payload: unknown, status = 200) {
+function json(payload: unknown, status = 200, headers?: HeadersInit) {
   return Response.json(payload, {
     status,
     headers: {
       'cache-control': 'no-store',
+      ...headers,
     },
   })
 }
@@ -218,11 +220,17 @@ async function consumeOAuthState(env: WorkerEnv, settings: { clientSecret: strin
   return state
 }
 
-function redirectWithMessage(request: Request, path: string, params: Record<string, string>) {
+function redirectWithMessage(request: Request, path: string, params: Record<string, string>, headers?: HeadersInit) {
   const redirectUrl = new URL(path, getRequestOrigin(request))
   for (const [key, value] of Object.entries(params))
     redirectUrl.searchParams.set(key, value)
-  return Response.redirect(redirectUrl.toString(), 302)
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: redirectUrl.toString(),
+      ...headers,
+    },
+  })
 }
 
 async function ensureGitHubAppSchema(env: WorkerEnv) {
@@ -386,7 +394,7 @@ async function assertAdminRequest(request: Request, env: WorkerEnv) {
   if (!Array.isArray(state.users))
     throw new Error('用户状态未初始化')
 
-  const userId = request.headers.get('x-welfare-user-id')?.trim()
+  const userId = await authenticatedUserId(request, env)
   const user = state.users.find(item => item.id === userId)
   if (!user || user.role !== 'admin')
     throw new Error('需要管理员权限')
@@ -470,7 +478,7 @@ async function handleGitHubAuthorize(request: Request, env: WorkerEnv) {
   const state = await createOAuthState(env, settings, {
     redirect,
     mode: payload.mode === 'login' ? 'login' : 'connect',
-    localUserId: request.headers.get('x-welfare-user-id')?.trim() || undefined,
+    localUserId: await authenticatedUserId(request, env) || undefined,
   })
   const authorizeUrl = new URL(settings.authorizeUrl)
   authorizeUrl.searchParams.set('client_id', settings.clientId)
@@ -600,7 +608,7 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
     }
   }
 
-  state.currentUserId = localUser.id
+  delete state.currentUserId
   await writeWelfareState(env, state)
 
   return localUser
@@ -620,8 +628,11 @@ async function completeGitHubAuthorization(request: Request, env: WorkerEnv, cod
     githubApi<GitHubRepoResponse[]>(settings, token, '/user/repos?per_page=100&sort=updated&type=owner'),
   ])
 
-  await persistAuthorizedUser(env, oauthState, user, emails, repos)
-  return oauthState.redirect
+  const localUser = await persistAuthorizedUser(env, oauthState, user, emails, repos)
+  return {
+    redirect: oauthState.redirect,
+    userId: localUser.id,
+  }
 }
 
 async function handleGitHubCallback(request: Request, env: WorkerEnv) {
@@ -638,9 +649,11 @@ async function handleGitHubCallback(request: Request, env: WorkerEnv) {
       if (!code)
         throw new Error('GitHub 未返回授权 code')
 
-      const redirect = await completeGitHubAuthorization(request, env, code, state)
-      return redirectWithMessage(request, redirect, {
+      const result = await completeGitHubAuthorization(request, env, code, state)
+      return redirectWithMessage(request, result.redirect, {
         github_auth: 'success',
+      }, {
+        'set-cookie': await createSessionCookie(request, env, result.userId),
       })
     }
     catch (error) {
@@ -653,8 +666,10 @@ async function handleGitHubCallback(request: Request, env: WorkerEnv) {
 
   if (request.method === 'POST') {
     const payload = await readJson<GitHubCallbackPayload>(request)
-    const redirect = await completeGitHubAuthorization(request, env, payload.code ?? '', payload.state ?? '')
-    return json({ ok: true, redirect })
+    const result = await completeGitHubAuthorization(request, env, payload.code ?? '', payload.state ?? '')
+    return json({ ok: true, redirect: result.redirect }, 200, {
+      'set-cookie': await createSessionCookie(request, env, result.userId),
+    })
   }
 
   return json({ error: 'Method Not Allowed' }, 405)

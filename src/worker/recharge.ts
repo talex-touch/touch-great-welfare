@@ -11,6 +11,7 @@ import {
   normalizeMoneyText,
   verifyEpaySign,
 } from './ldc-credit'
+import { authenticatedUserId } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface RechargeOrder {
@@ -367,9 +368,8 @@ function assertWelfareState(input: Partial<WelfareState>): asserts input is Welf
     throw new Error('积分流水状态未初始化')
 }
 
-function getCurrentUserId(request: Request, _state: Partial<WelfareState>, payload?: RechargeCreatePayload) {
-  const headerUserId = request.headers.get('x-welfare-user-id')?.trim()
-  const userId = headerUserId || payload?.userId?.trim()
+async function getCurrentUserId(request: Request, env: WorkerEnv) {
+  const userId = await authenticatedUserId(request, env)
   if (!userId)
     throw new Error('请先登录后再充值')
 
@@ -380,7 +380,7 @@ async function assertAdminRequest(request: Request, env: WorkerEnv) {
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
 
-  const userId = request.headers.get('x-welfare-user-id')?.trim()
+  const userId = await authenticatedUserId(request, env)
   const user = state.users.find(item => item.id === userId)
   if (!user || user.role !== 'admin')
     throw new Error('需要管理员权限')
@@ -470,7 +470,7 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
 
-  const userId = getCurrentUserId(request, state, payload)
+  const userId = await getCurrentUserId(request, env)
   const user = state.users.find(item => item.id === userId)
   if (!user)
     throw new Error('请先登录后再充值')

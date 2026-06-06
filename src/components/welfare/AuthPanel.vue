@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PublicOAuthProvider } from '~/composables/oauth'
 import { TxAvatar, TxButton, TxCheckbox, TxInput, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -24,47 +25,47 @@ const {
   hasAdmin,
   currentUser,
   isAdmin,
-  githubAppConfigForm,
   publicOAuthProviders,
   oauthLoginForm,
   adminForm,
+  adminLoginForm,
   selectedSection,
   createAdmin,
   loginAsAdmin,
-  startGitHubLogin,
-  startOAuthLogin,
-  refreshGitHubAppConfig,
   refreshOAuthProviders,
+  startOAuthLogin,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
 const isUserConsentDialogOpen = ref(false)
 const hasUserConsent = ref(false)
-const pendingLoginSource = ref<{ type: 'github' | 'oauth', providerId?: string, label: string }>({
-  type: 'github',
-  label: 'GitHub App',
-})
-const githubLoginReady = computed(() => githubAppConfigForm.enabled && githubAppConfigForm.configured)
-const loginSourceCount = computed(() => publicOAuthProviders.value.length + (githubLoginReady.value ? 1 : 0))
+const isAdminLoginOpen = ref(false)
+const pendingLoginSource = ref<PublicOAuthProvider | undefined>()
+const linuxDoProvider = computed(() => publicOAuthProviders.value.find(provider => provider.id === 'linux-do'))
+const otherOAuthProviders = computed(() => publicOAuthProviders.value.filter(provider => provider.id !== 'linux-do'))
 
 function onCreateAdmin() {
-  runSafely(() => {
-    createAdmin(adminForm)
-    router.push(redirectPath.value ?? '/dashboard/admin')
-  }, '管理员已创建，已进入后台')
+  runSafely(async () => {
+    await createAdmin(adminForm)
+    adminLoginForm.email = adminForm.email
+    adminLoginForm.password = ''
+    router.push('/login')
+  }, '管理员已创建，请使用账号密码登录')
 }
 
 function onOauthLogin(source = pendingLoginSource.value) {
   runSafely(async () => {
-    if (source.type === 'oauth' && source.providerId) {
-      await startOAuthLogin(source.providerId, redirectPath.value ?? '/dashboard/apply')
-      return
-    }
-    await startGitHubLogin(redirectPath.value ?? '/dashboard/apply')
-  }, `正在跳转 ${source.label} 授权`)
+    if (!source)
+      throw new Error('LINUX DO 登录源未配置')
+
+    await startOAuthLogin(source.id, redirectPath.value ?? '/dashboard/apply')
+  }, `正在跳转 ${source?.name ?? 'LINUX DO'} 授权`)
 }
 
-function openUserConsentDialog(source: { type: 'github' | 'oauth', providerId?: string, label: string }) {
+function openUserConsentDialog(source?: PublicOAuthProvider) {
+  if (!source)
+    return
+
   pendingLoginSource.value = source
   hasUserConsent.value = false
   isUserConsentDialogOpen.value = true
@@ -83,10 +84,10 @@ function confirmOauthLogin() {
 }
 
 function onLoginAsAdmin() {
-  runSafely(() => {
-    loginAsAdmin()
+  runSafely(async () => {
+    await loginAsAdmin(adminLoginForm)
     router.push(redirectPath.value ?? '/dashboard/admin')
-  }, '已切换到管理员')
+  }, '管理员已登录')
 }
 
 function goDashboard(section: 'admin' | 'apply' | 'profile' | 'wallet') {
@@ -95,7 +96,6 @@ function goDashboard(section: 'admin' | 'apply' | 'profile' | 'wallet') {
 }
 
 onMounted(() => {
-  refreshGitHubAppConfig().catch(() => {})
   refreshOAuthProviders().catch(() => {})
 })
 </script>
@@ -116,6 +116,10 @@ onMounted(() => {
         <span class="field-label">管理员邮箱</span>
         <TxInput v-model="adminForm.email" type="email" placeholder="admin@example.com" />
       </label>
+      <label class="gap-2 grid">
+        <span class="field-label">管理员密码</span>
+        <TxInput v-model="adminForm.password" type="password" placeholder="至少 8 位" />
+      </label>
       <TxButton block variant="primary" size="lg" @click="onCreateAdmin">
         创建管理员
       </TxButton>
@@ -128,38 +132,53 @@ onMounted(() => {
           <div class="text-2xl fw-900">
             账号登录
           </div>
-          <TxStatusBadge :text="loginSourceCount ? `${loginSourceCount} 个登录源` : '未配置'" :status="loginSourceCount ? 'success' : 'warning'" />
+          <TxStatusBadge :text="linuxDoProvider ? 'LINUX DO 已配置' : 'LINUX DO 未配置'" :status="linuxDoProvider ? 'success' : 'warning'" />
         </div>
         <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-          系统已创建管理员账号；请从这里登录，/init 仅用于首次初始化。
+          普通用户使用 LINUX DO 授权登录；管理员使用账号密码进入后台。
         </p>
       </div>
-      <div v-if="!loginSourceCount" class="text-sm text-amber-800 leading-6 p-4 border border-amber-400/30 rounded-2xl bg-amber-50 dark:text-amber-200">
-        请先使用管理员进入后台配置 GitHub App 或 OAuth/OIDC 登录源，普通用户才能授权登录。
+      <div v-if="!linuxDoProvider" class="auth-warning">
+        LINUX DO 登录源尚未启用。请管理员登录后台，在 OAuth/OIDC 登录源中配置并启用 LINUX DO。
       </div>
       <DataNotice mode="compact" title="注册登录前请确认" />
-      <div class="gap-3 grid sm:grid-cols-2">
-        <TxButton block variant="primary" :disabled="!githubLoginReady" @click="openUserConsentDialog({ type: 'github', label: 'GitHub App' })">
-          <span class="i-carbon-logo-github" />
-          GitHub App 授权登录
+      <div class="space-y-4">
+        <TxButton class="linuxdo-login-button" block variant="primary" size="lg" :disabled="!linuxDoProvider || !!oauthLoginForm.loadingProviderId" @click="openUserConsentDialog(linuxDoProvider)">
+          <span class="i-carbon-login" />
+          使用 LINUX DO 授权登录
         </TxButton>
-        <TxButton
-          v-for="provider in publicOAuthProviders"
-          :key="provider.id"
-          block
-          variant="secondary"
-          :disabled="!!oauthLoginForm.loadingProviderId"
-          @click="openUserConsentDialog({ type: 'oauth', providerId: provider.id, label: provider.name })"
-        >
-          <span class="oauth-provider-logo small">
-            <img v-if="provider.logoUrl" :src="provider.logoUrl" :alt="provider.name">
-            <span v-else class="i-carbon-login" />
-          </span>
-          {{ provider.name }}
-        </TxButton>
-        <TxButton block variant="secondary" @click="onLoginAsAdmin">
-          管理员后台
-        </TxButton>
+        <div v-if="otherOAuthProviders.length" class="oauth-secondary-list">
+          <TxButton
+            v-for="provider in otherOAuthProviders"
+            :key="provider.id"
+            variant="ghost"
+            :disabled="!!oauthLoginForm.loadingProviderId"
+            @click="openUserConsentDialog(provider)"
+          >
+            <span class="oauth-provider-logo small">
+              <img v-if="provider.logoUrl" :src="provider.logoUrl" :alt="provider.name">
+              <span v-else class="i-carbon-login" />
+            </span>
+            {{ provider.name }}
+          </TxButton>
+        </div>
+        <button class="admin-login-toggle" type="button" @click="isAdminLoginOpen = !isAdminLoginOpen">
+          <span class="i-carbon-user-admin" />
+          管理员账号密码登录
+        </button>
+        <div v-if="isAdminLoginOpen" class="admin-login-form">
+          <label class="gap-2 grid">
+            <span class="field-label">管理员邮箱</span>
+            <TxInput v-model="adminLoginForm.email" type="email" placeholder="admin@example.com" />
+          </label>
+          <label class="gap-2 grid">
+            <span class="field-label">管理员密码</span>
+            <TxInput v-model="adminLoginForm.password" type="password" placeholder="管理员密码" />
+          </label>
+          <TxButton block variant="secondary" @click="onLoginAsAdmin">
+            进入管理员后台
+          </TxButton>
+        </div>
       </div>
     </div>
 
@@ -213,7 +232,7 @@ onMounted(() => {
                   注册登录确认
                 </h3>
                 <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-                  首次 {{ pendingLoginSource.label }} 授权会创建账号并同步公开资料；再次登录会更新最后登录时间。
+                  首次 {{ pendingLoginSource?.name ?? 'LINUX DO' }} 授权会创建账号并同步公开资料；再次登录会更新最后登录时间。
                 </p>
               </div>
               <button class="icon-btn shrink-0" title="关闭" @click="closeUserConsentDialog">
@@ -232,7 +251,7 @@ onMounted(() => {
                   取消
                 </TxButton>
                 <TxButton variant="primary" :disabled="!hasUserConsent" @click="confirmOauthLogin">
-                  确认并跳转 {{ pendingLoginSource.label }}
+                  确认并跳转 {{ pendingLoginSource?.name ?? 'LINUX DO' }}
                 </TxButton>
               </div>
             </div>

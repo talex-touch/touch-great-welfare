@@ -1,7 +1,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
 import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
-import { loadWelfareState, saveWelfareState } from './welfare-persistence'
+import { bootstrapAdmin, endSession, loadWelfareState, loginAdmin as requestAdminLogin, saveWelfareState } from './welfare-persistence'
 
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
@@ -113,6 +113,7 @@ export interface User {
   role: UserRole
   profile: UserProfile
   points: number
+  passwordHash?: string
   accountStatus: 'active' | 'suspended'
   suspendedReason?: string
   suspendedAt?: string
@@ -437,6 +438,12 @@ interface FileLike {
 export interface CreateAdminPayload {
   displayName: string
   email: string
+  password: string
+}
+
+export interface LoginAdminPayload {
+  email: string
+  password: string
 }
 
 export interface SubmitApplicationPayload {
@@ -2648,48 +2655,22 @@ export function useWelfareStore() {
     addTransaction(application.userId, -fee, 'spend', '申请退回扣除 AI 审核手续费', application.id)
   }
 
-  function createAdmin(payload: CreateAdminPayload) {
+  async function createAdmin(payload: CreateAdminPayload) {
     assertPersistenceReady()
-
-    if (hasAdmin.value)
-      throw new Error('管理员已经创建')
-
-    const adminId = createId('admin')
-    const admin: User = {
-      id: adminId,
-      role: 'admin',
-      profile: {
-        displayName: payload.displayName.trim() || '公益管理员',
-        email: payload.email.trim() || 'admin@example.com',
-        inviteCode: createUserInviteCode(adminId),
-        githubAuthorized: false,
-        studentVerified: false,
-      },
-      points: 0,
-      accountStatus: 'active',
-      createdAt: now(),
-      lastLoginAt: now(),
-    }
-
-    state.users.push(admin)
-    state.currentUserId = admin.id
+    await bootstrapAdmin(payload)
+    await reloadWelfareState()
   }
 
-  function loginAsAdmin() {
+  async function loginAsAdmin(payload: LoginAdminPayload) {
     assertPersistenceReady()
-
-    const admin = state.users.find(user => user.role === 'admin')
-    if (!admin)
-      throw new Error('尚未创建管理员')
-
-    admin.lastLoginAt = now()
-    state.currentUserId = admin.id
+    await requestAdminLogin(payload)
+    await reloadWelfareState()
   }
 
-  function logout() {
+  async function logout() {
     assertPersistenceReady()
-
-    state.currentUserId = undefined
+    await endSession()
+    await reloadWelfareState()
   }
 
   function updateCurrentProfile(profile: Partial<UserProfile>) {

@@ -90,10 +90,10 @@ function onKeydown(event: KeyboardEvent) {
     closeUserMenu()
 }
 
-function onLogout() {
+async function onLogout() {
   const redirect = route.path.startsWith('/dashboard') ? route.fullPath : undefined
   closeUserMenu()
-  logout()
+  await logout()
   router.push({
     path: '/login',
     query: redirect ? { redirect } : undefined,

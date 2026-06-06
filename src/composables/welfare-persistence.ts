@@ -1,4 +1,4 @@
-import type { WelfareState } from './welfare'
+import type { CreateAdminPayload, LoginAdminPayload, WelfareState } from './welfare'
 
 const STATE_ENDPOINT = '/api/welfare-state'
 
@@ -40,8 +40,11 @@ async function readErrorMessage(response: Response) {
 }
 
 export async function loadWelfareState() {
-  const result = await requestState<{ state: Partial<WelfareState> }>()
-  return result.state
+  const result = await requestState<{ state: Partial<WelfareState>, currentUserId?: string }>()
+  return {
+    ...result.state,
+    currentUserId: result.currentUserId,
+  }
 }
 
 export async function saveWelfareState(state: WelfareState, userId?: string) {
@@ -49,5 +52,34 @@ export async function saveWelfareState(state: WelfareState, userId?: string) {
     method: 'PUT',
     headers: userId ? { 'x-welfare-user-id': userId } : undefined,
     body: JSON.stringify({ state }),
+  })
+}
+
+export async function bootstrapAdmin(payload: CreateAdminPayload) {
+  await requestState<{ ok: true }>({
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: {
+      'x-welfare-action': 'bootstrap-admin',
+    },
+  })
+}
+
+export async function loginAdmin(payload: LoginAdminPayload) {
+  return requestState<{ ok: true, userId: string }>({
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: {
+      'x-welfare-action': 'login-admin',
+    },
+  })
+}
+
+export async function endSession() {
+  await requestState<{ ok: true }>({
+    method: 'POST',
+    headers: {
+      'x-welfare-action': 'logout',
+    },
   })
 }

@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
 import type { User, WelfareState } from '~/composables/welfare'
+import { authenticatedUserId } from './session'
 import { readWelfareState } from './welfare-state'
 
 export interface AuthenticatedRequest {
@@ -15,11 +16,12 @@ export function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function json(payload: unknown, status = 200) {
+export function json(payload: unknown, status = 200, headers?: HeadersInit) {
   return Response.json(payload, {
     status,
     headers: {
       'cache-control': 'no-store',
+      ...headers,
     },
   })
 }
@@ -71,7 +73,7 @@ export async function getAuthenticatedRequest(request: Request, env: WorkerEnv):
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
 
-  const userId = request.headers.get('x-welfare-user-id')?.trim()
+  const userId = await authenticatedUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
 

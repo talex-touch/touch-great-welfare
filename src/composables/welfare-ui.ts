@@ -78,6 +78,12 @@ const welfare = useWelfareStore()
 export const adminForm = reactive({
   displayName: '公益管理员',
   email: 'admin@welfare.dev',
+  password: '',
+})
+
+export const adminLoginForm = reactive({
+  email: 'admin@welfare.dev',
+  password: '',
 })
 
 export const profileForm = reactive({
@@ -1970,6 +1976,7 @@ export function useWelfareUiState() {
   return {
     ...welfare,
     adminForm,
+    adminLoginForm,
     profileForm,
     invitationForm,
     rechargeForm,

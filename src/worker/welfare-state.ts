@@ -1,7 +1,10 @@
+import type { User, WelfareState } from '~/composables/welfare'
 import { Pool } from 'pg'
+import { createUserInviteCode } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
-import { decryptSecret, encryptSecret } from './crypto'
+import { base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
+import { authenticatedUserId, clearSessionCookie, createSessionCookie } from './session'
 
 export interface WorkerEnv {
   LOCAL_DB?: D1Database
@@ -60,7 +63,12 @@ function isMaskedSecret(value: unknown) {
   return typeof value === 'string' && value.includes(MASKED_SECRET_MARKER)
 }
 
-function clientVisibleWelfareState(state: unknown) {
+function sanitizeUser(user: User): User {
+  const { passwordHash: _passwordHash, ...visibleUser } = user
+  return visibleUser
+}
+
+function clientVisibleWelfareState(state: unknown, currentUserId = '') {
   if (!isRecord(state))
     return state
 
@@ -73,15 +81,56 @@ function clientVisibleWelfareState(state: unknown) {
 
   return {
     ...state,
+    currentUserId: currentUserId || undefined,
+    users: Array.isArray(state.users) ? state.users.map(user => isRecord(user) ? sanitizeUser(user as unknown as User) : user) : state.users,
     applicationPolicy,
   }
 }
 
-function canUpdateSensitiveState(previousState: unknown, request: Request) {
+function publicBootstrapState(state: unknown) {
+  const users = isRecord(state) && Array.isArray(state.users) ? state.users : []
+  const hasAdmin = users.some(user => isRecord(user) && user.role === 'admin')
+  return {
+    users: hasAdmin
+      ? [{
+          id: 'admin-present',
+          role: 'admin',
+          profile: {
+            displayName: '管理员',
+            email: '',
+            studentVerified: false,
+          },
+          points: 0,
+          accountStatus: 'active',
+          createdAt: '',
+          lastLoginAt: '',
+        }]
+      : [],
+    createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
+  }
+}
+
+async function requestUserId(request: Request, env: WorkerEnv) {
+  return await authenticatedUserId(request, env)
+}
+
+async function canUpdateState(previousState: unknown, request: Request, env: WorkerEnv) {
   if (!isRecord(previousState))
     return false
 
-  const userId = request.headers.get('x-welfare-user-id')?.trim()
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    return false
+
+  const users = Array.isArray(previousState.users) ? previousState.users : []
+  return users.some(item => isRecord(item) && item.id === userId && item.accountStatus !== 'suspended')
+}
+
+async function canUpdateSensitiveState(previousState: unknown, request: Request, env: WorkerEnv) {
+  if (!isRecord(previousState))
+    return false
+
+  const userId = await requestUserId(request, env)
   if (!userId)
     return false
 
@@ -90,9 +139,30 @@ function canUpdateSensitiveState(previousState: unknown, request: Request) {
   return isRecord(user) && user.role === 'admin'
 }
 
-function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request): T {
+async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {
   if (!isRecord(previousState) || !isRecord(nextState) || !isRecord(nextState.applicationPolicy))
     return nextState
+
+  const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
+  const nextUsers = Array.isArray(nextState.users)
+    ? nextState.users.map((user) => {
+        if (!isRecord(user)) {
+          return user
+        }
+
+        const previousUser = previousUsers.find(item => isRecord(item) && item.id === user.id)
+        const previousPasswordHash = isRecord(previousUser) && typeof previousUser.passwordHash === 'string'
+          ? previousUser.passwordHash
+          : ''
+        if (!previousPasswordHash)
+          return user
+
+        return {
+          ...user,
+          passwordHash: previousPasswordHash,
+        }
+      })
+    : nextState.users
 
   const previousPolicy = isRecord(previousState.applicationPolicy) ? previousState.applicationPolicy : {}
   const previousTurnstileSecretKey = typeof previousPolicy.turnstileSecretKey === 'string'
@@ -102,11 +172,16 @@ function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousS
     ? nextState.applicationPolicy.turnstileSecretKey.trim()
     : ''
 
-  if (nextTurnstileSecretKey && !isMaskedSecret(nextTurnstileSecretKey) && canUpdateSensitiveState(previousState, request))
-    return nextState
+  if (nextTurnstileSecretKey && !isMaskedSecret(nextTurnstileSecretKey) && await canUpdateSensitiveState(previousState, request, env)) {
+    return {
+      ...nextState,
+      users: nextUsers,
+    }
+  }
 
   return {
     ...nextState,
+    users: nextUsers,
     applicationPolicy: {
       ...nextState.applicationPolicy,
       turnstileSecretKey: previousTurnstileSecretKey,
@@ -227,11 +302,12 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown) {
   )
 }
 
-function json(payload: unknown, status = 200) {
+function json(payload: unknown, status = 200, headers?: HeadersInit) {
   return Response.json(payload, {
     status,
     headers: {
       'cache-control': 'no-store',
+      ...headers,
     },
   })
 }
@@ -268,16 +344,150 @@ async function readPayload(request: Request) {
   return JSON.parse(text || '{}') as { state?: unknown }
 }
 
+function normalizeEmail(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : ''
+}
+
+function now() {
+  return new Date().toISOString()
+}
+
+function createId(prefix: string) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function randomSalt() {
+  return base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)))
+}
+
+async function hashPassword(password: string, salt = randomSalt()) {
+  return `v1:${salt}:${await sha256Hex(`${salt}:${password}`)}`
+}
+
+async function verifyPassword(password: string, storedHash: unknown) {
+  if (typeof storedHash !== 'string')
+    return false
+
+  const [version, salt, expected] = storedHash.split(':')
+  if (version !== 'v1' || !salt || !expected)
+    return false
+
+  return await hashPassword(password, salt) === storedHash
+}
+
+function assertPassword(value: unknown) {
+  const password = typeof value === 'string' ? value : ''
+  if (password.length < 8)
+    throw new Error('管理员密码至少 8 位')
+
+  return password
+}
+
+async function bootstrapAdmin(request: Request, env: WorkerEnv) {
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  const users = Array.isArray(state.users) ? state.users : []
+  if (users.some(user => user.role === 'admin'))
+    throw new Error('管理员已经创建')
+
+  const payload = await readPayload(request) as { displayName?: string, email?: string, password?: string }
+  const email = normalizeEmail(payload.email)
+  if (!email)
+    throw new Error('请填写管理员邮箱')
+
+  const password = assertPassword(payload.password)
+  const adminId = createId('admin')
+  const admin: User = {
+    id: adminId,
+    role: 'admin',
+    profile: {
+      displayName: payload.displayName?.trim() || '公益管理员',
+      email,
+      inviteCode: createUserInviteCode(adminId),
+      githubAuthorized: false,
+      studentVerified: false,
+    },
+    points: 0,
+    passwordHash: await hashPassword(password),
+    accountStatus: 'active',
+    createdAt: now(),
+    lastLoginAt: now(),
+  }
+
+  const nextState = {
+    ...state,
+    users: [admin],
+    currentUserId: undefined,
+    applications: [],
+    studentVerifications: [],
+    educationEmailChallenges: [],
+    coupons: [],
+    dailyCheckIns: [],
+    invitationBindings: [],
+    crowdReviews: [],
+    squarePosts: [],
+    squareBoosts: [],
+    squareReports: [],
+    transactions: [],
+    createdAt: state.createdAt || now(),
+  }
+  await writeWelfareState(env, nextState)
+  return json({ ok: true })
+}
+
+async function loginAdmin(request: Request, env: WorkerEnv) {
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  const users = Array.isArray(state.users) ? state.users : []
+  const payload = await readPayload(request) as { email?: string, password?: string }
+  const email = normalizeEmail(payload.email)
+  const admin = users.find(user => user.role === 'admin' && normalizeEmail(user.profile.email) === email)
+  if (!admin || !await verifyPassword(typeof payload.password === 'string' ? payload.password : '', admin.passwordHash))
+    throw new Error('管理员账号或密码错误')
+
+  admin.lastLoginAt = now()
+  delete state.currentUserId
+  await writeWelfareState(env, state)
+  return json({ ok: true, userId: admin.id }, 200, {
+    'set-cookie': await createSessionCookie(request, env, admin.id),
+  })
+}
+
+async function currentStateResponse(request: Request, env: WorkerEnv) {
+  const state = await readWelfareState(env)
+  const userId = await requestUserId(request, env)
+  const users = isRecord(state) && Array.isArray(state.users) ? state.users : []
+  const user = userId ? users.find(item => isRecord(item) && item.id === userId) : undefined
+
+  if (!user)
+    return json({ state: publicBootstrapState(state) })
+
+  return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId })
+}
+
 export async function handleWelfareStateRequest(request: Request, env: WorkerEnv) {
   try {
     if (request.method === 'GET')
-      return json({ state: clientVisibleWelfareState(await readWelfareState(env)) })
+      return currentStateResponse(request, env)
+
+    if (request.method === 'POST') {
+      const action = request.headers.get('x-welfare-action')?.trim()
+      if (action === 'bootstrap-admin')
+        return await bootstrapAdmin(request, env)
+      if (action === 'login-admin')
+        return await loginAdmin(request, env)
+      if (action === 'logout')
+        return json({ ok: true }, 200, { 'set-cookie': clearSessionCookie(request) })
+    }
 
     if (request.method === 'PUT') {
       const previousState = await readWelfareState(env)
+      if (!await canUpdateState(previousState, request, env))
+        throw new Error('请先登录')
+
       const payload = await readPayload(request)
       assertStateShape(payload.state)
-      const nextState = applyWelfareRetentionPolicy(mergeSensitiveWelfareState(previousState, payload.state, request)).state
+      const nextState = applyWelfareRetentionPolicy(await mergeSensitiveWelfareState(previousState, payload.state, request, env)).state
+      if (isRecord(nextState))
+        delete nextState.currentUserId
       await writeWelfareState(env, nextState)
       await dispatchWelfareStateChangeNotifications(env, previousState, nextState)
       return json({ ok: true })
