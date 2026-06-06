@@ -15,6 +15,7 @@ import RichTextEditor from './RichTextEditor.vue'
 
 const {
   currentUser,
+  educationEmailVerificationForm,
   studentForm,
   studentCategoryOptions,
   studentFiles,
@@ -23,6 +24,8 @@ const {
   totalStudentBytes,
   submitStudentVerification,
   resetStudentFiles,
+  requestEducationEmailCode,
+  confirmEducationEmailCode,
 } = useWelfareUiState()
 
 const router = useRouter()
@@ -137,6 +140,7 @@ function onSubmitStudentVerification() {
       identity: studentForm.identity,
       grade: studentForm.grade,
       educationEmail: studentForm.educationEmail,
+      educationEmailCode: educationEmailVerificationForm.code,
       notes: studentForm.notes,
       attachments: studentFiles.value,
     })
@@ -144,6 +148,18 @@ function onSubmitStudentVerification() {
     clearLocalDraft(studentDraftKey)
     router.push('/dashboard/student')
   }, `学生认证已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
+}
+
+function onRequestEducationEmailCode() {
+  runSafely(async () => {
+    await requestEducationEmailCode()
+  }, '教育邮箱验证码已发送')
+}
+
+function onConfirmEducationEmailCode() {
+  runSafely(async () => {
+    await confirmEducationEmailCode()
+  }, '教育邮箱已完成验证码校验')
 }
 
 onMounted(() => {
@@ -311,8 +327,20 @@ onMounted(() => {
                 <span class="field-label">教育邮箱</span>
                 <TxInput v-model="studentForm.educationEmail" type="email" placeholder="name@school.edu.cn，可选" />
               </label>
+              <div class="gap-3 grid md:grid-cols-[1fr_auto_auto]">
+                <TxInput v-model="educationEmailVerificationForm.code" inputmode="numeric" maxlength="6" placeholder="6 位验证码" />
+                <TxButton variant="secondary" :disabled="educationEmailVerificationForm.loading || !studentForm.educationEmail" @click="onRequestEducationEmailCode">
+                  {{ educationEmailVerificationForm.loading ? '发送中' : '发送验证码' }}
+                </TxButton>
+                <TxButton variant="primary" :disabled="educationEmailVerificationForm.loading || !educationEmailVerificationForm.code" @click="onConfirmEducationEmailCode">
+                  校验邮箱
+                </TxButton>
+              </div>
               <p class="field-hint">
-                如果有学校或机构邮箱，填写后可帮助审核判断身份，提高通过率；不方便公开或受学校/机构要求限制时可以留空。
+                如果有学校或机构邮箱，验证码校验可作为辅助证明；管理员仍会人工复核材料。不方便公开或受学校/机构要求限制时可以留空。
+              </p>
+              <p v-if="educationEmailVerificationForm.message" class="field-hint" :class="educationEmailVerificationForm.verified ? 'text-emerald-700 dark:text-emerald-300' : ''">
+                {{ educationEmailVerificationForm.message }}
               </p>
             </div>
             <div class="gap-2 grid md:col-span-2">

@@ -1,4 +1,4 @@
-import type { User, WelfareState } from '../src/composables/welfare'
+import type { ApplicationPolicyConfig, User, WelfareState } from '../src/composables/welfare'
 import { describe, expect, it, vi } from 'vitest'
 import { dispatchWelfareStateChangeNotifications } from '../src/worker/notifications'
 
@@ -17,6 +17,23 @@ function user(points = 120, id = 'user_1', role: User['role'] = 'user'): User {
   }
 }
 
+function applicationPolicy(): ApplicationPolicyConfig {
+  return {
+    minDescriptionChars: 50,
+    submitCooldownSeconds: 60,
+    powEnabled: false,
+    powDifficulty: 3,
+    turnstileEnabled: false,
+    turnstileSiteKey: '',
+    categories: {
+      code: { enabled: true, dailyLimit: 80, perUserDailyLimit: 3, openStart: '', openEnd: '', closedReason: '' },
+      image: { enabled: true, dailyLimit: 40, perUserDailyLimit: 2, openStart: '', openEnd: '', closedReason: '' },
+      pro: { enabled: true, dailyLimit: 30, perUserDailyLimit: 2, openStart: '', openEnd: '', closedReason: '' },
+      resource: { enabled: true, dailyLimit: 30, perUserDailyLimit: 2, openStart: '', openEnd: '', closedReason: '' },
+    },
+  }
+}
+
 function state(points = 120): WelfareState {
   return {
     users: [user(points)],
@@ -29,8 +46,10 @@ function state(points = 120): WelfareState {
       callbackUrl: 'http://localhost/callback',
       scopes: 'read:user',
     },
+    applicationPolicy: applicationPolicy(),
     applications: [],
     studentVerifications: [],
+    educationEmailChallenges: [],
     transactions: [],
     createdAt: '2026-06-01T00:00:00.000Z',
   }

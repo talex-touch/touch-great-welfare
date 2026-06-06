@@ -7,7 +7,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
   }),
 ))
 
-const { buildUserLevelCard } = await import('../src/composables/welfare')
+const { buildUserLevelCard, defaultApplicationPolicy } = await import('../src/composables/welfare')
 
 function user(overrides: Partial<User> = {}): User {
   return {
@@ -37,8 +37,10 @@ function state(partial: Partial<WelfareState>): WelfareState {
       callbackUrl: 'http://localhost/callback',
       scopes: 'read:user',
     },
+    applicationPolicy: defaultApplicationPolicy(),
     applications: [],
     studentVerifications: [],
+    educationEmailChallenges: [],
     crowdReviews: [],
     transactions: [],
     createdAt: '2026-06-01T00:00:00.000Z',

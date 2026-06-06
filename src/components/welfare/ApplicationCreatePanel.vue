@@ -9,14 +9,17 @@ import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiCostPoints, calcu
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
+import TurnstileChallenge from './TurnstileChallenge.vue'
 
 const {
   currentUser,
+  applicationSecurityForm,
   applicationFiles,
   resourceApplicationForm,
   resourceApplicationItems,
   resourceTypeConfigs,
   selectedResourceTerms,
+  resourceApplicationPolicyStatus,
   totalApplicationBytes,
   activeRequestCount,
   canCreateRequest,
@@ -28,6 +31,8 @@ const {
   ensureSelectedResourceItems,
   resetResourceApplicationForm,
   resetApplicationFiles,
+  resetApplicationSecurity,
+  setApplicationTurnstileToken,
 } = useWelfareUiState()
 
 const router = useRouter()
@@ -190,6 +195,13 @@ function itemDiscountedEstimate(item: ResourceDraftItem) {
 const totalUndiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemUndiscountedEstimate(item), 0))
 const totalDiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemDiscountedEstimate(item), 0))
 const totalDiscountSavings = computed(() => Math.max(0, totalUndiscountedEstimate.value - totalDiscountedEstimate.value))
+const isResourceSubmissionBlocked = computed(() =>
+  !canCreateRequest.value
+  || resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length
+  || !resourceApplicationPolicyStatus.value.available
+  || !resourceApplicationPolicyStatus.value.descriptionOk
+  || (resourceApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken),
+)
 
 function pad2(value: number) {
   return value < 10 ? `0${value}` : String(value)
@@ -327,6 +339,7 @@ function onSubmitResourceApplication() {
 
 onMounted(() => {
   resetResourceApplicationForm()
+  resetApplicationSecurity()
   restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
   sanitizeSelectedResourceTypes()
   sanitizeResourceDurations()
@@ -571,6 +584,50 @@ onMounted(() => {
             </div>
           </div>
 
+          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <h3 class="text-xl fw-900">
+                  提交策略
+                </h3>
+                <p class="field-hint mt-1">
+                  {{ resourceApplicationPolicyStatus.reason || '当前资源申请开放' }}
+                </p>
+              </div>
+              <span class="text-xs fw-900 px-3 py-1 rounded-full" :class="resourceApplicationPolicyStatus.available && resourceApplicationPolicyStatus.descriptionOk ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+                {{ resourceApplicationPolicyStatus.descriptionLength }}/{{ resourceApplicationPolicyStatus.minDescriptionChars }} 字
+              </span>
+            </div>
+            <div class="mt-4 gap-3 grid md:grid-cols-4">
+              <div class="summary-stat light">
+                <span>开放时间</span>
+                <b>{{ resourceApplicationPolicyStatus.openWindowLabel }}</b>
+              </div>
+              <div class="summary-stat light">
+                <span>今日剩余</span>
+                <b>{{ resourceApplicationPolicyStatus.dailyRemaining ?? '不限' }}</b>
+              </div>
+              <div class="summary-stat light">
+                <span>个人剩余</span>
+                <b>{{ resourceApplicationPolicyStatus.perUserDailyRemaining ?? '不限' }}</b>
+              </div>
+              <div class="summary-stat light">
+                <span>提交校验</span>
+                <b>{{ [resourceApplicationPolicyStatus.powEnabled ? `PoW ${resourceApplicationPolicyStatus.powDifficulty}` : '', resourceApplicationPolicyStatus.turnstileEnabled ? 'Turnstile' : ''].filter(Boolean).join(' / ') || '基础校验' }}</b>
+              </div>
+            </div>
+            <TurnstileChallenge
+              v-if="resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey"
+              class="mt-4"
+              :site-key="resourceApplicationPolicyStatus.turnstileSiteKey"
+              @verified="setApplicationTurnstileToken"
+              @expired="setApplicationTurnstileToken('')"
+            />
+            <p v-if="applicationSecurityForm.message" class="field-hint mt-3">
+              {{ applicationSecurityForm.message }}
+            </p>
+          </div>
+
           <div class="text-white p-5 rounded-3xl bg-slate-950 dark:text-slate-950 dark:bg-white">
             <div class="text-sm op70">
               提交摘要
@@ -605,7 +662,7 @@ onMounted(() => {
               <TxButton variant="ghost" @click="currentStep = 'materials'">
                 上一步
               </TxButton>
-              <TxButton variant="primary" :disabled="!canCreateRequest || resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.length" @click="onSubmitResourceApplication">
+              <TxButton variant="primary" :disabled="isResourceSubmissionBlocked" @click="onSubmitResourceApplication">
                 提交资源申请
               </TxButton>
             </div>

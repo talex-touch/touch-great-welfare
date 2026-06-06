@@ -86,6 +86,13 @@ export function saveNotificationSettings(userId: string, payload: SaveNotificati
   })
 }
 
+export function sendEducationEmailCode(userId: string, payload: { email: string, code: string }) {
+  return requestNotifications<{ ok: true }>('/api/notifications/education-email-code', userId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function loadNotificationProviderConfig(adminUserId: string) {
   return requestNotifications<NotificationProviderConfigView>('/api/notifications/provider-config', adminUserId)
 }

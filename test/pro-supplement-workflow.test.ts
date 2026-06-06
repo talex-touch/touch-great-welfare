@@ -7,7 +7,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
   }),
 ))
 
-const { useWelfareStore } = await import('../src/composables/welfare')
+const { defaultApplicationPolicy, useWelfareStore } = await import('../src/composables/welfare')
 
 function user(id: string, role: User['role'] = 'user'): User {
   return {
@@ -64,8 +64,10 @@ function resetStore() {
       callbackUrl: 'http://localhost/callback',
       scopes: 'read:user',
     },
+    applicationPolicy: defaultApplicationPolicy(),
     applications: [proApplication()],
     studentVerifications: [],
+    educationEmailChallenges: [],
     crowdReviews: [],
     transactions: [],
     currentUserId: 'admin_1',

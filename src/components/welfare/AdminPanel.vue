@@ -18,6 +18,7 @@ const {
   githubAppConfigForm,
   oauthConfigForm,
   oauthProviderConfigs,
+  applicationPolicyConfigForm,
   aiConfigForm,
   sub2ApiConfigForm,
   notificationProviderConfigForm,
@@ -31,6 +32,7 @@ const {
   addOAuthProviderConfig,
   removeOAuthProviderConfig,
   persistOAuthProviderConfigs,
+  persistApplicationPolicy,
   refreshAiConfig,
   persistAiConfig,
   refreshSub2ApiConfig,
@@ -63,12 +65,14 @@ interface AuditEvent {
 const ALL_FILTER = 'all'
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 const USER_DETAIL_LIMIT = 6
-const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro']
+const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
+const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
 
 const applicationTypeText: Record<string, string> = {
   code: 'LLMApi 申请',
   image: 'Image 申请',
   pro: 'Pro 申请',
+  resource: '资源申请',
 }
 
 const applicationStatusText: Record<string, string> = {
@@ -136,6 +140,7 @@ const applicationTypeFilterOptions = [
   { value: 'code', label: applicationTypeText.code },
   { value: 'image', label: applicationTypeText.image },
   { value: 'pro', label: applicationTypeText.pro },
+  { value: 'resource', label: applicationTypeText.resource },
 ]
 
 const applicationStatusFilterOptions = [
@@ -1036,6 +1041,14 @@ function onSaveOAuthProviderConfigs() {
   runSafely(() => persistOAuthProviderConfigs(), 'OAuth/OIDC 登录源已保存')
 }
 
+function saveApplicationPolicyConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistApplicationPolicy()
+  }, '申请策略已保存')
+}
+
 function onAdjustPoints(userId: string) {
   runSafely(() => adjustUserPoints(userId, pointDrafts[userId] ?? 0, '后台积分充值 / 调整'), '积分已调整')
 }
@@ -1322,6 +1335,104 @@ onMounted(() => {
                 {{ oauthConfigForm.message }}
               </span>
             </div>
+          </div>
+        </TxTabItem>
+
+        <TxTabItem :name="ADMIN_TABS.policy" icon-class="i-carbon-rule">
+          <template #name>
+            申请策略
+          </template>
+
+          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <div class="text-lg fw-900 mb-1 flex gap-2 items-center">
+                  <span class="i-carbon-rule" />
+                  申请限额与反滥用
+                </div>
+                <p class="text-sm text-slate-500 leading-6 dark:text-slate-400">
+                  最小字数、冷却、PoW、Turnstile 和各类目开放窗口会在提交前后同时校验。
+                </p>
+              </div>
+              <TxButton variant="primary" :disabled="!isAdmin || applicationPolicyConfigForm.loading" @click="saveApplicationPolicyConfig">
+                {{ applicationPolicyConfigForm.loading ? '保存中...' : '保存策略配置' }}
+              </TxButton>
+            </div>
+
+            <div class="mt-5 gap-4 grid lg:grid-cols-3">
+              <label class="gap-2 grid">
+                <span class="field-label">申请最小字数</span>
+                <TxNumberInput v-model="state.applicationPolicy.minDescriptionChars" :min="0" :max="5000" :step="10" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">提交冷却（秒）</span>
+                <TxNumberInput v-model="state.applicationPolicy.submitCooldownSeconds" :min="0" :max="86400" :step="10" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">PoW 难度</span>
+                <TxNumberInput v-model="state.applicationPolicy.powDifficulty" :min="1" :max="6" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || !state.applicationPolicy.powEnabled" />
+              </label>
+            </div>
+
+            <div class="mt-5 gap-4 grid lg:grid-cols-2">
+              <label class="option-check">
+                <TxCheckbox v-model="state.applicationPolicy.powEnabled" variant="checkmark" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+                <span><b>启用 PoW</b><small>用户提交时本地计算 nonce，用于增加压测成本。</small></span>
+              </label>
+              <label class="option-check">
+                <TxCheckbox v-model="state.applicationPolicy.turnstileEnabled" variant="checkmark" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+                <span><b>启用 Turnstile</b><small>需要配置 Site Key，并在 Worker 环境配置 TURNSTILE_SECRET_KEY。</small></span>
+              </label>
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">Turnstile Site Key</span>
+                <TxInput v-model="state.applicationPolicy.turnstileSiteKey" :disabled="!isAdmin || applicationPolicyConfigForm.loading || !state.applicationPolicy.turnstileEnabled" placeholder="0x4AAAA..." />
+              </label>
+            </div>
+          </div>
+
+          <div class="mt-5 space-y-4">
+            <div v-for="type in APPLICATION_POLICY_TYPES" :key="type" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+              <div class="flex flex-wrap gap-3 items-start justify-between">
+                <div>
+                  <div class="text-base fw-900">
+                    {{ applicationTypeLabel(type) }}
+                  </div>
+                  <p class="field-hint mt-1">
+                    每日总量、个人每日总量和开放时间段按本地日期计算。
+                  </p>
+                </div>
+                <label class="option-check compact">
+                  <TxCheckbox v-model="state.applicationPolicy.categories[type].enabled" variant="checkmark" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+                  <span><b>开放</b></span>
+                </label>
+              </div>
+              <div class="mt-4 gap-4 grid md:grid-cols-2 xl:grid-cols-5">
+                <label class="gap-2 grid">
+                  <span class="field-label">每日总限额</span>
+                  <TxNumberInput v-model="state.applicationPolicy.categories[type].dailyLimit" :min="0" :max="100000" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">个人每日限额</span>
+                  <TxNumberInput v-model="state.applicationPolicy.categories[type].perUserDailyLimit" :min="0" :max="100000" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">开放开始</span>
+                  <TxInput v-model="state.applicationPolicy.categories[type].openStart" :disabled="!isAdmin || applicationPolicyConfigForm.loading" placeholder="09:00" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">开放结束</span>
+                  <TxInput v-model="state.applicationPolicy.categories[type].openEnd" :disabled="!isAdmin || applicationPolicyConfigForm.loading" placeholder="18:00" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">关闭原因</span>
+                  <TxInput v-model="state.applicationPolicy.categories[type].closedReason" :disabled="!isAdmin || applicationPolicyConfigForm.loading" placeholder="维护中 / 名额暂停" />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="applicationPolicyConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+            {{ applicationPolicyConfigForm.message }}
           </div>
         </TxTabItem>
 

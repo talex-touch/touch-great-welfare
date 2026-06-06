@@ -1,5 +1,6 @@
 import { Pool } from 'pg'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
+import { decryptSecret, encryptSecret } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
 
 export interface WorkerEnv {
@@ -9,6 +10,8 @@ export interface WorkerEnv {
     connectionString: string
   }
   NOTIFY_SECRET_KEY?: string
+  TURNSTILE_SECRET_KEY?: string
+  WELFARE_STATE_SECRET_KEY?: string
 }
 
 const STATE_KEY = 'default'
@@ -17,8 +20,49 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024
 let pool: Pool | undefined
 let poolKey = ''
 
+interface EncryptedWelfareStateEnvelope {
+  __encrypted: true
+  payload: string
+  encryptedAt: string
+}
+
 function getConnectionString(env: WorkerEnv) {
   return env.HYPERDRIVE?.connectionString
+}
+
+function stateEncryptionSecret(env: WorkerEnv) {
+  return env.WELFARE_STATE_SECRET_KEY?.trim() || env.NOTIFY_SECRET_KEY?.trim() || ''
+}
+
+function isEncryptedWelfareStateEnvelope(value: unknown): value is EncryptedWelfareStateEnvelope {
+  return !!value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).__encrypted === true
+    && typeof (value as Record<string, unknown>).payload === 'string'
+}
+
+async function decodeStoredState(env: WorkerEnv, storedState: unknown) {
+  if (!isEncryptedWelfareStateEnvelope(storedState))
+    return storedState
+
+  const secret = stateEncryptionSecret(env)
+  if (!secret)
+    throw new Error('WELFARE_STATE_SECRET_KEY 未配置，无法读取加密业务状态')
+
+  return JSON.parse(await decryptSecret(storedState.payload, secret))
+}
+
+async function encodeStoredState(env: WorkerEnv, state: unknown) {
+  const secret = stateEncryptionSecret(env)
+  if (!secret)
+    return state
+
+  return {
+    __encrypted: true,
+    payload: await encryptSecret(JSON.stringify(state), secret),
+    encryptedAt: new Date().toISOString(),
+  } satisfies EncryptedWelfareStateEnvelope
 }
 
 export function shouldUseD1(env: WorkerEnv) {
@@ -62,7 +106,7 @@ export async function readWelfareState(env: WorkerEnv) {
       .bind(STATE_KEY)
       .first<{ state: string }>()
 
-    const state = row?.state ? JSON.parse(row.state) : {}
+    const state = await decodeStoredState(env, row?.state ? JSON.parse(row.state) : {})
     const result = applyWelfareRetentionPolicy(state)
     if (result.changed)
       await writeWelfareState(env, result.state)
@@ -75,7 +119,7 @@ export async function readWelfareState(env: WorkerEnv) {
     [STATE_KEY],
   )
 
-  const state = result.rows[0]?.state ?? {}
+  const state = await decodeStoredState(env, result.rows[0]?.state ?? {})
   const retentionResult = applyWelfareRetentionPolicy(state)
   if (retentionResult.changed)
     await writeWelfareState(env, retentionResult.state)
@@ -85,6 +129,7 @@ export async function readWelfareState(env: WorkerEnv) {
 
 export async function writeWelfareState(env: WorkerEnv, state: unknown) {
   await ensureSchema(env)
+  const storedState = await encodeStoredState(env, state)
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
@@ -94,7 +139,7 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown) {
         on conflict (id)
         do update set state = excluded.state, updated_at = current_timestamp
       `)
-      .bind(STATE_KEY, JSON.stringify(state))
+      .bind(STATE_KEY, JSON.stringify(storedState))
       .run()
     return
   }
@@ -106,7 +151,7 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown) {
       on conflict (id)
       do update set state = excluded.state, updated_at = now()
     `,
-    [STATE_KEY, JSON.stringify(state)],
+    [STATE_KEY, JSON.stringify(storedState)],
   )
 }
 
@@ -130,7 +175,7 @@ function assertStateShape(state: unknown): asserts state is Record<string, unkno
     throw new Error('state must be an object')
 
   const record = state as Record<string, unknown>
-  for (const key of ['users', 'applications', 'studentVerifications', 'crowdReviews', 'transactions']) {
+  for (const key of ['users', 'applications', 'studentVerifications', 'educationEmailChallenges', 'crowdReviews', 'transactions']) {
     if (record[key] !== undefined && !Array.isArray(record[key]))
       throw new Error(`${key} must be an array`)
   }

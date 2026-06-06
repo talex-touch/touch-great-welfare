@@ -241,6 +241,9 @@ export interface StudentVerification {
   grade?: string
   educationLevel?: string
   educationEmail?: string
+  educationEmailVerified?: boolean
+  educationEmailVerifiedAt?: string
+  educationEmailChallengeId?: string
   notes: string
   attachments: AttachmentMeta[]
   status: StudentStatus
@@ -249,6 +252,16 @@ export interface StudentVerification {
   reply?: string
   createdAt: string
   reviewedAt?: string
+}
+
+export interface EducationEmailChallenge {
+  id: string
+  userId: string
+  email: string
+  code: string
+  expiresAt: string
+  verifiedAt?: string
+  createdAt: string
 }
 
 export interface CrowdReview {
@@ -271,12 +284,33 @@ export interface CreditTransaction {
   createdAt: string
 }
 
+export interface ApplicationKindPolicy {
+  enabled: boolean
+  dailyLimit: number
+  perUserDailyLimit: number
+  openStart: string
+  openEnd: string
+  closedReason?: string
+}
+
+export interface ApplicationPolicyConfig {
+  minDescriptionChars: number
+  submitCooldownSeconds: number
+  powEnabled: boolean
+  powDifficulty: number
+  turnstileEnabled: boolean
+  turnstileSiteKey: string
+  categories: Record<RequestKind, ApplicationKindPolicy>
+}
+
 export interface WelfareState {
   users: User[]
   currentUserId?: string
   oauth: OauthConfig
+  applicationPolicy: ApplicationPolicyConfig
   applications: WelfareApplication[]
   studentVerifications: StudentVerification[]
+  educationEmailChallenges: EducationEmailChallenge[]
   crowdReviews: CrowdReview[]
   transactions: CreditTransaction[]
   createdAt: string
@@ -303,6 +337,8 @@ export interface SubmitApplicationPayload {
   extendStorage?: boolean
   expediteProcessing?: boolean
   waiveRejectionReviewFee?: boolean
+  powNonce?: string
+  turnstileVerified?: boolean
   llmApiModelKey?: string
   llmApiBudgetUsd?: number
   llmApiCustomRpmLimit?: number
@@ -335,6 +371,8 @@ export interface SubmitResourceApplicationPayload {
   acceptedTermIds: ResourceTermId[]
   attachments?: FileLike[]
   saveAsDraft?: boolean
+  powNonce?: string
+  turnstileVerified?: boolean
 }
 
 export interface ReviewApplicationItemPayload {
@@ -363,6 +401,7 @@ export interface SubmitStudentPayload {
   grade?: string
   educationLevel?: string
   educationEmail?: string
+  educationEmailCode?: string
   notes: string
   attachments?: FileLike[]
 }
@@ -395,6 +434,28 @@ export interface UserLevelCard extends UserLevelRule {
   next?: UserLevelRule
   stats: UserReviewStats
   reasons: string[]
+}
+
+export interface ApplicationPolicyStatus {
+  type: RequestKind
+  enabled: boolean
+  available: boolean
+  reason: string
+  descriptionLength: number
+  minDescriptionChars: number
+  descriptionOk: boolean
+  cooldownUntil?: string
+  dailyLimit: number
+  dailyUsed: number
+  dailyRemaining?: number
+  perUserDailyLimit: number
+  perUserDailyUsed: number
+  perUserDailyRemaining?: number
+  openWindowLabel: string
+  powEnabled: boolean
+  powDifficulty: number
+  turnstileEnabled: boolean
+  turnstileSiteKey: string
 }
 
 const SAVE_DEBOUNCE_MS = 250
@@ -598,7 +659,36 @@ export const REJECTION_FEE_WAIVER_BLOCK_DAYS = 3
 export const REJECTION_FRAUD_COOLDOWN_DAYS = 7
 export const MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
 export const MAX_ACTIVE_USER_REQUESTS = 5
+export const DEFAULT_MIN_APPLICATION_DESCRIPTION_CHARS = 50
+export const DEFAULT_APPLICATION_SUBMIT_COOLDOWN_SECONDS = 60
+export const EDUCATION_EMAIL_CODE_TTL_MINUTES = 10
 export { DATA_RETENTION_DAYS }
+
+const DEFAULT_KIND_POLICY: ApplicationKindPolicy = {
+  enabled: true,
+  dailyLimit: 100,
+  perUserDailyLimit: 5,
+  openStart: '',
+  openEnd: '',
+  closedReason: '',
+}
+
+export function defaultApplicationPolicy(): ApplicationPolicyConfig {
+  return {
+    minDescriptionChars: DEFAULT_MIN_APPLICATION_DESCRIPTION_CHARS,
+    submitCooldownSeconds: DEFAULT_APPLICATION_SUBMIT_COOLDOWN_SECONDS,
+    powEnabled: false,
+    powDifficulty: 3,
+    turnstileEnabled: false,
+    turnstileSiteKey: '',
+    categories: {
+      code: { ...DEFAULT_KIND_POLICY, dailyLimit: 80, perUserDailyLimit: 3 },
+      image: { ...DEFAULT_KIND_POLICY, dailyLimit: 40, perUserDailyLimit: 2 },
+      pro: { ...DEFAULT_KIND_POLICY, dailyLimit: 30, perUserDailyLimit: 2 },
+      resource: { ...DEFAULT_KIND_POLICY, dailyLimit: 30, perUserDailyLimit: 2 },
+    },
+  }
+}
 
 function now() {
   return new Date().toISOString()
@@ -610,6 +700,97 @@ function addDays(value: string, days: number) {
 
 function addHours(value: string, hours: number) {
   return new Date(new Date(value).getTime() + hours * 60 * 60 * 1000).toISOString()
+}
+
+function localDateKey(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function timeToMinutes(value: string) {
+  const match = value.match(/^(\d{2}):(\d{2})$/)
+  if (!match)
+    return undefined
+
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+function isWithinOpenWindow(policy: ApplicationKindPolicy, current = new Date()) {
+  const start = timeToMinutes(policy.openStart)
+  const end = timeToMinutes(policy.openEnd)
+  if (start === undefined || end === undefined || start === end)
+    return true
+
+  const currentMinutes = current.getHours() * 60 + current.getMinutes()
+  if (start < end)
+    return currentMinutes >= start && currentMinutes <= end
+  return currentMinutes >= start || currentMinutes <= end
+}
+
+function applicationOpenWindowLabel(policy: ApplicationKindPolicy) {
+  const start = timeToMinutes(policy.openStart)
+  const end = timeToMinutes(policy.openEnd)
+  if (start === undefined || end === undefined || start === end)
+    return '全天开放'
+
+  return `${policy.openStart} - ${policy.openEnd}`
+}
+
+function simplePowHash(value: string) {
+  let hash = 0x811C9DC5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+export function applicationPowChallenge(input: { userId: string, type: RequestKind, title: string, description: string }) {
+  return `${input.userId}:${input.type}:${input.title.trim()}:${richTextToPlainText(input.description).trim()}`
+}
+
+export function isValidApplicationPow(challenge: string, nonce: string | undefined, difficulty: number) {
+  const normalizedNonce = nonce?.trim() ?? ''
+  if (!normalizedNonce)
+    return false
+
+  return simplePowHash(`${challenge}:${normalizedNonce}`).startsWith('0'.repeat(Math.max(1, Math.min(6, difficulty))))
+}
+
+export function solveApplicationPow(challenge: string, difficulty: number, maxIterations = 600000) {
+  for (let index = 0; index < maxIterations; index += 1) {
+    const nonce = String(index)
+    if (isValidApplicationPow(challenge, nonce, difficulty))
+      return nonce
+  }
+  throw new Error('PoW 计算失败，请稍后重试')
+}
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/.test(value)
+}
+
+function isEducationEmail(value: string) {
+  const domain = value.split('@')[1]?.toLowerCase() ?? ''
+  return domain.endsWith('.edu')
+    || domain.includes('.edu.')
+    || domain.endsWith('.ac')
+    || domain.includes('.ac.')
+}
+
+function assertEducationEmail(value: string) {
+  if (!isValidEmail(value))
+    throw new Error('请填写有效的教育邮箱')
+  if (!isEducationEmail(value))
+    throw new Error('请填写学校或教育机构邮箱')
+}
+
+function createEducationEmailCode() {
+  return String(Math.floor(100000 + Math.random() * 900000))
 }
 
 function isPromotionActive(referenceTime = now()) {
@@ -819,11 +1000,42 @@ function defaultState(): WelfareState {
   return {
     users: [],
     oauth: defaultOauth(),
+    applicationPolicy: defaultApplicationPolicy(),
     applications: [],
     studentVerifications: [],
+    educationEmailChallenges: [],
     crowdReviews: [],
     transactions: [],
     createdAt: now(),
+  }
+}
+
+function normalizeApplicationKindPolicy(input: Partial<ApplicationKindPolicy> | undefined, fallback: ApplicationKindPolicy): ApplicationKindPolicy {
+  return {
+    enabled: input?.enabled ?? fallback.enabled,
+    dailyLimit: Math.max(0, Math.trunc(Number(input?.dailyLimit ?? fallback.dailyLimit))),
+    perUserDailyLimit: Math.max(0, Math.trunc(Number(input?.perUserDailyLimit ?? fallback.perUserDailyLimit))),
+    openStart: input?.openStart?.trim() ?? fallback.openStart,
+    openEnd: input?.openEnd?.trim() ?? fallback.openEnd,
+    closedReason: input?.closedReason?.trim() ?? fallback.closedReason,
+  }
+}
+
+export function normalizeApplicationPolicy(input?: Partial<ApplicationPolicyConfig>): ApplicationPolicyConfig {
+  const fallback = defaultApplicationPolicy()
+  return {
+    minDescriptionChars: Math.max(0, Math.trunc(Number(input?.minDescriptionChars ?? fallback.minDescriptionChars))),
+    submitCooldownSeconds: Math.max(0, Math.trunc(Number(input?.submitCooldownSeconds ?? fallback.submitCooldownSeconds))),
+    powEnabled: !!(input?.powEnabled ?? fallback.powEnabled),
+    powDifficulty: Math.max(1, Math.min(6, Math.trunc(Number(input?.powDifficulty ?? fallback.powDifficulty)))),
+    turnstileEnabled: !!(input?.turnstileEnabled ?? fallback.turnstileEnabled),
+    turnstileSiteKey: input?.turnstileSiteKey?.trim() ?? fallback.turnstileSiteKey,
+    categories: {
+      code: normalizeApplicationKindPolicy(input?.categories?.code, fallback.categories.code),
+      image: normalizeApplicationKindPolicy(input?.categories?.image, fallback.categories.image),
+      pro: normalizeApplicationKindPolicy(input?.categories?.pro, fallback.categories.pro),
+      resource: normalizeApplicationKindPolicy(input?.categories?.resource, fallback.categories.resource),
+    },
   }
 }
 
@@ -836,9 +1048,11 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       ...fallback.oauth,
       ...input.oauth,
     },
+    applicationPolicy: normalizeApplicationPolicy(input.applicationPolicy),
     users: input.users ?? [],
     applications: input.applications ?? [],
     studentVerifications: input.studentVerifications ?? [],
+    educationEmailChallenges: input.educationEmailChallenges ?? [],
     crowdReviews: input.crowdReviews ?? [],
     transactions: input.transactions ?? [],
   }
@@ -917,6 +1131,19 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       postApprovalSupplementCount: proPostApprovalSupplementCount(application),
     }
   })
+
+  normalized.studentVerifications = normalized.studentVerifications.map(verification => ({
+    ...verification,
+    educationEmail: verification.educationEmail ? normalizeEmail(verification.educationEmail) : undefined,
+    educationEmailVerified: !!verification.educationEmailVerified,
+  }))
+
+  normalized.educationEmailChallenges = normalized.educationEmailChallenges
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      ...item,
+      email: normalizeEmail(item.email),
+    }))
 
   return applyWelfareRetentionPolicy(normalized).state
 }
@@ -1446,6 +1673,114 @@ export function useWelfareStore() {
     return applicationCount + studentCount
   }
 
+  function recentSubmissionCooldownUntil(userId: string, createdAt: string) {
+    const cooldownMs = state.applicationPolicy.submitCooldownSeconds * 1000
+    if (cooldownMs <= 0)
+      return undefined
+
+    const lastSubmittedAt = state.applications
+      .filter(item => item.userId === userId && item.status !== 'draft')
+      .map(item => new Date(item.createdAt).getTime())
+      .filter(Number.isFinite)
+      .sort((left, right) => right - left)[0]
+    if (!lastSubmittedAt)
+      return undefined
+
+    const until = lastSubmittedAt + cooldownMs
+    if (new Date(createdAt).getTime() < until)
+      return new Date(until).toISOString()
+  }
+
+  function applicationPolicyStatus(type: RequestKind, options: { userId?: string, title?: string, description?: string, referenceAt?: string } = {}): ApplicationPolicyStatus {
+    const referenceAt = options.referenceAt ?? now()
+    const policy = state.applicationPolicy
+    const kindPolicy = policy.categories[type]
+    const userId = options.userId ?? currentUser.value?.id
+    const descriptionLength = richTextToPlainText(options.description ?? '').trim().length
+    const today = localDateKey(referenceAt)
+    const sameDayApplications = state.applications
+      .filter(item => item.type === type && item.status !== 'draft' && localDateKey(item.createdAt) === today)
+    const perUserDailyUsed = userId ? sameDayApplications.filter(item => item.userId === userId).length : 0
+    const cooldownUntil = userId ? recentSubmissionCooldownUntil(userId, referenceAt) : undefined
+    const reasons: string[] = []
+
+    if (!kindPolicy.enabled)
+      reasons.push(kindPolicy.closedReason || `${type.toUpperCase()} 申请暂未开放`)
+    if (!isWithinOpenWindow(kindPolicy, new Date(referenceAt)))
+      reasons.push(`${type.toUpperCase()} 申请不在当前开放时间段`)
+    if (cooldownUntil)
+      reasons.push(`提交冷却中，${formatDate(cooldownUntil)} 后可再次提交`)
+    if (kindPolicy.dailyLimit > 0 && sameDayApplications.length >= kindPolicy.dailyLimit)
+      reasons.push(`${type.toUpperCase()} 今日申请名额已满`)
+    if (kindPolicy.perUserDailyLimit > 0 && perUserDailyUsed >= kindPolicy.perUserDailyLimit)
+      reasons.push(`你今日 ${type.toUpperCase()} 申请次数已达上限`)
+    if (descriptionLength > 0 && descriptionLength < policy.minDescriptionChars)
+      reasons.push(`申请内容不得少于 ${policy.minDescriptionChars} 字`)
+
+    return {
+      type,
+      enabled: kindPolicy.enabled,
+      available: reasons.length === 0,
+      reason: reasons[0] ?? '',
+      descriptionLength,
+      minDescriptionChars: policy.minDescriptionChars,
+      descriptionOk: descriptionLength >= policy.minDescriptionChars,
+      cooldownUntil,
+      dailyLimit: kindPolicy.dailyLimit,
+      dailyUsed: sameDayApplications.length,
+      dailyRemaining: kindPolicy.dailyLimit > 0 ? Math.max(0, kindPolicy.dailyLimit - sameDayApplications.length) : undefined,
+      perUserDailyLimit: kindPolicy.perUserDailyLimit,
+      perUserDailyUsed,
+      perUserDailyRemaining: kindPolicy.perUserDailyLimit > 0 ? Math.max(0, kindPolicy.perUserDailyLimit - perUserDailyUsed) : undefined,
+      openWindowLabel: applicationOpenWindowLabel(kindPolicy),
+      powEnabled: policy.powEnabled,
+      powDifficulty: policy.powDifficulty,
+      turnstileEnabled: policy.turnstileEnabled,
+      turnstileSiteKey: policy.turnstileSiteKey,
+    }
+  }
+
+  function assertApplicationPolicy(input: {
+    userId: string
+    type: RequestKind
+    title: string
+    description: string
+    createdAt: string
+    powNonce?: string
+    turnstileVerified?: boolean
+  }) {
+    const policy = state.applicationPolicy
+    const kindPolicy = policy.categories[input.type]
+    if (!kindPolicy.enabled)
+      throw new Error(kindPolicy.closedReason || `${input.type.toUpperCase()} 申请暂未开放`)
+    if (!isWithinOpenWindow(kindPolicy, new Date(input.createdAt)))
+      throw new Error(`${input.type.toUpperCase()} 申请不在当前开放时间段`)
+
+    const plainLength = richTextToPlainText(input.description).trim().length
+    if (plainLength < policy.minDescriptionChars)
+      throw new Error(`申请内容不得少于 ${policy.minDescriptionChars} 字`)
+
+    const cooldownUntil = recentSubmissionCooldownUntil(input.userId, input.createdAt)
+    if (cooldownUntil)
+      throw new Error(`提交过于频繁，请在 ${formatDate(cooldownUntil)} 后再提交`)
+
+    const today = localDateKey(input.createdAt)
+    const sameDayApplications = state.applications
+      .filter(item => item.type === input.type && item.status !== 'draft' && localDateKey(item.createdAt) === today)
+    if (kindPolicy.dailyLimit > 0 && sameDayApplications.length >= kindPolicy.dailyLimit)
+      throw new Error(`${input.type.toUpperCase()} 今日申请名额已满`)
+    if (kindPolicy.perUserDailyLimit > 0 && sameDayApplications.filter(item => item.userId === input.userId).length >= kindPolicy.perUserDailyLimit)
+      throw new Error(`你今日 ${input.type.toUpperCase()} 申请次数已达上限`)
+
+    if (policy.turnstileEnabled && !input.turnstileVerified)
+      throw new Error('请先完成人机验证')
+    if (policy.powEnabled) {
+      const challenge = applicationPowChallenge(input)
+      if (!isValidApplicationPow(challenge, input.powNonce, policy.powDifficulty))
+        throw new Error('PoW 校验未通过，请重新提交')
+    }
+  }
+
   function assertCanCreateRequest(userId: string) {
     if (activeRequestCount(userId) >= MAX_ACTIVE_USER_REQUESTS)
       throw new Error(`一个用户最多只能同时创建 ${MAX_ACTIVE_USER_REQUESTS} 个待处理请求`)
@@ -1575,6 +1910,15 @@ export function useWelfareStore() {
     assertCanCreateRequest(currentUser.value.id)
 
     const createdAt = now()
+    assertApplicationPolicy({
+      userId: currentUser.value.id,
+      type: payload.type,
+      title,
+      description,
+      createdAt,
+      powNonce: payload.powNonce,
+      turnstileVerified: payload.turnstileVerified,
+    })
     const pricing = buildPricingSnapshot(payload.type, createdAt)
     const llmApiModel = payload.type === 'code' ? resolveLlmApiModel(payload.llmApiModelKey ?? (payload.codexBudgetUsd ? 'codex' : undefined)) : undefined
     const llmApiBudgetUsd = payload.type === 'code' && llmApiModel ? normalizeLlmApiBudgetUsd(payload.llmApiBudgetUsd ?? payload.codexBudgetUsd, llmApiModel) : undefined
@@ -1678,6 +2022,17 @@ export function useWelfareStore() {
       throw new Error('请填写申请标题')
     if (!isDraft && !payload.reason.trim())
       throw new Error('请填写申请说明')
+    if (!isDraft) {
+      assertApplicationPolicy({
+        userId: currentUser.value.id,
+        type: 'resource',
+        title,
+        description: buildResourceDescription(payload),
+        createdAt,
+        powNonce: payload.powNonce,
+        turnstileVerified: payload.turnstileVerified,
+      })
+    }
     if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('附件总大小不能超过 200MB')
     if (!resourceTypes.length)
@@ -2129,6 +2484,64 @@ export function useWelfareStore() {
     rejectApplication(applicationId, reason, options)
   }
 
+  function latestVerifiedEducationEmailChallenge(userId: string, email: string) {
+    return state.educationEmailChallenges
+      .filter(item => item.userId === userId && item.email === email && !!item.verifiedAt)
+      .sort((a, b) => b.verifiedAt!.localeCompare(a.verifiedAt!))[0]
+  }
+
+  function sendEducationEmailCode(email: string) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const normalizedEmail = normalizeEmail(email)
+    assertEducationEmail(normalizedEmail)
+
+    const createdAt = now()
+    const challenge: EducationEmailChallenge = {
+      id: createId('edu_email'),
+      userId: currentUser.value.id,
+      email: normalizedEmail,
+      code: createEducationEmailCode(),
+      expiresAt: addHours(createdAt, EDUCATION_EMAIL_CODE_TTL_MINUTES / 60),
+      createdAt,
+    }
+    state.educationEmailChallenges = state.educationEmailChallenges
+      .filter((item) => {
+        const expiresAt = new Date(item.expiresAt).getTime()
+        return item.verifiedAt || (Number.isFinite(expiresAt) && expiresAt > Date.now())
+      })
+    state.educationEmailChallenges.unshift(challenge)
+    return challenge
+  }
+
+  function verifyEducationEmailCode(email: string, code: string) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const normalizedEmail = normalizeEmail(email)
+    assertEducationEmail(normalizedEmail)
+    const normalizedCode = code.trim()
+    if (!/^\d{6}$/.test(normalizedCode))
+      throw new Error('请输入 6 位验证码')
+
+    const challenge = state.educationEmailChallenges.find(item =>
+      item.userId === currentUser.value?.id
+      && item.email === normalizedEmail
+      && item.code === normalizedCode
+      && !item.verifiedAt,
+    )
+    if (!challenge)
+      throw new Error('验证码不正确或已经使用')
+
+    const expiresAt = new Date(challenge.expiresAt).getTime()
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt)
+      throw new Error('验证码已过期，请重新发送')
+
+    challenge.verifiedAt = now()
+    return challenge
+  }
+
   function submitStudentVerification(payload: SubmitStudentPayload) {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
@@ -2138,11 +2551,21 @@ export function useWelfareStore() {
     const notes = sanitizeRichText(payload.notes)
     if (isRichTextEmpty(notes))
       throw new Error('请填写认证材料说明')
-    if (payload.educationEmail?.trim() && !/^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/.test(payload.educationEmail.trim()))
-      throw new Error('请填写有效的教育邮箱')
+    const educationEmail = payload.educationEmail?.trim() ? normalizeEmail(payload.educationEmail) : undefined
+    if (educationEmail)
+      assertEducationEmail(educationEmail)
+    let verifiedChallenge = educationEmail
+      ? latestVerifiedEducationEmailChallenge(currentUser.value.id, educationEmail)
+      : undefined
+    if (payload.educationEmailCode?.trim() && !verifiedChallenge)
+      verifyEducationEmailCode(educationEmail ?? '', payload.educationEmailCode)
     if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('材料附件总大小不能超过 200MB')
     assertCanCreateRequest(currentUser.value.id)
+
+    verifiedChallenge = educationEmail
+      ? latestVerifiedEducationEmailChallenge(currentUser.value.id, educationEmail)
+      : undefined
 
     const verification: StudentVerification = {
       id: createId('stu'),
@@ -2152,7 +2575,10 @@ export function useWelfareStore() {
       identity: payload.identity?.trim(),
       grade: payload.grade?.trim(),
       educationLevel: payload.educationLevel?.trim(),
-      educationEmail: payload.educationEmail?.trim(),
+      educationEmail,
+      educationEmailVerified: !!verifiedChallenge,
+      educationEmailVerifiedAt: verifiedChallenge?.verifiedAt,
+      educationEmailChallengeId: verifiedChallenge?.id,
       notes,
       attachments: toAttachmentMeta(payload.attachments),
       status: 'pending',
@@ -2322,6 +2748,8 @@ export function useWelfareStore() {
     pendingStudentVerifications,
     totalReservedApplications,
     activeRequestCount,
+    applicationPolicyStatus,
+    recentSubmissionCooldownUntil,
     applicationCooldownUntil,
     rejectionFeeWaiverBlockedUntil,
     userName,
@@ -2346,6 +2774,8 @@ export function useWelfareStore() {
     submitApplicationResult,
     answerProApplication,
     rejectProApplication,
+    sendEducationEmailCode,
+    verifyEducationEmailCode,
     submitStudentVerification,
     approveStudentVerification,
     rejectStudentVerification,

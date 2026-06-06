@@ -5,10 +5,7 @@ interface RetentionRecord {
   id?: unknown
   createdAt?: unknown
   retentionExpiresAt?: unknown
-}
-
-interface RetentionTransaction extends RetentionRecord {
-  refId?: unknown
+  retentionExpired?: unknown
 }
 
 interface RetentionState {
@@ -43,8 +40,24 @@ function recordId(value: RetentionRecord) {
   return typeof value.id === 'string' ? value.id : undefined
 }
 
-function refId(value: RetentionTransaction) {
-  return typeof value.refId === 'string' ? value.refId : undefined
+function scrubExpiredApplication(value: RetentionRecord) {
+  const record = value as Record<string, unknown>
+  return {
+    ...record,
+    description: '<p>申请详情已按保留策略自动清理。</p>',
+    githubRepo: undefined,
+    attachments: [],
+    answer: undefined,
+    messages: [],
+    aiReview: undefined,
+    resourceItems: [],
+    termsAcceptances: [],
+    reason: undefined,
+    businessBackground: undefined,
+    selectedResourceTypes: Array.isArray(record.selectedResourceTypes) ? record.selectedResourceTypes : undefined,
+    retentionExpired: true,
+    retentionExpiredAt: typeof record.retentionExpiresAt === 'string' ? record.retentionExpiresAt : new Date().toISOString(),
+  }
 }
 
 export function applyWelfareRetentionPolicy<T extends RetentionState>(state: T) {
@@ -56,43 +69,25 @@ export function applyWelfareRetentionPolicy<T extends RetentionState>(state: T) 
   const expiredApplicationIds = new Set(
     applications
       .filter(isRetentionRecord)
+      .filter(item => item.retentionExpired !== true)
       .filter(item => recordExpired(item, referenceTime))
       .map(recordId)
       .filter((id): id is string => !!id),
   )
-  const expiredStudentVerificationIds = new Set(
-    studentVerifications
-      .filter(isRetentionRecord)
-      .filter(item => hasExpired(item.createdAt, referenceTime))
-      .map(recordId)
-      .filter((id): id is string => !!id),
-  )
 
-  const retainedApplications = applications.filter((item) => {
+  const retainedApplications = applications.map((item) => {
     if (!isRetentionRecord(item))
-      return true
+      return item
 
     const id = recordId(item)
-    return !id || !expiredApplicationIds.has(id)
+    return id && expiredApplicationIds.has(id)
+      ? scrubExpiredApplication(item)
+      : item
   })
-  const retainedStudentVerifications = studentVerifications.filter((item) => {
-    if (!isRetentionRecord(item))
-      return true
+  const retainedStudentVerifications = studentVerifications
+  const retainedTransactions = transactions
 
-    const id = recordId(item)
-    return !id || !expiredStudentVerificationIds.has(id)
-  })
-  const retainedTransactions = transactions.filter((item) => {
-    if (!isRetentionRecord(item))
-      return true
-    if (hasExpired(item.createdAt, referenceTime))
-      return false
-
-    const id = refId(item)
-    return !id || (!expiredApplicationIds.has(id) && !expiredStudentVerificationIds.has(id))
-  })
-
-  const changed = retainedApplications.length !== applications.length
+  const changed = expiredApplicationIds.size > 0
     || retainedStudentVerifications.length !== studentVerifications.length
     || retainedTransactions.length !== transactions.length
 

@@ -47,6 +47,8 @@ export function assertWelfareState(input: Partial<WelfareState>): asserts input 
     throw new Error('申请状态未初始化')
   if (!Array.isArray(input.studentVerifications))
     throw new Error('学生认证状态未初始化')
+  if (!Array.isArray(input.educationEmailChallenges))
+    input.educationEmailChallenges = []
   if (!Array.isArray(input.crowdReviews))
     input.crowdReviews = []
   if (!Array.isArray(input.transactions))

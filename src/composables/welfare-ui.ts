@@ -18,15 +18,18 @@ import {
   saveNotificationProviderConfig,
   saveNotificationSettings,
   savePushSubscription,
+  sendEducationEmailCode as sendEducationEmailCodeMail,
   urlBase64ToUint8Array,
 } from './notifications'
 import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from './oauth'
 import { createRechargeOrder, loadRechargeConfig, loadRechargeStatus, saveRechargeConfig } from './recharge'
 import { createSub2ApiKey, deleteSub2ApiKey, loadSub2ApiConfig, loadSub2ApiKeys, saveSub2ApiConfig, testSub2ApiConfig } from './sub2api'
+import { verifyTurnstileToken } from './turnstile'
 import {
   ACTIVITY_DISCOUNT_RATE,
   ACTIVITY_END_AT,
   ACTIVITY_NAME,
+  applicationPowChallenge,
   calculateActivityPrice,
   calculateApplicationPrepaidCost,
   calculateLlmApiCostPoints,
@@ -39,6 +42,7 @@ import {
   LLM_API_STANDARD_PROCESSING_HOURS,
   llmApiRequiresExtendedReview,
   MAX_ACTIVE_USER_REQUESTS,
+  normalizeApplicationPolicy,
   normalizeLlmApiBudgetUsd,
   normalizeLlmApiModelPricings,
   PRO_EXPEDITE_COST,
@@ -49,6 +53,7 @@ import {
   RESOURCE_DEFAULT_DURATION,
   RESOURCE_TERMS,
   RESOURCE_TYPE_CONFIGS,
+  solveApplicationPow,
   STORAGE_EXTENSION_COST,
   STUDENT_REVIEW_FEE,
   termsForResourceTypes,
@@ -229,6 +234,19 @@ export const notificationList = ref<Awaited<ReturnType<typeof loadNotifications>
 export const unreadNotificationCount = ref(0)
 export const notificationsLoading = ref(false)
 
+export const applicationSecurityForm = reactive({
+  powNonce: '',
+  powStatus: 'idle' as 'idle' | 'computing' | 'ready',
+  turnstileToken: '',
+  turnstileVerified: false,
+  message: '',
+})
+
+export const applicationPolicyConfigForm = reactive({
+  loading: false,
+  message: '',
+})
+
 export const applicationForm = reactive({
   type: 'code' as RequestKind,
   title: 'LLMApi 额度申请',
@@ -288,6 +306,15 @@ export const studentForm = reactive({
   notes: '<h3>身份说明</h3><ul><li>2026 级本科生</li><li>已上传学生证或录取通知截图</li></ul><h3>材料清单</h3><ul><li>学生证照片</li><li>校园邮箱截图</li></ul>',
 })
 
+export const educationEmailVerificationForm = reactive({
+  code: '',
+  sentTo: '',
+  expiresAt: '',
+  loading: false,
+  verified: false,
+  message: '',
+})
+
 export const studentCategoryOptions = [
   '高中生',
   '大学生',
@@ -341,6 +368,7 @@ export const pointDrafts = reactive<Record<string, number>>({})
 export const selectedSection = ref<'apply' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('apply')
 export const ADMIN_TABS = {
   login: '登录配置',
+  policy: '申请策略',
   github: 'GitHub 应用',
   ai: 'AI 配置',
   sub2api: 'Sub2API',
@@ -354,6 +382,7 @@ export const ADMIN_TABS = {
 } as const
 export const adminTabItems = [
   { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
+  { key: 'policy', name: ADMIN_TABS.policy, icon: 'i-carbon-rule' },
   { key: 'github', name: ADMIN_TABS.github, icon: 'i-carbon-logo-github' },
   { key: 'ai', name: ADMIN_TABS.ai, icon: 'i-carbon-ai-status' },
   { key: 'sub2api', name: ADMIN_TABS.sub2api, icon: 'i-carbon-api-1' },
@@ -436,6 +465,16 @@ export function useWelfareUiState() {
       .filter(item => item.userId === welfare.currentUser.value?.id)
       .slice(0, 8)
   })
+  const selectedApplicationPolicyStatus = computed(() => welfare.applicationPolicyStatus(applicationForm.type, {
+    userId: welfare.currentUser.value?.id,
+    title: applicationForm.title,
+    description: applicationForm.description,
+  }))
+  const resourceApplicationPolicyStatus = computed(() => welfare.applicationPolicyStatus('resource', {
+    userId: welfare.currentUser.value?.id,
+    title: resourceApplicationForm.title,
+    description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
+  }))
 
   function syncProfileForm() {
     if (!welfare.currentUser.value)
@@ -479,6 +518,7 @@ export function useWelfareUiState() {
       applicationForm.description = '<p>请按资源类型填写申请材料，并在提交前确认自动合并的条款。</p>'
     }
     applicationForm.waiveRejectionReviewFee = false
+    resetApplicationSecurity()
   })
 
   function statusText(status: string) {
@@ -524,6 +564,58 @@ export function useWelfareUiState() {
 
   function resetApplicationFiles() {
     applicationFiles.value = []
+  }
+
+  function resetApplicationSecurity() {
+    applicationSecurityForm.powNonce = ''
+    applicationSecurityForm.powStatus = 'idle'
+    applicationSecurityForm.turnstileToken = ''
+    applicationSecurityForm.turnstileVerified = false
+    applicationSecurityForm.message = ''
+  }
+
+  function setApplicationTurnstileToken(token: string) {
+    applicationSecurityForm.turnstileToken = token
+    applicationSecurityForm.turnstileVerified = false
+  }
+
+  async function prepareApplicationSecurity(input: { type: RequestKind, title: string, description: string }) {
+    const user = welfare.currentUser.value
+    if (!user)
+      throw new Error('请先登录')
+
+    const policy = welfare.state.applicationPolicy
+    const proof: { powNonce?: string, turnstileVerified?: boolean } = {}
+
+    if (policy.powEnabled) {
+      applicationSecurityForm.powStatus = 'computing'
+      applicationSecurityForm.message = '正在计算提交 PoW...'
+      const challenge = applicationPowChallenge({
+        userId: user.id,
+        type: input.type,
+        title: input.title,
+        description: input.description,
+      })
+      proof.powNonce = solveApplicationPow(challenge, policy.powDifficulty)
+      applicationSecurityForm.powNonce = proof.powNonce
+      applicationSecurityForm.powStatus = 'ready'
+    }
+
+    if (policy.turnstileEnabled) {
+      if (!applicationSecurityForm.turnstileToken)
+        throw new Error('请先完成人机验证')
+
+      applicationSecurityForm.message = '正在校验 Turnstile...'
+      await verifyTurnstileToken(user.id, applicationSecurityForm.turnstileToken)
+      applicationSecurityForm.turnstileVerified = true
+      proof.turnstileVerified = true
+    }
+    else {
+      proof.turnstileVerified = true
+    }
+
+    applicationSecurityForm.message = policy.powEnabled || policy.turnstileEnabled ? '提交安全校验已完成' : ''
+    return proof
   }
 
   function defaultLlmApiPayload() {
@@ -634,6 +726,14 @@ export function useWelfareUiState() {
     if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
       throw new Error('请确认所有自动合并的条款')
 
+    const security = saveAsDraft
+      ? {}
+      : await prepareApplicationSecurity({
+          type: 'resource',
+          title: resourceApplicationForm.title,
+          description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
+        })
+
     welfare.submitResourceApplication({
       title: resourceApplicationForm.title,
       departmentId: resourceApplicationForm.departmentId,
@@ -650,6 +750,7 @@ export function useWelfareUiState() {
       acceptedTermIds: resourceApplicationForm.acceptedTermIds,
       attachments: applicationFiles.value,
       saveAsDraft,
+      ...security,
     })
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
@@ -701,6 +802,60 @@ export function useWelfareUiState() {
 
   function resetStudentFiles() {
     studentFiles.value = []
+  }
+
+  async function requestEducationEmailCode() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    educationEmailVerificationForm.loading = true
+    educationEmailVerificationForm.message = ''
+    try {
+      const challenge = welfare.sendEducationEmailCode(studentForm.educationEmail)
+      await sendEducationEmailCodeMail(welfare.currentUser.value.id, {
+        email: challenge.email,
+        code: challenge.code,
+      })
+      educationEmailVerificationForm.sentTo = challenge.email
+      educationEmailVerificationForm.expiresAt = challenge.expiresAt
+      educationEmailVerificationForm.verified = false
+      educationEmailVerificationForm.message = '验证码已发送，请在 10 分钟内填写'
+      await saveWelfareState(welfare.state)
+    }
+    finally {
+      educationEmailVerificationForm.loading = false
+    }
+  }
+
+  async function confirmEducationEmailCode() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    const challenge = welfare.verifyEducationEmailCode(studentForm.educationEmail, educationEmailVerificationForm.code)
+    educationEmailVerificationForm.sentTo = challenge.email
+    educationEmailVerificationForm.expiresAt = challenge.expiresAt
+    educationEmailVerificationForm.verified = true
+    educationEmailVerificationForm.message = '教育邮箱已完成验证码校验，仍需人工复核'
+    await saveWelfareState(welfare.state)
+  }
+
+  async function persistApplicationPolicy() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    applicationPolicyConfigForm.loading = true
+    applicationPolicyConfigForm.message = ''
+    try {
+      welfare.state.applicationPolicy = normalizeApplicationPolicy(welfare.state.applicationPolicy)
+      await saveWelfareState(welfare.state)
+      applicationPolicyConfigForm.message = '申请策略配置已保存'
+    }
+    finally {
+      applicationPolicyConfigForm.loading = false
+    }
   }
 
   function crowdReviewDraftFor(applicationId: string) {
@@ -1285,6 +1440,13 @@ export function useWelfareUiState() {
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
 
+    const security = applicationId
+      ? {}
+      : await prepareApplicationSecurity({
+          type: 'image',
+          title: applicationForm.title,
+          description: applicationForm.description,
+        })
     const application = applicationId
       ? welfare.state.applications.find(item => item.id === applicationId)
       : welfare.submitApplication({
@@ -1300,6 +1462,7 @@ export function useWelfareUiState() {
           llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
           llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
           llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
+          ...security,
         })
     if (!application || application.type !== 'image')
       throw new Error('图片申请不存在')
@@ -1319,6 +1482,11 @@ export function useWelfareUiState() {
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
 
+    const security = await prepareApplicationSecurity({
+      type: applicationForm.type,
+      title: applicationForm.title,
+      description: applicationForm.description,
+    })
     const application = welfare.submitApplication({
       type: applicationForm.type,
       title: applicationForm.title,
@@ -1332,6 +1500,7 @@ export function useWelfareUiState() {
       llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
       llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
       llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
+      ...security,
     })
     await saveWelfareState(welfare.state)
     try {
@@ -1501,6 +1670,8 @@ export function useWelfareUiState() {
     notificationList,
     unreadNotificationCount,
     notificationsLoading,
+    applicationSecurityForm,
+    applicationPolicyConfigForm,
     lastRechargeStatus,
     applicationForm,
     resourceApplicationForm,
@@ -1509,6 +1680,7 @@ export function useWelfareUiState() {
     resourceProvisionDrafts,
     applicationFiles,
     studentForm,
+    educationEmailVerificationForm,
     studentFiles,
     studentCategoryOptions,
     studentEducationLevelOptions,
@@ -1525,6 +1697,8 @@ export function useWelfareUiState() {
     resourceTypeConfigs,
     resourceTerms: RESOURCE_TERMS,
     selectedResourceTerms,
+    selectedApplicationPolicyStatus,
+    resourceApplicationPolicyStatus,
     pricingSummary,
     llmApiBudgetOptions,
     llmApiReviewLimits,
@@ -1550,6 +1724,9 @@ export function useWelfareUiState() {
     statusText,
     statusTone,
     typeIcon,
+    resetApplicationSecurity,
+    setApplicationTurnstileToken,
+    prepareApplicationSecurity,
     resetApplicationFiles,
     addResourceApplicationItem,
     removeResourceApplicationItem,
@@ -1560,6 +1737,9 @@ export function useWelfareUiState() {
     approveResourceItem,
     completeResourceProvision,
     resetStudentFiles,
+    requestEducationEmailCode,
+    confirmEducationEmailCode,
+    persistApplicationPolicy,
     crowdReviewDraftFor,
     submitCrowdReviewDraft,
     rejectApplicationWithOptions,
