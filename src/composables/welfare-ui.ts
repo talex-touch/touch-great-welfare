@@ -1,5 +1,6 @@
 import type { TemporaryKeyView } from './ai'
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
+import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
 import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType } from './welfare'
@@ -19,6 +20,7 @@ import {
   savePushSubscription,
   urlBase64ToUint8Array,
 } from './notifications'
+import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from './oauth'
 import { createRechargeOrder, loadRechargeConfig, loadRechargeStatus, saveRechargeConfig } from './recharge'
 import { createSub2ApiKey, deleteSub2ApiKey, loadSub2ApiConfig, loadSub2ApiKeys, saveSub2ApiConfig, testSub2ApiConfig } from './sub2api'
 import {
@@ -116,6 +118,17 @@ export const githubAppConfigForm = reactive({
 
 export const githubAuthorizationForm = reactive({
   loading: false,
+  message: '',
+})
+
+export const oauthConfigForm = reactive({
+  loading: false,
+  message: '',
+})
+export const oauthProviderConfigs = ref<Array<OAuthProviderConfigView & { clientSecret: string }>>([])
+export const publicOAuthProviders = ref<PublicOAuthProvider[]>([])
+export const oauthLoginForm = reactive({
+  loadingProviderId: '',
   message: '',
 })
 
@@ -860,6 +873,98 @@ export function useWelfareUiState() {
     }
   }
 
+  function applyOAuthProviderConfigs(providers: OAuthProviderConfigView[]) {
+    oauthProviderConfigs.value = providers.map(provider => ({
+      ...provider,
+      clientSecret: '',
+    }))
+  }
+
+  async function refreshOAuthProviders() {
+    const result = await loadOAuthProviders()
+    publicOAuthProviders.value = result.providers
+  }
+
+  async function refreshOAuthProviderConfigs() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    oauthConfigForm.loading = true
+    try {
+      const result = await loadOAuthProviderConfigs(welfare.currentUser.value.id)
+      applyOAuthProviderConfigs(result.providers)
+    }
+    finally {
+      oauthConfigForm.loading = false
+    }
+  }
+
+  function addOAuthProviderConfig() {
+    oauthProviderConfigs.value.push({
+      id: `provider-${oauthProviderConfigs.value.length + 1}`,
+      name: 'OIDC 登录',
+      enabled: true,
+      configured: false,
+      clientId: '',
+      clientSecret: '',
+      clientSecretMasked: '',
+      callbackUrl: typeof globalThis.location !== 'undefined' ? `${globalThis.location.origin}/api/oauth/callback` : '/api/oauth/callback',
+      authorizeUrl: '',
+      tokenUrl: '',
+      userInfoUrl: '',
+      issuerUrl: '',
+      scopes: 'openid profile email',
+    })
+  }
+
+  function removeOAuthProviderConfig(id: string) {
+    oauthProviderConfigs.value = oauthProviderConfigs.value.filter(provider => provider.id !== id)
+  }
+
+  async function persistOAuthProviderConfigs() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    oauthConfigForm.loading = true
+    oauthConfigForm.message = ''
+    try {
+      const result = await saveOAuthProviderConfigs(oauthProviderConfigs.value.map(provider => ({
+        id: provider.id,
+        enabled: provider.enabled,
+        name: provider.name,
+        clientId: provider.clientId,
+        clientSecret: provider.clientSecret,
+        callbackUrl: provider.callbackUrl,
+        authorizeUrl: provider.authorizeUrl,
+        tokenUrl: provider.tokenUrl,
+        userInfoUrl: provider.userInfoUrl,
+        issuerUrl: provider.issuerUrl,
+        scopes: provider.scopes,
+      })), welfare.currentUser.value.id)
+      applyOAuthProviderConfigs(result.providers)
+      oauthConfigForm.message = 'OAuth/OIDC 登录源配置已保存'
+      await refreshOAuthProviders()
+    }
+    finally {
+      oauthConfigForm.loading = false
+    }
+  }
+
+  async function startOAuthLogin(providerId: string, redirect = '/dashboard/apply') {
+    oauthLoginForm.loadingProviderId = providerId
+    oauthLoginForm.message = '正在创建 OAuth 登录链接...'
+    try {
+      const result = await createOAuthAuthorization(providerId, redirect)
+      oauthLoginForm.message = '即将跳转到授权页...'
+      globalThis.location.href = result.authorizeUrl
+    }
+    finally {
+      oauthLoginForm.loadingProviderId = ''
+    }
+  }
+
   function applyAiConfig(config: Awaited<ReturnType<typeof loadAiConfig>>) {
     aiConfigForm.enabled = config.enabled
     aiConfigForm.baseUrl = config.baseUrl
@@ -1377,6 +1482,10 @@ export function useWelfareUiState() {
     rechargeConfigForm,
     githubAppConfigForm,
     githubAuthorizationForm,
+    oauthConfigForm,
+    oauthProviderConfigs,
+    publicOAuthProviders,
+    oauthLoginForm,
     aiConfigForm,
     sub2ApiConfigForm,
     sub2ApiKeyForm,
@@ -1465,6 +1574,12 @@ export function useWelfareUiState() {
     persistGitHubAppConfig,
     startGitHubAuthorization,
     startGitHubLogin,
+    refreshOAuthProviders,
+    refreshOAuthProviderConfigs,
+    addOAuthProviderConfig,
+    removeOAuthProviderConfig,
+    persistOAuthProviderConfigs,
+    startOAuthLogin,
     refreshAiConfig,
     persistAiConfig,
     refreshSub2ApiConfig,

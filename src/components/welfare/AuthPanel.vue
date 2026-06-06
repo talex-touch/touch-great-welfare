@@ -25,18 +25,27 @@ const {
   currentUser,
   isAdmin,
   githubAppConfigForm,
+  publicOAuthProviders,
+  oauthLoginForm,
   adminForm,
   selectedSection,
   createAdmin,
   loginAsAdmin,
   startGitHubLogin,
+  startOAuthLogin,
   refreshGitHubAppConfig,
+  refreshOAuthProviders,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
 const isUserConsentDialogOpen = ref(false)
 const hasUserConsent = ref(false)
+const pendingLoginSource = ref<{ type: 'github' | 'oauth', providerId?: string, label: string }>({
+  type: 'github',
+  label: 'GitHub App',
+})
 const githubLoginReady = computed(() => githubAppConfigForm.enabled && githubAppConfigForm.configured)
+const loginSourceCount = computed(() => publicOAuthProviders.value.length + (githubLoginReady.value ? 1 : 0))
 
 function onCreateAdmin() {
   runSafely(() => {
@@ -45,13 +54,18 @@ function onCreateAdmin() {
   }, '管理员已创建，已进入后台')
 }
 
-function onOauthLogin() {
+function onOauthLogin(source = pendingLoginSource.value) {
   runSafely(async () => {
+    if (source.type === 'oauth' && source.providerId) {
+      await startOAuthLogin(source.providerId, redirectPath.value ?? '/dashboard/apply')
+      return
+    }
     await startGitHubLogin(redirectPath.value ?? '/dashboard/apply')
-  }, '正在跳转 GitHub 授权')
+  }, `正在跳转 ${source.label} 授权`)
 }
 
-function openUserConsentDialog() {
+function openUserConsentDialog(source: { type: 'github' | 'oauth', providerId?: string, label: string }) {
+  pendingLoginSource.value = source
   hasUserConsent.value = false
   isUserConsentDialogOpen.value = true
 }
@@ -82,6 +96,7 @@ function goDashboard(section: 'admin' | 'apply' | 'profile' | 'wallet') {
 
 onMounted(() => {
   refreshGitHubAppConfig().catch(() => {})
+  refreshOAuthProviders().catch(() => {})
 })
 </script>
 
@@ -113,20 +128,31 @@ onMounted(() => {
           <div class="text-2xl fw-900">
             账号登录
           </div>
-          <TxStatusBadge :text="githubLoginReady ? 'GitHub App 已配置' : '未配置'" :status="githubLoginReady ? 'success' : 'warning'" />
+          <TxStatusBadge :text="loginSourceCount ? `${loginSourceCount} 个登录源` : '未配置'" :status="loginSourceCount ? 'success' : 'warning'" />
         </div>
         <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
           系统已创建管理员账号；请从这里登录，/init 仅用于首次初始化。
         </p>
       </div>
-      <div v-if="!githubLoginReady" class="text-sm text-amber-800 leading-6 p-4 border border-amber-400/30 rounded-2xl bg-amber-50 dark:text-amber-200">
-        请先使用管理员进入后台配置 GitHub App Client ID / Secret，普通用户才能使用 GitHub 授权登录。
+      <div v-if="!loginSourceCount" class="text-sm text-amber-800 leading-6 p-4 border border-amber-400/30 rounded-2xl bg-amber-50 dark:text-amber-200">
+        请先使用管理员进入后台配置 GitHub App 或 OAuth/OIDC 登录源，普通用户才能授权登录。
       </div>
       <DataNotice mode="compact" title="注册登录前请确认" />
       <div class="gap-3 grid sm:grid-cols-2">
-        <TxButton block variant="primary" :disabled="!githubLoginReady" @click="openUserConsentDialog">
+        <TxButton block variant="primary" :disabled="!githubLoginReady" @click="openUserConsentDialog({ type: 'github', label: 'GitHub App' })">
           <span class="i-carbon-logo-github" />
           GitHub App 授权登录
+        </TxButton>
+        <TxButton
+          v-for="provider in publicOAuthProviders"
+          :key="provider.id"
+          block
+          variant="secondary"
+          :disabled="!!oauthLoginForm.loadingProviderId"
+          @click="openUserConsentDialog({ type: 'oauth', providerId: provider.id, label: provider.name })"
+        >
+          <span class="i-carbon-login" />
+          {{ provider.name }}
         </TxButton>
         <TxButton block variant="secondary" @click="onLoginAsAdmin">
           管理员后台
@@ -184,7 +210,7 @@ onMounted(() => {
                   注册登录确认
                 </h3>
                 <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-                  首次 GitHub App 授权会创建账号并同步 GitHub 公开资料；再次登录会更新最后登录时间。
+                  首次 {{ pendingLoginSource.label }} 授权会创建账号并同步公开资料；再次登录会更新最后登录时间。
                 </p>
               </div>
               <button class="icon-btn shrink-0" title="关闭" @click="closeUserConsentDialog">
@@ -203,7 +229,7 @@ onMounted(() => {
                   取消
                 </TxButton>
                 <TxButton variant="primary" :disabled="!hasUserConsent" @click="confirmOauthLogin">
-                  确认并跳转 GitHub
+                  确认并跳转 {{ pendingLoginSource.label }}
                 </TxButton>
               </div>
             </div>

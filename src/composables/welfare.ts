@@ -98,6 +98,10 @@ export interface UserProfile {
   githubRepos?: string[]
   githubAuthorized?: boolean
   githubAuthorizedAt?: string
+  oauthProviderId?: string
+  oauthSubject?: string
+  oauthUsername?: string
+  oauthAuthorizedAt?: string
   studentVerified: boolean
 }
 

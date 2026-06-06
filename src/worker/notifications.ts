@@ -1153,7 +1153,43 @@ function applicationNotification(application: WelfareApplication, event: Notific
   }
 }
 
+function latestApplicationMessage(application: WelfareApplication, type?: string) {
+  return [...(application.messages ?? [])]
+    .filter(message => !type || message.type === type)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+}
+
+function supplementRequestNotification(application: WelfareApplication) {
+  const typeName = application.type.toUpperCase()
+  const message = latestApplicationMessage(application, 'system')
+  return {
+    title: `${typeName} 申请需要补充材料`,
+    body: message?.content || `你的 ${typeName} 申请需要补充材料，请进入申请详情查看要求。`,
+    data: {
+      applicationId: application.id,
+      type: application.type,
+    },
+  }
+}
+
+function supplementSubmittedNotification(application: WelfareApplication, user?: User) {
+  const typeName = application.type.toUpperCase()
+  const message = latestApplicationMessage(application, 'supplement')
+  const displayName = user?.profile.displayName || user?.profile.email || application.userId
+  return {
+    title: `${typeName} 申请已补充材料`,
+    body: message?.content || `${displayName} 已补充 ${typeName} 申请材料，请继续审核。`,
+    data: {
+      applicationId: application.id,
+      type: application.type,
+      userId: application.userId,
+    },
+  }
+}
+
 export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, previous: Partial<WelfareState>, next: Partial<WelfareState>) {
+  const users = Array.isArray(next.users) ? next.users : []
+  const admins = users.filter(user => user.role === 'admin')
   const previousApplications = new Map((Array.isArray(previous.applications) ? previous.applications : []).map(item => [item.id, item]))
   const nextApplications = Array.isArray(next.applications) ? next.applications : []
   for (const application of nextApplications) {
@@ -1177,6 +1213,27 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
         event: 'application_rejected',
         ...message,
       })
+    }
+
+    if (['pending_review', 'processing'].includes(before.status) && application.status === 'needs_supplement') {
+      const message = supplementRequestNotification(application)
+      await createAndDispatchNotification(env, {
+        userId: application.userId,
+        event: 'application_needs_supplement',
+        ...message,
+      })
+    }
+
+    if (before.status === 'needs_supplement' && application.status === 'pending_review') {
+      const applicant = users.find(user => user.id === application.userId)
+      const message = supplementSubmittedNotification(application, applicant)
+      for (const admin of admins) {
+        await createAndDispatchNotification(env, {
+          userId: admin.id,
+          event: 'application_supplement_submitted',
+          ...message,
+        })
+      }
     }
   }
 

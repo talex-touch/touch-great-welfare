@@ -2,6 +2,7 @@ import type { WorkerEnv } from './worker/welfare-state'
 import { handleAiRequest } from './worker/ai'
 import { handleGitHubAppRequest } from './worker/github-app'
 import { handleNotificationRequest } from './worker/notifications'
+import { handleOAuthRequest } from './worker/oauth'
 import { handleRechargeRequest } from './worker/recharge'
 import { handleSub2ApiRequest } from './worker/sub2api'
 import { handleWebhookRequest } from './worker/webhook'
@@ -16,6 +17,8 @@ export default {
       return handleAiRequest(request, env)
     if (url.pathname.startsWith('/api/github-app/'))
       return handleGitHubAppRequest(request, env)
+    if (url.pathname.startsWith('/api/oauth/'))
+      return handleOAuthRequest(request, env)
     if (url.pathname.startsWith('/api/notifications'))
       return handleNotificationRequest(request, env)
     if (url.pathname.startsWith('/api/recharge/'))

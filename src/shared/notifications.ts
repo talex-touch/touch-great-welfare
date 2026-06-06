@@ -1,5 +1,5 @@
 export type NotificationChannel = 'in_app' | 'email' | 'feishu' | 'browser_push'
-export type NotificationEvent = 'application_answered' | 'application_rejected' | 'student_approved' | 'student_rejected' | 'ai_image_succeeded' | 'ai_image_failed'
+export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_approved' | 'student_rejected' | 'ai_image_succeeded' | 'ai_image_failed'
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
 
 export interface NotificationItem {
@@ -50,6 +50,8 @@ export function notificationEventText(event: NotificationEvent) {
   const map: Record<NotificationEvent, string> = {
     application_answered: '申请已通过',
     application_rejected: '申请已退回',
+    application_needs_supplement: '申请待补充',
+    application_supplement_submitted: '申请已补充',
     student_approved: '学生认证通过',
     student_rejected: '学生认证退回',
     ai_image_succeeded: '图片生成完成',
