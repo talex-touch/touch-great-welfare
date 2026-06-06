@@ -13,6 +13,10 @@ const {
   currentUser,
   rechargeForm,
   latestTransactions,
+  currentUserCoupons,
+  todayCheckIn,
+  currentCheckInStreak,
+  checkInToday,
   lastRechargeStatus,
   startRecharge,
   refreshRechargeStatus,
@@ -23,6 +27,25 @@ const { runSafely, notify } = useWelfareFeedback()
 
 function recharge() {
   runSafely(() => startRecharge(), '正在跳转到 LINUX DO Credit')
+}
+
+function dailyCheckIn() {
+  runSafely(async () => {
+    const result = await checkInToday()
+    notify(`签到成功：+${result.points} 积分，连续 ${result.streak} 天`)
+  }, '签到已完成')
+}
+
+function couponDiscountText(rate: number) {
+  return `${Number(rate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
+}
+
+function couponStatusText(coupon: { usedAt?: string, expiresAt?: string }) {
+  if (coupon.usedAt)
+    return '已使用'
+  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() <= Date.now())
+    return '已过期'
+  return '可用'
 }
 
 onMounted(async () => {
@@ -80,6 +103,24 @@ onMounted(async () => {
             {{ rechargeForm.loading ? '创建订单中...' : 'LINUX DO Credit 充值' }}
           </TxButton>
         </div>
+        <div class="p-4 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-[#151820]">
+          <div class="flex flex-wrap gap-3 items-center justify-between">
+            <div>
+              <div class="text-sm fw-900">
+                每日签到
+              </div>
+              <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                每天随机获得 1-30 积分，高积分概率更低；连续 3 天得八折券，连续 7 天得五折券。
+              </div>
+            </div>
+            <TxButton variant="primary" :disabled="!!todayCheckIn" @click="dailyCheckIn">
+              {{ todayCheckIn ? `今日已签到 +${todayCheckIn.points}` : '今日签到' }}
+            </TxButton>
+          </div>
+          <div class="text-xs text-slate-500 mt-3 dark:text-slate-400">
+            当前连续签到 {{ currentCheckInStreak }} 天
+          </div>
+        </div>
         <div v-if="rechargeForm.statusMessage" class="text-xs text-slate-500 dark:text-slate-400">
           {{ rechargeForm.statusMessage }}
         </div>
@@ -90,9 +131,35 @@ onMounted(async () => {
     </TxCard>
 
     <TxCard class="solid-panel" background="pure" :padding="20" :radius="28">
-      <h3 class="text-xl fw-900">
-        积分流水
-      </h3>
+      <div class="flex flex-wrap gap-3 items-center justify-between">
+        <h3 class="text-xl fw-900">
+          积分流水
+        </h3>
+        <TxStatusBadge :text="`${currentUserCoupons.length} 张券`" status="info" size="sm" />
+      </div>
+      <div class="mt-4">
+        <div class="text-sm fw-900">
+          我的优惠券
+        </div>
+        <div class="mt-3 space-y-2">
+          <div v-if="!currentUserCoupons.length" class="text-sm text-slate-500 p-4 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
+            暂无优惠券
+          </div>
+          <div v-for="coupon in currentUserCoupons" :key="coupon.id" class="p-3 rounded-2xl bg-white flex gap-3 items-start justify-between dark:bg-[#151820]">
+            <div>
+              <div class="text-sm fw-800">
+                {{ coupon.name }}
+              </div>
+              <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                {{ couponDiscountText(coupon.discountRate) }} · {{ coupon.expiresAt ? `有效至 ${formatDate(coupon.expiresAt)}` : '长期有效' }}
+              </div>
+            </div>
+            <span class="text-xs fw-900 px-2 py-1 rounded-full bg-slate-100 dark:bg-white/10">
+              {{ couponStatusText(coupon) }}
+            </span>
+          </div>
+        </div>
+      </div>
       <div class="mt-4 space-y-3">
         <div v-if="!latestTransactions.length" class="text-sm text-slate-500 p-6 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
           暂无流水

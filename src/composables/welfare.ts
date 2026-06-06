@@ -90,6 +90,7 @@ export interface ApplicationItem {
 export interface UserProfile {
   displayName: string
   email: string
+  inviteCode?: string
   avatar?: string
   bio?: string
   githubUsername?: string
@@ -154,6 +155,10 @@ export interface WelfareApplication {
   baseCost?: number
   cost: number
   costCharged: boolean
+  couponId?: string
+  couponName?: string
+  couponDiscountRate?: number
+  couponDiscountAmount?: number
   pricingDiscountRate?: number
   pricingPromotionName?: string
   pricingPromotionEndsAt?: string
@@ -235,6 +240,7 @@ export interface ApplicationMessage {
 export interface StudentVerification {
   id: string
   userId: string
+  realName: string
   category: string
   school?: string
   identity?: string
@@ -259,9 +265,47 @@ export interface EducationEmailChallenge {
   userId: string
   email: string
   code: string
+  subject: string
+  body: string
+  mailto: string
   expiresAt: string
+  submittedAt?: string
   verifiedAt?: string
   createdAt: string
+}
+
+export type CouponSource = 'daily_streak_3' | 'daily_streak_7' | 'manual'
+
+export interface UserCoupon {
+  id: string
+  userId: string
+  name: string
+  discountRate: number
+  source: CouponSource
+  createdAt: string
+  expiresAt?: string
+  usedAt?: string
+  usedApplicationId?: string
+}
+
+export interface DailyCheckIn {
+  id: string
+  userId: string
+  dateKey: string
+  points: number
+  streak: number
+  couponIds: string[]
+  createdAt: string
+}
+
+export interface InvitationBinding {
+  id: string
+  inviterUserId: string
+  inviteeUserId: string
+  inviteCode: string
+  createdAt: string
+  inviterVouchedAt?: string
+  inviteeVouchedAt?: string
 }
 
 export interface CrowdReview {
@@ -311,6 +355,9 @@ export interface WelfareState {
   applications: WelfareApplication[]
   studentVerifications: StudentVerification[]
   educationEmailChallenges: EducationEmailChallenge[]
+  coupons: UserCoupon[]
+  dailyCheckIns: DailyCheckIn[]
+  invitationBindings: InvitationBinding[]
   crowdReviews: CrowdReview[]
   transactions: CreditTransaction[]
   createdAt: string
@@ -369,6 +416,7 @@ export interface SubmitResourceApplicationPayload {
     duration?: string
   }>
   acceptedTermIds: ResourceTermId[]
+  couponId?: string
   attachments?: FileLike[]
   saveAsDraft?: boolean
   powNonce?: string
@@ -395,13 +443,14 @@ export interface AppendApplicationContextPayload {
 }
 
 export interface SubmitStudentPayload {
+  realName: string
   category: string
   school?: string
   identity?: string
   grade?: string
   educationLevel?: string
   educationEmail?: string
-  educationEmailCode?: string
+  educationEmailChallengeId?: string
   notes: string
   attachments?: FileLike[]
 }
@@ -661,7 +710,11 @@ export const MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
 export const MAX_ACTIVE_USER_REQUESTS = 5
 export const DEFAULT_MIN_APPLICATION_DESCRIPTION_CHARS = 50
 export const DEFAULT_APPLICATION_SUBMIT_COOLDOWN_SECONDS = 60
-export const EDUCATION_EMAIL_CODE_TTL_MINUTES = 10
+export const EDUCATION_EMAIL_CHALLENGE_TTL_HOURS = 24 * 7
+export const EDUCATION_EMAIL_REVIEW_INBOX = 'welfare@tagzxia.com'
+export const DAILY_CHECK_IN_MAX_POINTS = 30
+export const DAILY_CHECK_IN_COUPON_TTL_DAYS = 30
+export const INVITATION_BIND_WINDOW_HOURS = 8
 export { DATA_RETENTION_DAYS }
 
 const DEFAULT_KIND_POLICY: ApplicationKindPolicy = {
@@ -790,7 +843,23 @@ function assertEducationEmail(value: string) {
 }
 
 function createEducationEmailCode() {
-  return String(Math.floor(100000 + Math.random() * 900000))
+  const randomParts = Array.from({ length: 3 }, () => Math.random().toString(36).slice(2, 10).toUpperCase())
+  return `TGW-EDU-${Date.now().toString(36).toUpperCase()}-${randomParts.join('-')}`
+}
+
+export function createUserInviteCode(userId: string) {
+  return `TGW-${simplePowHash(userId).slice(0, 8).toUpperCase()}`
+}
+
+function shiftDateKey(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return localDateKey(date)
+}
+
+export function rollDailyCheckInPoints(random = Math.random) {
+  const value = Math.max(0, Math.min(0.999999, random()))
+  return Math.max(1, Math.ceil(DAILY_CHECK_IN_MAX_POINTS * (1 - Math.sqrt(value))))
 }
 
 function isPromotionActive(referenceTime = now()) {
@@ -1004,6 +1073,9 @@ function defaultState(): WelfareState {
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
+    coupons: [],
+    dailyCheckIns: [],
+    invitationBindings: [],
     crowdReviews: [],
     transactions: [],
     createdAt: now(),
@@ -1053,9 +1125,20 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     applications: input.applications ?? [],
     studentVerifications: input.studentVerifications ?? [],
     educationEmailChallenges: input.educationEmailChallenges ?? [],
+    coupons: input.coupons ?? [],
+    dailyCheckIns: input.dailyCheckIns ?? [],
+    invitationBindings: input.invitationBindings ?? [],
     crowdReviews: input.crowdReviews ?? [],
     transactions: input.transactions ?? [],
   }
+
+  normalized.users = normalized.users.map(user => ({
+    ...user,
+    profile: {
+      ...user.profile,
+      inviteCode: user.profile.inviteCode || createUserInviteCode(user.id),
+    },
+  }))
 
   normalized.applications = normalized.applications.map((application) => {
     const createdAt = application.createdAt || now()
@@ -1134,6 +1217,7 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
 
   normalized.studentVerifications = normalized.studentVerifications.map(verification => ({
     ...verification,
+    realName: verification.realName?.trim() || '未填写姓名',
     educationEmail: verification.educationEmail ? normalizeEmail(verification.educationEmail) : undefined,
     educationEmailVerified: !!verification.educationEmailVerified,
   }))
@@ -1143,7 +1227,27 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     .map(item => ({
       ...item,
       email: normalizeEmail(item.email),
+      subject: item.subject || 'Touch Great Welfare 教育邮箱认证',
+      body: item.body || `认证码：${item.code}`,
+      mailto: item.mailto || `mailto:${EDUCATION_EMAIL_REVIEW_INBOX}`,
     }))
+
+  normalized.coupons = normalized.coupons
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      ...item,
+      discountRate: Math.max(0.01, Math.min(1, Number(item.discountRate || 1))),
+    }))
+
+  normalized.dailyCheckIns = normalized.dailyCheckIns
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      ...item,
+      couponIds: Array.isArray(item.couponIds) ? item.couponIds : [],
+    }))
+
+  normalized.invitationBindings = normalized.invitationBindings
+    .filter(item => item && typeof item === 'object')
 
   return applyWelfareRetentionPolicy(normalized).state
 }
@@ -1408,17 +1512,38 @@ function resourceDurationExtensionCost(duration?: string) {
   return !duration || duration === RESOURCE_DEFAULT_DURATION ? 0 : RESOURCE_DURATION_EXTENSION_COST
 }
 
-function estimatedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
+function estimatedResourceItemCostParts(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
   const durationCost = resourceDurationExtensionCost(item.duration || readString(item.payload, 'duration'))
   if (item.resourceType === 'llm_api_quota') {
     const model = resolveLlmApiModel(readString(item.payload, 'model'))
     const budgetCost = calculateLlmApiCostPoints(Number(item.payload.budgetLimit || model.defaultBudgetUsd), model)
     const rateCost = calculateLlmApiRateLimitChangeCost(Number(item.payload.rpmLimit || model.rpmLimit), model.rpmLimit, Number(item.payload.tpmLimit || model.tpmLimit), model.tpmLimit)
-    return budgetCost + rateCost + durationCost
+    return {
+      base: budgetCost,
+      rate: rateCost,
+      duration: durationCost,
+      original: budgetCost + rateCost + durationCost,
+      discounted: calculateActivityPrice(budgetCost, referenceTime) + rateCost + durationCost,
+    }
   }
-  if (item.resourceType === 'database')
-    return 1000 + (item.payload.sensitiveData ? 3000 : 0) + durationCost
-  return 800 * Math.max(1, Number(item.payload.quantity || 1)) + durationCost
+  const base = item.resourceType === 'database'
+    ? 1000 + (item.payload.sensitiveData ? 3000 : 0)
+    : 800 * Math.max(1, Number(item.payload.quantity || 1))
+  return {
+    base,
+    rate: 0,
+    duration: durationCost,
+    original: base + durationCost,
+    discounted: calculateActivityPrice(base, referenceTime) + durationCost,
+  }
+}
+
+function estimatedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
+  return estimatedResourceItemCostParts(item).original
+}
+
+function discountedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
+  return estimatedResourceItemCostParts(item, referenceTime).discounted
 }
 
 function validateResourceItemInput(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
@@ -1466,8 +1591,11 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
   item.duration = duration
   item.payload.duration = duration
   item.payload.durationExtensionCost = resourceDurationExtensionCost(duration)
-  item.payload.estimatedCost = estimatedResourceItemCost(item)
-  item.payload.discountedEstimatedCost = calculateActivityPrice(item.payload.estimatedCost)
+  const estimateParts = estimatedResourceItemCostParts(item)
+  item.payload.estimatedCost = estimateParts.original
+  item.payload.discountedEstimatedCost = estimateParts.discounted
+  item.payload.discountableEstimatedCost = estimateParts.base
+  item.payload.rateLimitChangeCost = estimateParts.rate
 
   if (['git_repository', 'cicd', 'vpn', 'ip_allowlist', 'server', 'gpu', 'k8s_namespace', 'object_storage'].includes(item.resourceType)) {
     if (!readString(item.payload, 'purpose'))
@@ -1616,6 +1744,36 @@ export function useWelfareStore() {
 
     return state.studentVerifications
       .filter(item => item.userId === currentUser.value?.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  })
+  const currentUserCoupons = computed(() => {
+    if (!currentUser.value)
+      return []
+
+    return state.coupons
+      .filter(item => item.userId === currentUser.value?.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  })
+  const currentUserDailyCheckIns = computed(() => {
+    if (!currentUser.value)
+      return []
+
+    return state.dailyCheckIns
+      .filter(item => item.userId === currentUser.value?.id)
+      .sort((a, b) => b.dateKey.localeCompare(a.dateKey))
+  })
+  const currentUserInvitationBinding = computed(() => {
+    if (!currentUser.value)
+      return undefined
+
+    return state.invitationBindings.find(item => item.inviteeUserId === currentUser.value?.id)
+  })
+  const currentUserInviteeBindings = computed(() => {
+    if (!currentUser.value)
+      return []
+
+    return state.invitationBindings
+      .filter(item => item.inviterUserId === currentUser.value?.id)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
   const isAdmin = computed(() => currentUser.value?.role === 'admin')
@@ -1833,6 +1991,168 @@ export function useWelfareStore() {
     })
   }
 
+  function isCouponAvailable(coupon: UserCoupon, userId: string, referenceTime = now()) {
+    if (coupon.userId !== userId || coupon.usedAt)
+      return false
+    if (!coupon.expiresAt)
+      return true
+    const expiresAt = new Date(coupon.expiresAt).getTime()
+    const currentTime = new Date(referenceTime).getTime()
+    return Number.isFinite(expiresAt) && Number.isFinite(currentTime) && expiresAt > currentTime
+  }
+
+  function availableCouponsForUser(userId: string, referenceTime = now()) {
+    return state.coupons
+      .filter(coupon => isCouponAvailable(coupon, userId, referenceTime))
+      .sort((left, right) => left.discountRate - right.discountRate || left.createdAt.localeCompare(right.createdAt))
+  }
+
+  function createUserCoupon(userId: string, source: CouponSource, discountRate: number, createdAt = now()) {
+    const name = discountRate <= 0.5 ? '连续签到 7 天五折券' : '连续签到 3 天八折券'
+    const coupon: UserCoupon = {
+      id: createId('coupon'),
+      userId,
+      name,
+      discountRate,
+      source,
+      createdAt,
+      expiresAt: addDays(createdAt, DAILY_CHECK_IN_COUPON_TTL_DAYS),
+    }
+    state.coupons.unshift(coupon)
+    return coupon
+  }
+
+  function applyCouponDiscount(cost: number, coupon?: UserCoupon) {
+    if (!coupon)
+      return { payableCost: cost, discountAmount: 0 }
+
+    const payableCost = Math.max(1, Math.ceil(cost * coupon.discountRate))
+    return {
+      payableCost,
+      discountAmount: Math.max(0, cost - payableCost),
+    }
+  }
+
+  function resourceCheckoutSnapshot(userId: string, items: SubmitResourceApplicationPayload['resourceItems'], couponId: string | undefined, createdAt: string) {
+    const baseCost = items.reduce((sum, item) => sum + estimatedResourceItemCost(item), 0)
+    const activityCost = items.reduce((sum, item) => sum + discountedResourceItemCost(item, createdAt), 0)
+    const coupon = couponId
+      ? availableCouponsForUser(userId, createdAt).find(item => item.id === couponId)
+      : undefined
+    if (couponId && !coupon)
+      throw new Error('优惠券不可用或已过期')
+
+    const couponResult = applyCouponDiscount(activityCost, coupon)
+    return {
+      baseCost,
+      activityCost,
+      cost: couponResult.payableCost,
+      activityDiscountRate: baseCost > 0 ? activityCost / baseCost : 1,
+      activityDiscountAmount: Math.max(0, baseCost - activityCost),
+      coupon,
+      couponDiscountAmount: couponResult.discountAmount,
+    }
+  }
+
+  function checkInToday() {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const createdAt = now()
+    const dateKey = localDateKey(new Date(createdAt))
+    if (state.dailyCheckIns.some(item => item.userId === currentUser.value?.id && item.dateKey === dateKey))
+      throw new Error('今日已签到')
+
+    const lastCheckIn = state.dailyCheckIns
+      .filter(item => item.userId === currentUser.value?.id && item.dateKey < dateKey)
+      .sort((left, right) => right.dateKey.localeCompare(left.dateKey))[0]
+    const streak = lastCheckIn?.dateKey === shiftDateKey(dateKey, -1) ? lastCheckIn.streak + 1 : 1
+    const points = rollDailyCheckInPoints()
+    const coupons: UserCoupon[] = []
+    if (streak === 3)
+      coupons.push(createUserCoupon(currentUser.value.id, 'daily_streak_3', 0.8, createdAt))
+    if (streak > 0 && streak % 7 === 0)
+      coupons.push(createUserCoupon(currentUser.value.id, 'daily_streak_7', 0.5, createdAt))
+
+    const checkIn: DailyCheckIn = {
+      id: createId('checkin'),
+      userId: currentUser.value.id,
+      dateKey,
+      points,
+      streak,
+      couponIds: coupons.map(coupon => coupon.id),
+      createdAt,
+    }
+    addTransaction(currentUser.value.id, points, 'grant', `每日签到奖励（连续 ${streak} 天）`, checkIn.id)
+    state.dailyCheckIns.unshift(checkIn)
+    return checkIn
+  }
+
+  function normalizeInviteCode(value: string) {
+    return value.trim().toUpperCase()
+  }
+
+  function invitationBindDeadline(user: User) {
+    return addHours(user.createdAt, INVITATION_BIND_WINDOW_HOURS)
+  }
+
+  function canBindInvitation(user: User, referenceTime = now()) {
+    if (state.invitationBindings.some(item => item.inviteeUserId === user.id))
+      return false
+
+    const deadline = new Date(invitationBindDeadline(user)).getTime()
+    const currentTime = new Date(referenceTime).getTime()
+    return Number.isFinite(deadline) && Number.isFinite(currentTime) && currentTime <= deadline
+  }
+
+  function bindInvitationCode(code: string) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const normalizedCode = normalizeInviteCode(code)
+    if (!normalizedCode)
+      throw new Error('请填写邀请码')
+    if (state.invitationBindings.some(item => item.inviteeUserId === currentUser.value?.id))
+      throw new Error('你已经绑定过邀请人')
+    if (!canBindInvitation(currentUser.value))
+      throw new Error(`注册超过 ${INVITATION_BIND_WINDOW_HOURS} 小时，无法再绑定邀请人`)
+
+    const inviter = state.users.find(user => normalizeInviteCode(user.profile.inviteCode || createUserInviteCode(user.id)) === normalizedCode)
+    if (!inviter)
+      throw new Error('邀请码不存在')
+    if (inviter.id === currentUser.value.id)
+      throw new Error('不能绑定自己的邀请码')
+
+    const binding: InvitationBinding = {
+      id: createId('invite'),
+      inviterUserId: inviter.id,
+      inviteeUserId: currentUser.value.id,
+      inviteCode: normalizedCode,
+      createdAt: now(),
+    }
+    state.invitationBindings.unshift(binding)
+    return binding
+  }
+
+  function vouchInvitation(bindingId: string) {
+    assertPersistenceReady()
+    assertCurrentUser(currentUser.value)
+
+    const binding = state.invitationBindings.find(item => item.id === bindingId)
+    if (!binding)
+      throw new Error('邀请关系不存在')
+    const createdAt = now()
+    if (binding.inviterUserId === currentUser.value.id) {
+      binding.inviterVouchedAt = createdAt
+      return binding
+    }
+    if (binding.inviteeUserId === currentUser.value.id) {
+      binding.inviteeVouchedAt = createdAt
+      return binding
+    }
+    throw new Error('只能为自己的邀请关系担保')
+  }
+
   function chargeRejectionReviewFee(application: WelfareApplication) {
     const fee = application.rejectionReviewFee || calculateRejectionReviewFee(application.cost)
     addTransaction(application.userId, -fee, 'spend', '申请退回扣除 AI 审核手续费', application.id)
@@ -1844,12 +2164,14 @@ export function useWelfareStore() {
     if (hasAdmin.value)
       throw new Error('管理员已经创建')
 
+    const adminId = createId('admin')
     const admin: User = {
-      id: createId('admin'),
+      id: adminId,
       role: 'admin',
       profile: {
         displayName: payload.displayName.trim() || '公益管理员',
         email: payload.email.trim() || 'admin@example.com',
+        inviteCode: createUserInviteCode(adminId),
         githubAuthorized: false,
         studentVerified: false,
       },
@@ -2048,6 +2370,11 @@ export function useWelfareStore() {
     const applicationId = createId('app')
     const resourceItems = normalizeResourceItems(applicationId, payload.resourceItems, createdAt, !isDraft)
     const actualResourceTypes = Array.from(new Set(resourceItems.map(item => item.resourceType)))
+    const checkout = isDraft
+      ? undefined
+      : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, createdAt)
+    if (checkout && currentUser.value.points < checkout.cost)
+      throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
     const termsAcceptances = isDraft
       ? []
       : buildResourceTermsAcceptances(actualResourceTypes, payload.acceptedTermIds, currentUser.value.id, createdAt)
@@ -2061,10 +2388,16 @@ export function useWelfareStore() {
       hasOpenSourceBadge: false,
       attachments: toAttachmentMeta(payload.attachments),
       status: isDraft ? 'draft' : 'in_review',
-      baseCost: 0,
-      cost: 0,
-      costCharged: false,
-      pricingDiscountRate: 1,
+      baseCost: checkout?.baseCost ?? 0,
+      cost: checkout?.cost ?? 0,
+      costCharged: !isDraft,
+      couponId: checkout?.coupon?.id,
+      couponName: checkout?.coupon?.name,
+      couponDiscountRate: checkout?.coupon?.discountRate,
+      couponDiscountAmount: checkout?.couponDiscountAmount,
+      pricingDiscountRate: checkout?.activityDiscountRate ?? 1,
+      pricingPromotionName: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_NAME : undefined,
+      pricingPromotionEndsAt: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined,
       pricingAppliedAt: createdAt,
       aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
       rejectionReviewFee: 0,
@@ -2089,6 +2422,15 @@ export function useWelfareStore() {
       termsAcceptances,
       submittedAt: isDraft ? undefined : createdAt,
       createdAt,
+    }
+
+    if (!isDraft) {
+      if (application.cost > 0)
+        addTransaction(currentUser.value.id, -application.cost, 'spend', '资源申请订单预扣', application.id)
+      if (checkout?.coupon) {
+        checkout.coupon.usedAt = createdAt
+        checkout.coupon.usedApplicationId = application.id
+      }
     }
 
     state.applications.unshift(application)
@@ -2121,6 +2463,11 @@ export function useWelfareStore() {
     const isDraft = !!payload.saveAsDraft
     const resourceItems = normalizeResourceItems(application.id, payload.resourceItems, updatedAt, !isDraft)
     const actualResourceTypes = Array.from(new Set(resourceItems.map(item => item.resourceType)))
+    const checkout = isDraft
+      ? undefined
+      : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, updatedAt)
+    if (checkout && currentUser.value.points < checkout.cost)
+      throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
     application.title = payload.title.trim()
     application.description = buildResourceDescription(payload)
     application.attachments = toAttachmentMeta(payload.attachments)
@@ -2138,6 +2485,23 @@ export function useWelfareStore() {
       application.termsAcceptances = buildResourceTermsAcceptances(actualResourceTypes, payload.acceptedTermIds, currentUser.value.id, updatedAt)
       application.status = 'in_review'
       application.submittedAt = updatedAt
+      application.baseCost = checkout?.baseCost ?? 0
+      application.cost = checkout?.cost ?? 0
+      application.costCharged = true
+      application.couponId = checkout?.coupon?.id
+      application.couponName = checkout?.coupon?.name
+      application.couponDiscountRate = checkout?.coupon?.discountRate
+      application.couponDiscountAmount = checkout?.couponDiscountAmount
+      application.pricingDiscountRate = checkout?.activityDiscountRate ?? 1
+      application.pricingPromotionName = checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_NAME : undefined
+      application.pricingPromotionEndsAt = checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined
+      application.pricingAppliedAt = updatedAt
+      if (application.cost > 0)
+        addTransaction(currentUser.value.id, -application.cost, 'spend', '资源申请订单预扣', application.id)
+      if (checkout?.coupon) {
+        checkout.coupon.usedAt = updatedAt
+        checkout.coupon.usedApplicationId = application.id
+      }
     }
     return application
   }
@@ -2484,13 +2848,18 @@ export function useWelfareStore() {
     rejectApplication(applicationId, reason, options)
   }
 
-  function latestVerifiedEducationEmailChallenge(userId: string, email: string) {
+  function latestEducationEmailChallenge(userId: string, email: string) {
     return state.educationEmailChallenges
-      .filter(item => item.userId === userId && item.email === email && !!item.verifiedAt)
-      .sort((a, b) => b.verifiedAt!.localeCompare(a.verifiedAt!))[0]
+      .filter((item) => {
+        if (item.userId !== userId || item.email !== email)
+          return false
+        const expiresAt = new Date(item.expiresAt).getTime()
+        return Number.isFinite(expiresAt) && expiresAt > Date.now()
+      })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
   }
 
-  function sendEducationEmailCode(email: string) {
+  function createEducationEmailChallenge(email: string, realName = '') {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
 
@@ -2498,12 +2867,28 @@ export function useWelfareStore() {
     assertEducationEmail(normalizedEmail)
 
     const createdAt = now()
+    const code = createEducationEmailCode()
+    const subject = `Touch Great Welfare 教育邮箱认证 ${code}`
+    const body = [
+      'Touch Great Welfare 学生认证邮件证明',
+      '',
+      `认证码：${code}`,
+      `申请人姓名：${realName.trim() || '未填写'}`,
+      `平台用户：${currentUser.value.profile.displayName || currentUser.value.profile.email}`,
+      `平台用户 ID：${currentUser.value.id}`,
+      `教育邮箱：${normalizedEmail}`,
+      '',
+      '我确认该邮件由本人从教育/学校邮箱发出，仅作为学生认证辅助证明，仍需平台人工复核。',
+    ].join('\n')
     const challenge: EducationEmailChallenge = {
       id: createId('edu_email'),
       userId: currentUser.value.id,
       email: normalizedEmail,
-      code: createEducationEmailCode(),
-      expiresAt: addHours(createdAt, EDUCATION_EMAIL_CODE_TTL_MINUTES / 60),
+      code,
+      subject,
+      body,
+      mailto: `mailto:${EDUCATION_EMAIL_REVIEW_INBOX}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+      expiresAt: addHours(createdAt, EDUCATION_EMAIL_CHALLENGE_TTL_HOURS),
       createdAt,
     }
     state.educationEmailChallenges = state.educationEmailChallenges
@@ -2515,37 +2900,13 @@ export function useWelfareStore() {
     return challenge
   }
 
-  function verifyEducationEmailCode(email: string, code: string) {
-    assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
-
-    const normalizedEmail = normalizeEmail(email)
-    assertEducationEmail(normalizedEmail)
-    const normalizedCode = code.trim()
-    if (!/^\d{6}$/.test(normalizedCode))
-      throw new Error('请输入 6 位验证码')
-
-    const challenge = state.educationEmailChallenges.find(item =>
-      item.userId === currentUser.value?.id
-      && item.email === normalizedEmail
-      && item.code === normalizedCode
-      && !item.verifiedAt,
-    )
-    if (!challenge)
-      throw new Error('验证码不正确或已经使用')
-
-    const expiresAt = new Date(challenge.expiresAt).getTime()
-    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt)
-      throw new Error('验证码已过期，请重新发送')
-
-    challenge.verifiedAt = now()
-    return challenge
-  }
-
   function submitStudentVerification(payload: SubmitStudentPayload) {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
 
+    const realName = payload.realName.trim()
+    if (!realName)
+      throw new Error('请填写真实姓名')
     if (!payload.category.trim())
       throw new Error('请填写认证类目')
     const notes = sanitizeRichText(payload.notes)
@@ -2554,31 +2915,31 @@ export function useWelfareStore() {
     const educationEmail = payload.educationEmail?.trim() ? normalizeEmail(payload.educationEmail) : undefined
     if (educationEmail)
       assertEducationEmail(educationEmail)
-    let verifiedChallenge = educationEmail
-      ? latestVerifiedEducationEmailChallenge(currentUser.value.id, educationEmail)
-      : undefined
-    if (payload.educationEmailCode?.trim() && !verifiedChallenge)
-      verifyEducationEmailCode(educationEmail ?? '', payload.educationEmailCode)
     if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
       throw new Error('材料附件总大小不能超过 200MB')
     assertCanCreateRequest(currentUser.value.id)
 
-    verifiedChallenge = educationEmail
-      ? latestVerifiedEducationEmailChallenge(currentUser.value.id, educationEmail)
+    const emailChallenge = educationEmail
+      ? state.educationEmailChallenges.find(item =>
+        item.id === payload.educationEmailChallengeId
+        && item.userId === currentUser.value?.id
+        && item.email === educationEmail,
+      ) ?? latestEducationEmailChallenge(currentUser.value.id, educationEmail)
       : undefined
 
     const verification: StudentVerification = {
       id: createId('stu'),
       userId: currentUser.value.id,
+      realName,
       category: payload.category.trim(),
       school: payload.school?.trim(),
       identity: payload.identity?.trim(),
       grade: payload.grade?.trim(),
       educationLevel: payload.educationLevel?.trim(),
       educationEmail,
-      educationEmailVerified: !!verifiedChallenge,
-      educationEmailVerifiedAt: verifiedChallenge?.verifiedAt,
-      educationEmailChallengeId: verifiedChallenge?.id,
+      educationEmailVerified: false,
+      educationEmailVerifiedAt: undefined,
+      educationEmailChallengeId: emailChallenge?.id,
       notes,
       attachments: toAttachmentMeta(payload.attachments),
       status: 'pending',
@@ -2586,6 +2947,8 @@ export function useWelfareStore() {
       feeReturned: false,
       createdAt: now(),
     }
+    if (emailChallenge)
+      emailChallenge.submittedAt = verification.createdAt
 
     addTransaction(currentUser.value.id, -STUDENT_REVIEW_FEE, 'spend', '学生认证审核费', verification.id)
     state.studentVerifications.unshift(verification)
@@ -2741,6 +3104,10 @@ export function useWelfareStore() {
     currentUserLevelCard,
     currentUserApplications,
     currentStudentVerifications,
+    currentUserCoupons,
+    currentUserDailyCheckIns,
+    currentUserInvitationBinding,
+    currentUserInviteeBindings,
     isAdmin,
     canCrowdReview,
     pendingApplications,
@@ -2755,6 +3122,12 @@ export function useWelfareStore() {
     userName,
     userEmail,
     userLevelCard,
+    availableCouponsForUser,
+    checkInToday,
+    invitationBindDeadline,
+    canBindInvitation,
+    bindInvitationCode,
+    vouchInvitation,
     createAdmin,
     loginAsAdmin,
     logout,
@@ -2774,8 +3147,7 @@ export function useWelfareStore() {
     submitApplicationResult,
     answerProApplication,
     rejectProApplication,
-    sendEducationEmailCode,
-    verifyEducationEmailCode,
+    createEducationEmailChallenge,
     submitStudentVerification,
     approveStudentVerification,
     rejectStudentVerification,

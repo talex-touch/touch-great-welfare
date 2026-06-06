@@ -582,6 +582,9 @@ const selectedUserDetail = computed(() => {
   const studentSpend = spendTransactions.filter(item => isStudentRef(item.refId) || item.reason.includes('学生认证'))
   const rechargeIncome = incomeTransactions.filter(item => item.type === 'recharge')
   const manualAdjustments = transactions.filter(item => item.type === 'adjustment')
+  const invitationBinding = state.invitationBindings.find(item => item.inviteeUserId === user.id)
+  const invitationInviter = invitationBinding ? state.users.find(item => item.id === invitationBinding.inviterUserId) : undefined
+  const inviteeBindings = state.invitationBindings.filter(item => item.inviterUserId === user.id)
   const latestRecords = [
     ...applications.map(item => ({
       id: `app-${item.id}`,
@@ -594,7 +597,7 @@ const selectedUserDetail = computed(() => {
     ...studentVerifications.map(item => ({
       id: `student-${item.id}`,
       kind: '认证',
-      title: item.category,
+      title: `${item.realName} · ${item.category}`,
       detail: `${item.school || '未填写学校'} · ${studentStatusLabel(item.status)} · 审核费 ${formatPoints(item.reviewFee)}`,
       tone: item.status,
       time: item.createdAt,
@@ -628,6 +631,9 @@ const selectedUserDetail = computed(() => {
     pipelineSpend,
     latestRecords,
     applicationCounts,
+    invitationBinding,
+    invitationInviter,
+    inviteeBindings,
     stats: {
       balance: user.points,
       totalIncome: sumTransactions(incomeTransactions),
@@ -874,6 +880,7 @@ const studentRows = computed(() => [...state.studentVerifications]
   .filter(item => studentFilters.status === ALL_FILTER || item.status === studentFilters.status)
   .filter(item => isInDateRange(item.createdAt, studentFilters))
   .filter(item => matchesQuery(studentFilters.query, [
+    item.realName,
     item.category,
     item.school,
     item.identity,
@@ -2051,6 +2058,18 @@ onMounted(() => {
                       <span>公开仓库数量</span>
                       <b>{{ selectedUserDetail.user.profile.githubRepos?.length ?? 0 }}</b>
                     </div>
+                    <div>
+                      <span>邀请码</span>
+                      <b>{{ selectedUserDetail.user.profile.inviteCode || '未生成' }}</b>
+                    </div>
+                    <div>
+                      <span>邀请人</span>
+                      <b>{{ selectedUserDetail.invitationInviter?.profile.displayName || '未绑定' }}</b>
+                    </div>
+                    <div>
+                      <span>邀请绑定</span>
+                      <b>{{ selectedUserDetail.inviteeBindings.length }} 个邀请 / {{ selectedUserDetail.inviteeBindings.filter(item => item.inviterVouchedAt || item.inviteeVouchedAt).length }} 个担保</b>
+                    </div>
                   </div>
                   <div class="mt-4 flex flex-wrap gap-3 items-center">
                     <label v-if="selectedUserDetail.user.role !== 'admin'" class="admin-action-check">
@@ -2543,7 +2562,7 @@ onMounted(() => {
                 <div v-for="item in studentPagination.rows" :key="item.id" class="admin-table-row admin-student-grid">
                   <div class="min-w-0">
                     <div class="fw-800 truncate">
-                      {{ item.category }}
+                      {{ item.realName }} · {{ item.category }}
                     </div>
                     <div class="text-xs text-slate-500 truncate dark:text-slate-400">
                       {{ [item.grade, item.educationLevel].filter(Boolean).join(' · ') || '未填写年级学历' }}

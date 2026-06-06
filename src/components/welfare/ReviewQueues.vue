@@ -366,7 +366,7 @@ onMounted(() => {
           <div class="flex gap-3 items-start justify-between">
             <div>
               <div class="text-lg fw-900">
-                {{ item.category }}
+                {{ item.realName }} · {{ item.category }}
               </div>
               <div class="text-xs text-slate-500 mt-1">
                 {{ userName(item.userId) }} · {{ item.school || '未填写学校' }} · {{ item.attachments.length }} 个材料

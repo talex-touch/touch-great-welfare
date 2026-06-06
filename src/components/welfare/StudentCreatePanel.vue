@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
 import {
+  EDUCATION_EMAIL_REVIEW_INBOX,
   formatBytes,
   MAX_ATTACHMENT_BYTES,
   STUDENT_REVIEW_FEE,
@@ -24,8 +25,9 @@ const {
   totalStudentBytes,
   submitStudentVerification,
   resetStudentFiles,
-  requestEducationEmailCode,
-  confirmEducationEmailCode,
+  generateEducationEmailChallenge,
+  copyEducationEmailTemplate,
+  openEducationEmailClient,
 } = useWelfareUiState()
 
 const router = useRouter()
@@ -135,12 +137,13 @@ function normalizeSchoolQuery(value: string) {
 function onSubmitStudentVerification() {
   runSafely(() => {
     submitStudentVerification({
+      realName: studentForm.realName,
       category: studentForm.category,
       school: studentForm.school,
       identity: studentForm.identity,
       grade: studentForm.grade,
       educationEmail: studentForm.educationEmail,
-      educationEmailCode: educationEmailVerificationForm.code,
+      educationEmailChallengeId: educationEmailVerificationForm.challengeId,
       notes: studentForm.notes,
       attachments: studentFiles.value,
     })
@@ -150,16 +153,22 @@ function onSubmitStudentVerification() {
   }, `学生认证已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
 }
 
-function onRequestEducationEmailCode() {
+function onGenerateEducationEmailChallenge() {
   runSafely(async () => {
-    await requestEducationEmailCode()
-  }, '教育邮箱验证码已发送')
+    await generateEducationEmailChallenge()
+  }, '教育邮箱证明码已生成')
 }
 
-function onConfirmEducationEmailCode() {
+function onCopyEducationEmailTemplate() {
   runSafely(async () => {
-    await confirmEducationEmailCode()
-  }, '教育邮箱已完成验证码校验')
+    await copyEducationEmailTemplate()
+  }, '邮件模板已复制')
+}
+
+function onOpenEducationEmailClient() {
+  runSafely(async () => {
+    await openEducationEmailClient()
+  }, '已打开邮件客户端')
 }
 
 onMounted(() => {
@@ -232,6 +241,11 @@ onMounted(() => {
           <DataNotice mode="compact" title="填写前提示" timing="before" />
 
           <div class="gap-5 grid md:grid-cols-2">
+            <label class="gap-2 grid">
+              <span class="field-label">真实姓名</span>
+              <TxInput v-model="studentForm.realName" placeholder="必须填写，用于人工复核" />
+              <span class="field-hint">学生认证强制提供姓名；请勿填写昵称或无法复核的称呼。</span>
+            </label>
             <div class="gap-2 grid">
               <span class="field-label">认证类目</span>
               <div class="school-combobox">
@@ -324,22 +338,28 @@ onMounted(() => {
             </div>
             <div class="gap-2 grid md:col-span-2">
               <label class="gap-2 grid">
-                <span class="field-label">教育邮箱</span>
+                <span class="field-label">教育邮箱邮件证明</span>
                 <TxInput v-model="studentForm.educationEmail" type="email" placeholder="name@school.edu.cn，可选" />
               </label>
-              <div class="gap-3 grid md:grid-cols-[1fr_auto_auto]">
-                <TxInput v-model="educationEmailVerificationForm.code" inputmode="numeric" maxlength="6" placeholder="6 位验证码" />
-                <TxButton variant="secondary" :disabled="educationEmailVerificationForm.loading || !studentForm.educationEmail" @click="onRequestEducationEmailCode">
-                  {{ educationEmailVerificationForm.loading ? '发送中' : '发送验证码' }}
+              <div class="gap-3 grid lg:grid-cols-[1fr_auto_auto_auto]">
+                <TxInput v-model="educationEmailVerificationForm.code" readonly placeholder="生成后显示唯一证明码" />
+                <TxButton variant="secondary" :disabled="educationEmailVerificationForm.loading || !studentForm.educationEmail" @click="onGenerateEducationEmailChallenge">
+                  {{ educationEmailVerificationForm.loading ? '生成中' : '生成证明码' }}
                 </TxButton>
-                <TxButton variant="primary" :disabled="educationEmailVerificationForm.loading || !educationEmailVerificationForm.code" @click="onConfirmEducationEmailCode">
-                  校验邮箱
+                <TxButton variant="secondary" :disabled="!studentForm.educationEmail" @click="onCopyEducationEmailTemplate">
+                  复制模板
+                </TxButton>
+                <TxButton variant="primary" :disabled="!studentForm.educationEmail" @click="onOpenEducationEmailClient">
+                  一键发邮件
                 </TxButton>
               </div>
               <p class="field-hint">
-                如果有学校或机构邮箱，验证码校验可作为辅助证明；管理员仍会人工复核材料。不方便公开或受学校/机构要求限制时可以留空。
+                需要使用该教育邮箱向 {{ EDUCATION_EMAIL_REVIEW_INBOX }} 发送包含唯一证明码的邮件；该邮件只作为辅助证明，管理员仍会人工复核材料。
               </p>
-              <p v-if="educationEmailVerificationForm.message" class="field-hint" :class="educationEmailVerificationForm.verified ? 'text-emerald-700 dark:text-emerald-300' : ''">
+              <p v-if="educationEmailVerificationForm.subject" class="field-hint">
+                邮件主题：{{ educationEmailVerificationForm.subject }}
+              </p>
+              <p v-if="educationEmailVerificationForm.message" class="field-hint text-emerald-700 dark:text-emerald-300">
                 {{ educationEmailVerificationForm.message }}
               </p>
             </div>

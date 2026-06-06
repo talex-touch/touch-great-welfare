@@ -50,6 +50,10 @@ function state(points = 120): WelfareState {
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
+    coupons: [],
+    dailyCheckIns: [],
+    invitationBindings: [],
+    crowdReviews: [],
     transactions: [],
     createdAt: '2026-06-01T00:00:00.000Z',
   }

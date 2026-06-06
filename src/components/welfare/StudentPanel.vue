@@ -65,7 +65,7 @@ function goCreateStudentVerification() {
           >
             <div class="min-w-0">
               <div class="flex flex-wrap gap-2 items-center">
-                <b>{{ item.category }}</b>
+                <b>{{ item.realName }} · {{ item.category }}</b>
                 <span v-if="item.school" class="text-xs text-slate-500">{{ item.school }}</span>
               </div>
               <div class="text-xs text-slate-500 mt-1">

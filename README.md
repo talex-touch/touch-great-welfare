@@ -38,8 +38,7 @@ pnpm dev
 
 ```bash
 pnpm run check
-pnpm build
-pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc --dry-run
+pnpm run build
 ```
 
 ## Cloudflare Workers 部署
@@ -52,7 +51,19 @@ pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc -
 - 本地开发使用 D1 local 数据库，不依赖本机 PostgreSQL。
 - `not_found_handling = single-page-application` 负责 SPA 回退。
 
-本地首次接入真实 Cloudflare 环境：
+### 常规上线流程
+
+本仓库生产环境由 Cloudflare 侧 Git 集成自动部署。常规上线只需要提交并推送 `main`：
+
+```bash
+git push origin main
+```
+
+推送成功后不要再把 `wrangler whoami`、`wrangler login` 或 `pnpm run deploy` 当成必经步骤；这些命令只用于手动部署、Cloudflare 资源维护或排障。自动部署状态以 Cloudflare 控制台 / Git 集成为准。
+
+### 手动 Cloudflare 操作
+
+只有需要本机手动 dry-run、直接部署或创建 Cloudflare 资源时，才需要 Wrangler 登录：
 
 ```bash
 pnpm exec wrangler login
@@ -72,20 +83,20 @@ pnpm exec wrangler hyperdrive create touch-great-welfare-db --connection-string 
 pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc --dry-run
 ```
 
-部署：
+手动部署：
 
 ```bash
 pnpm run deploy
 ```
 
-CI 或无浏览器环境使用 API Token：
+CI、无浏览器环境或手动部署使用 API Token：
 
 ```bash
 export CLOUDFLARE_API_TOKEN="<workers-and-hyperdrive-token>"
 pnpm run deploy
 ```
 
-如果部署时报 `Authentication error [code: 10000]`，当前 Wrangler OAuth 或 API Token 没有目标账号的 Workers/Hyperdrive 写权限。重新执行 `pnpm exec wrangler login` 并确认授权到正确账号，或设置具备对应权限的 `CLOUDFLARE_API_TOKEN` 后再部署。
+如果手动部署时报 `Authentication error [code: 10000]`，当前 Wrangler OAuth 或 API Token 没有目标账号的 Workers/Hyperdrive 写权限。常规上线不依赖本机 Wrangler 认证，优先确认 `main` 是否已推送并触发 Cloudflare 自动部署；只有明确要手动部署时，再重新执行 `pnpm exec wrangler login` 或设置具备对应权限的 `CLOUDFLARE_API_TOKEN`。
 
 ## 环境变量整理
 

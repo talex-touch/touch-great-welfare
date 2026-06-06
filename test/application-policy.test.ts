@@ -9,8 +9,10 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 
 const {
   applicationPowChallenge,
+  createUserInviteCode,
   defaultApplicationPolicy,
   RESOURCE_DEFAULT_DURATION,
+  rollDailyCheckInPoints,
   solveApplicationPow,
   useWelfareStore,
 } = await import('../src/composables/welfare')
@@ -55,6 +57,9 @@ function resetStore() {
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
+    coupons: [],
+    dailyCheckIns: [],
+    invitationBindings: [],
     crowdReviews: [],
     transactions: [],
     createdAt: '2026-06-01T00:00:00.000Z',
@@ -71,6 +76,7 @@ describe('application policy', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -193,5 +199,65 @@ describe('application policy', () => {
       acceptedTermIds: [],
       saveAsDraft: false,
     })).toThrow('申请内容不得少于 200 字')
+  })
+
+  it('requires a real name for student verification', () => {
+    const store = useWelfareStore()
+
+    expect(() => store.submitStudentVerification({
+      realName: '',
+      category: '大学生',
+      notes: '<p>已上传学生证和校园材料。</p>',
+    })).toThrow('请填写真实姓名')
+  })
+
+  it('grants daily check-in points and streak coupons', () => {
+    const store = useWelfareStore()
+    vi.spyOn(Math, 'random').mockReturnValue(0.99)
+
+    expect(rollDailyCheckInPoints(() => 0)).toBe(30)
+    expect(rollDailyCheckInPoints(() => 0.99)).toBe(1)
+
+    for (let day = 2; day <= 8; day += 1) {
+      vi.setSystemTime(new Date(`2026-06-${String(day).padStart(2, '0')}T09:00:00.000Z`))
+      store.checkInToday()
+    }
+
+    expect(store.state.dailyCheckIns).toHaveLength(7)
+    expect(store.state.dailyCheckIns[0].streak).toBe(7)
+    expect(store.state.users[0].points).toBe(1_000_007)
+    expect(store.state.coupons.map(coupon => coupon.discountRate)).toEqual([0.5, 0.8])
+  })
+
+  it('binds invitation codes only within eight hours and supports mutual guarantees', () => {
+    const store = useWelfareStore()
+    const inviter = user({
+      id: 'user_inviter',
+      profile: {
+        displayName: '邀请人',
+        email: 'inviter@example.com',
+        inviteCode: createUserInviteCode('user_inviter'),
+        studentVerified: false,
+      },
+      createdAt: '2026-06-01T00:00:00.000Z',
+    })
+    store.state.users.unshift(inviter)
+    store.state.users.find(item => item.id === 'user_1')!.createdAt = '2026-06-02T09:00:00.000Z'
+
+    const binding = store.bindInvitationCode(inviter.profile.inviteCode!)
+    expect(binding.inviterUserId).toBe(inviter.id)
+    expect(binding.inviteeUserId).toBe('user_1')
+
+    store.vouchInvitation(binding.id)
+    expect(store.state.invitationBindings[0].inviteeVouchedAt).toBeTruthy()
+
+    store.state.currentUserId = inviter.id
+    store.vouchInvitation(binding.id)
+    expect(store.state.invitationBindings[0].inviterVouchedAt).toBeTruthy()
+
+    store.state.currentUserId = 'user_1'
+    store.state.invitationBindings = []
+    store.state.users.find(item => item.id === 'user_1')!.createdAt = '2026-06-02T00:00:00.000Z'
+    expect(() => store.bindInvitationCode(inviter.profile.inviteCode!)).toThrow('注册超过 8 小时')
   })
 })

@@ -77,11 +77,6 @@ interface NotificationProviderConfigPayload {
   clearVapidPrivateKey?: boolean
 }
 
-interface EducationEmailCodePayload {
-  email?: string
-  code?: string
-}
-
 export interface CreateNotificationInput {
   userId: string
   event: NotificationEvent
@@ -1306,23 +1301,6 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
     if (path === '/settings' && request.method === 'PUT') {
       const payload = await readJson<SaveNotificationSettingsPayload>(request)
       return json(await saveSettings(env, user, payload))
-    }
-
-    if (path === '/education-email-code' && request.method === 'POST') {
-      const payload = await readJson<EducationEmailCodePayload>(request)
-      const email = payload.email?.trim().toLowerCase() ?? ''
-      const code = payload.code?.trim() ?? ''
-      assertEmail(email)
-      if (!/^\d{6}$/.test(code))
-        throw new Error('验证码格式不正确')
-
-      await sendEmail(
-        env,
-        email,
-        '教育邮箱验证码',
-        `你的教育邮箱验证码是 ${code}，请在 10 分钟内完成验证。该验证码仅用于辅助学生认证，最终仍需人工复核。`,
-      )
-      return json({ ok: true })
     }
 
     if (path === '/push-subscriptions' && request.method === 'POST') {

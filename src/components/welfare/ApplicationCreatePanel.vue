@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ResourceTermId, ResourceType } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider, TxStep, TxSteps } from '@talex-touch/tuffex'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
@@ -20,6 +20,7 @@ const {
   resourceTypeConfigs,
   selectedResourceTerms,
   resourceApplicationPolicyStatus,
+  availableCurrentUserCoupons,
   totalApplicationBytes,
   activeRequestCount,
   canCreateRequest,
@@ -39,6 +40,7 @@ const router = useRouter()
 const { runSafely } = useWelfareFeedback()
 const currentStep = ref<'types' | 'materials' | 'terms'>('types')
 const expectedDatePickerVisible = ref(false)
+const expectedEffectivePreset = ref('after_approval')
 const applicationDraftKey = 'welfare:resource-application-draft'
 const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
@@ -59,6 +61,15 @@ const urgencyOptions = [
   { value: 'normal', label: '普通' },
   { value: 'urgent', label: '紧急' },
   { value: 'emergency', label: '应急' },
+]
+const expectedEffectiveOptions = [
+  { value: 'after_approval', label: '审批通过后立即生效' },
+  { value: 'next_workday', label: '下一个工作日' },
+  { value: 'custom', label: '自定义日期时间' },
+]
+const rateLimitModeOptions = [
+  { value: 'default', label: '使用默认 RPM / TPM' },
+  { value: 'custom', label: '自定义 RPM / TPM' },
 ]
 const llmBudgetMarks = [10, 100, 500, 1000]
 const durationOptions = [
@@ -98,6 +109,11 @@ function sanitizeLlmItem(item: ResourceDraftItem) {
   item.payload.tpmLimit = Math.max(1, Math.trunc(Number(item.payload.tpmLimit || model.tpmLimit)))
   item.payload.defaultRpmLimit = model.rpmLimit
   item.payload.defaultTpmLimit = model.tpmLimit
+  item.payload.rateLimitMode = item.payload.rateLimitMode === 'custom' ? 'custom' : 'default'
+  if (item.payload.rateLimitMode !== 'custom') {
+    item.payload.rpmLimit = model.rpmLimit
+    item.payload.tpmLimit = model.tpmLimit
+  }
   item.payload.uploadsUserData = false
   item.payload.uploadUserData = false
   item.payload.containsSensitiveInfo = false
@@ -121,6 +137,7 @@ function onLlmModelChange(item: ResourceDraftItem) {
   item.payload.tpmLimit = model.tpmLimit
   item.payload.defaultRpmLimit = model.rpmLimit
   item.payload.defaultTpmLimit = model.tpmLimit
+  item.payload.rateLimitMode = 'default'
   item.payload.duration = item.payload.duration || RESOURCE_DEFAULT_DURATION
   item.requestedQuota = formatUsd(model.defaultBudgetUsd)
   item.duration = item.payload.duration
@@ -135,6 +152,15 @@ function sanitizeResourceDurations() {
     item.payload.estimatedCost = itemUndiscountedEstimate(item)
     item.payload.discountedEstimatedCost = itemDiscountedEstimate(item)
   }
+}
+
+function onRateLimitModeChange(item: ResourceDraftItem) {
+  const model = llmModelForItem(item)
+  if (!model || item.payload.rateLimitMode === 'custom')
+    return
+
+  item.payload.rpmLimit = model.rpmLimit
+  item.payload.tpmLimit = model.tpmLimit
 }
 
 function sanitizeLlmItems() {
@@ -194,7 +220,31 @@ function itemDiscountedEstimate(item: ResourceDraftItem) {
 
 const totalUndiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemUndiscountedEstimate(item), 0))
 const totalDiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemDiscountedEstimate(item), 0))
-const totalDiscountSavings = computed(() => Math.max(0, totalUndiscountedEstimate.value - totalDiscountedEstimate.value))
+const selectedResourceCoupon = computed(() => availableCurrentUserCoupons.value.find(coupon => coupon.id === resourceApplicationForm.selectedCouponId))
+const couponDiscountAmount = computed(() => {
+  if (!selectedResourceCoupon.value)
+    return 0
+
+  return Math.max(0, totalDiscountedEstimate.value - Math.max(1, Math.ceil(totalDiscountedEstimate.value * selectedResourceCoupon.value.discountRate)))
+})
+const checkoutPayableEstimate = computed(() => Math.max(0, totalDiscountedEstimate.value - couponDiscountAmount.value))
+const totalDiscountSavings = computed(() => Math.max(0, totalUndiscountedEstimate.value - checkoutPayableEstimate.value))
+const resourceCheckoutRows = computed(() => resourceApplicationItems.value.map((item, index) => {
+  const parts = itemEstimateParts(item)
+  return {
+    id: item.id,
+    index: index + 1,
+    type: resourceTypeConfigs.value.find(config => config.resourceType === item.resourceType)?.displayName ?? item.resourceType,
+    subtype: item.resourceType === 'llm_api_quota' ? llmModelForItem(item)?.name ?? item.resourceSubtype : item.resourceSubtype,
+    duration: item.duration || item.payload.duration || RESOURCE_DEFAULT_DURATION,
+    base: parts.base,
+    rate: parts.rate,
+    durationCost: parts.duration,
+    original: parts.original,
+    discounted: parts.discounted,
+    savings: parts.savings,
+  }
+}))
 const isResourceSubmissionBlocked = computed(() =>
   !canCreateRequest.value
   || resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length
@@ -239,6 +289,32 @@ const expectedTimeValue = computed({
     resourceApplicationForm.expectedEffectiveAt = joinDateTime(expectedDateValue.value || todayYmd(), time)
   },
 })
+
+watch(availableCurrentUserCoupons, () => {
+  if (resourceApplicationForm.selectedCouponId && !selectedResourceCoupon.value)
+    resourceApplicationForm.selectedCouponId = ''
+})
+
+function applyExpectedEffectivePreset(value: string | number) {
+  const preset = String(value)
+  expectedEffectivePreset.value = preset
+  if (preset === 'after_approval') {
+    resourceApplicationForm.expectedEffectiveAt = ''
+    return
+  }
+
+  if (preset === 'next_workday') {
+    const date = new Date()
+    date.setDate(date.getDate() + 1)
+    while ([0, 6].includes(date.getDay()))
+      date.setDate(date.getDate() + 1)
+    resourceApplicationForm.expectedEffectiveAt = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} 09:00`
+  }
+}
+
+function couponDiscountText(rate: number) {
+  return `${Number(rate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
+}
 
 function openExpectedDatePicker() {
   expectedDatePickerVisible.value = true
@@ -430,9 +506,15 @@ onMounted(() => {
             </label>
             <div class="gap-2 grid">
               <span class="field-label">期望生效时间</span>
-              <div class="gap-2 grid grid-cols-[1fr_110px]">
+              <TxSelect v-model="expectedEffectivePreset" panel-background="pure" @update:model-value="applyExpectedEffectivePreset">
+                <TxSelectItem v-for="item in expectedEffectiveOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </TxSelect>
+              <div v-if="expectedEffectivePreset === 'custom'" class="gap-2 grid grid-cols-[1fr_110px]">
                 <TxInput :model-value="expectedDateValue" readonly placeholder="选择日期" @focus="openExpectedDatePicker" @click="openExpectedDatePicker" />
                 <input v-model="expectedTimeValue" class="form-time-input" type="time">
+              </div>
+              <div v-else class="rate-default-card">
+                {{ resourceApplicationForm.expectedEffectiveAt || '审批通过后立即生效' }}
               </div>
               <TxDatePicker v-model="expectedDateValue" v-model:visible="expectedDatePickerVisible" title="选择期望生效日期" confirm-text="确定" cancel-text="取消" />
             </div>
@@ -491,12 +573,27 @@ onMounted(() => {
                       <label class="gap-2 grid"><span class="field-label">大模型</span><TxSelect v-model="item.payload.model" panel-background="pure" @update:model-value="onLlmModelChange(item)"><TxSelectItem v-for="model in enabledLlmApiModels" :key="model.key" :value="model.key" :label="`${model.name} · 倍率 ×${LLM_API_MODEL_COST_MULTIPLIERS[model.key as keyof typeof LLM_API_MODEL_COST_MULTIPLIERS] ?? 1}`" /></TxSelect></label>
                       <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
                       <div class="gap-2 grid">
-                        <span class="field-label">默认 RPM / TPM</span><div class="rate-default-card">
+                        <span class="field-label">RPM / TPM 策略</span>
+                        <TxSelect v-model="item.payload.rateLimitMode" panel-background="pure" @update:model-value="onRateLimitModeChange(item)">
+                          <TxSelectItem v-for="option in rateLimitModeOptions" :key="option.value" :value="option.value" :label="option.label" />
+                        </TxSelect>
+                      </div>
+                      <div v-if="item.payload.rateLimitMode === 'custom'" class="gap-4 grid md:col-span-2 md:grid-cols-2">
+                        <label class="gap-2 grid">
+                          <span class="field-label">RPM</span>
+                          <TxNumberInput v-model="item.payload.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">TPM</span>
+                          <TxNumberInput v-model="item.payload.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" />
+                        </label>
+                      </div>
+                      <div class="gap-2 grid md:col-span-2">
+                        <span class="field-label">默认 RPM / TPM</span>
+                        <div class="rate-default-card">
                           默认 RPM {{ llmModelForItem(item)?.rpmLimit ?? '-' }} · 默认 TPM {{ llmModelForItem(item)?.tpmLimit ?? '-' }}
                         </div>
                       </div>
-                      <label class="gap-2 grid"><span class="field-label">RPM</span><TxNumberInput v-model="item.payload.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" /></label>
-                      <label class="gap-2 grid"><span class="field-label">TPM</span><TxNumberInput v-model="item.payload.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" /></label>
                       <div v-if="llmRateChangeCost(item)" class="rate-warning md:col-span-2">
                         <b>修改 RPM / TPM 会消耗大量积分：约 {{ llmRateChangeCost(item).toLocaleString('zh-CN') }} 积分</b><span>该消耗不享受任何折扣；请谨慎调整，费用很高很高。最终实际扣费以后端结算为准。</span>
                       </div>
@@ -598,20 +695,20 @@ onMounted(() => {
                 {{ resourceApplicationPolicyStatus.descriptionLength }}/{{ resourceApplicationPolicyStatus.minDescriptionChars }} 字
               </span>
             </div>
-            <div class="mt-4 gap-3 grid md:grid-cols-4">
-              <div class="summary-stat light">
+            <div class="policy-list-table mt-4">
+              <div class="policy-list-row">
                 <span>开放时间</span>
                 <b>{{ resourceApplicationPolicyStatus.openWindowLabel }}</b>
               </div>
-              <div class="summary-stat light">
+              <div class="policy-list-row">
                 <span>今日剩余</span>
                 <b>{{ resourceApplicationPolicyStatus.dailyRemaining ?? '不限' }}</b>
               </div>
-              <div class="summary-stat light">
+              <div class="policy-list-row">
                 <span>个人剩余</span>
                 <b>{{ resourceApplicationPolicyStatus.perUserDailyRemaining ?? '不限' }}</b>
               </div>
-              <div class="summary-stat light">
+              <div class="policy-list-row">
                 <span>提交校验</span>
                 <b>{{ [resourceApplicationPolicyStatus.powEnabled ? `PoW ${resourceApplicationPolicyStatus.powDifficulty}` : '', resourceApplicationPolicyStatus.turnstileEnabled ? 'Turnstile' : ''].filter(Boolean).join(' / ') || '基础校验' }}</b>
               </div>
@@ -628,29 +725,79 @@ onMounted(() => {
             </p>
           </div>
 
-          <div class="text-white p-5 rounded-3xl bg-slate-950 dark:text-slate-950 dark:bg-white">
-            <div class="text-sm op70">
-              提交摘要
+          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <h3 class="text-xl fw-900">
+                  资源明细
+                </h3>
+                <p class="field-hint mt-1">
+                  基础成本参与 {{ ACTIVITY_NAME }}；RPM/TPM 修改和有效期延长不参与活动折扣。
+                </p>
+              </div>
+              <span class="text-xs fw-900 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
+                {{ resourceCheckoutRows.length }} 条
+              </span>
             </div>
-            <div class="text-xl fw-900 mt-1">
-              {{ resourceApplicationForm.title }} · {{ resourceApplicationItems.length }} 条资源明细
+            <div class="checkout-table mt-4">
+              <div class="checkout-table-row checkout-table-head">
+                <span>资源</span>
+                <span>有效期</span>
+                <span>基础成本</span>
+                <span>额外成本</span>
+                <span>活动后</span>
+              </div>
+              <div v-for="row in resourceCheckoutRows" :key="row.id" class="checkout-table-row">
+                <div class="min-w-0">
+                  <b>{{ row.type }}</b>
+                  <span>{{ row.subtype }}</span>
+                </div>
+                <span>{{ row.duration }}</span>
+                <span>{{ formatPoints(row.base) }}</span>
+                <span>{{ formatPoints(row.rate + row.durationCost) }}</span>
+                <b>{{ formatPoints(row.discounted) }}</b>
+              </div>
             </div>
-            <div class="mt-4 gap-3 grid md:grid-cols-3">
-              <div class="summary-stat">
+          </div>
+
+          <div class="order-total-panel">
+            <div class="flex flex-wrap gap-4 items-start justify-between">
+              <div>
+                <div class="text-sm op70">
+                  订单结算
+                </div>
+                <div class="text-xl fw-900 mt-1">
+                  {{ resourceApplicationForm.title }} · 资源申请 · {{ resourceApplicationItems.length }} 条资源明细
+                </div>
+              </div>
+              <label class="order-coupon-select">
+                <span>优惠券</span>
+                <TxSelect v-model="resourceApplicationForm.selectedCouponId" panel-background="pure">
+                  <TxSelectItem value="" label="不使用优惠券" />
+                  <TxSelectItem v-for="coupon in availableCurrentUserCoupons" :key="coupon.id" :value="coupon.id" :label="`${coupon.name} · ${couponDiscountText(coupon.discountRate)}`" />
+                </TxSelect>
+              </label>
+            </div>
+            <div class="order-total-table mt-5">
+              <div>
                 <span>累计预估积分消耗</span>
                 <b>{{ formatPoints(totalUndiscountedEstimate) }}</b>
               </div>
-              <div class="summary-stat">
+              <div>
                 <span>{{ ACTIVITY_NAME }} 后价格</span>
                 <b>{{ formatPoints(totalDiscountedEstimate) }}</b>
               </div>
-              <div class="summary-stat">
-                <span>限时优惠节省</span>
-                <b>{{ formatPoints(totalDiscountSavings) }}</b>
+              <div>
+                <span>优惠券抵扣</span>
+                <b>-{{ formatPoints(couponDiscountAmount) }}</b>
+              </div>
+              <div class="is-total">
+                <span>本单预扣</span>
+                <b>{{ formatPoints(checkoutPayableEstimate) }}</b>
               </div>
             </div>
             <div class="text-xs mt-3 op70">
-              每项资源已单独展示预估；RPM/TPM 修改和有效期延长不享受折扣，费用很高。提交后申请内容锁定；审批人只能逐项通过、驳回或调整后通过。
+              优惠共节省 {{ formatPoints(totalDiscountSavings) }}。提交后申请内容锁定；审批人只能逐项通过、驳回或调整后通过。
             </div>
           </div>
 
@@ -663,7 +810,7 @@ onMounted(() => {
                 上一步
               </TxButton>
               <TxButton variant="primary" :disabled="isResourceSubmissionBlocked" @click="onSubmitResourceApplication">
-                提交资源申请
+                提交并预扣 {{ formatPoints(checkoutPayableEstimate) }}
               </TxButton>
             </div>
           </div>

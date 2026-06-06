@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
+import { createUserInviteCode } from '~/composables/welfare'
 import { bytesToHex } from './crypto'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
@@ -563,6 +564,7 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
       profile: {
         displayName: user.name?.trim() || user.login,
         email,
+        inviteCode: createUserInviteCode(githubId),
         avatar: user.avatar_url ?? undefined,
         githubId: githubAccountId,
         githubUsername: user.login,
@@ -584,6 +586,7 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
       ...localUser.profile,
       displayName: localUser.profile.displayName || user.name?.trim() || user.login,
       email: localUser.profile.email || email,
+      inviteCode: localUser.profile.inviteCode || createUserInviteCode(localUser.id),
       avatar: user.avatar_url ?? localUser.profile.avatar,
       githubId: githubAccountId,
       githubUsername: user.login,

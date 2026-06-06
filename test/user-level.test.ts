@@ -41,6 +41,9 @@ function state(partial: Partial<WelfareState>): WelfareState {
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
+    coupons: [],
+    dailyCheckIns: [],
+    invitationBindings: [],
     crowdReviews: [],
     transactions: [],
     createdAt: '2026-06-01T00:00:00.000Z',
@@ -76,6 +79,7 @@ function studentVerification(userId: string, overrides: Partial<StudentVerificat
   return {
     id: 'stu_1',
     userId,
+    realName: '公益同学',
     category: '大学生',
     notes: '材料完整',
     attachments: [],

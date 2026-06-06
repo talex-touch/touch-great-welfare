@@ -563,6 +563,110 @@ select {
   background: rgba(236, 253, 245, 0.78);
 }
 
+.policy-list-table,
+.checkout-table,
+.order-total-table {
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+}
+
+.policy-list-row,
+.checkout-table-row,
+.order-total-table > div {
+  display: grid;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.policy-list-row:first-child,
+.checkout-table-row:first-child,
+.order-total-table > div:first-child {
+  border-top: 0;
+}
+
+.policy-list-row {
+  grid-template-columns: minmax(120px, 0.38fr) 1fr;
+}
+
+.policy-list-row span,
+.checkout-table-row span,
+.order-total-table span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.policy-list-row b,
+.checkout-table-row b,
+.order-total-table b {
+  font-weight: 900;
+}
+
+.checkout-table-row {
+  grid-template-columns:
+    minmax(150px, 1.2fr)
+    minmax(120px, 1fr)
+    minmax(110px, 0.8fr)
+    minmax(110px, 0.8fr)
+    minmax(100px, 0.8fr);
+}
+
+.checkout-table-row > div {
+  display: grid;
+  min-width: 0;
+}
+
+.checkout-table-row > div span {
+  margin-top: 0.2rem;
+}
+
+.checkout-table-head {
+  background: rgba(248, 250, 252, 0.88);
+}
+
+.order-total-panel {
+  padding: 1.25rem;
+  border-radius: 24px;
+  color: #fff;
+  background: #020617;
+}
+
+.order-coupon-select {
+  display: grid;
+  gap: 0.45rem;
+  min-width: min(100%, 280px);
+}
+
+.order-coupon-select span {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.order-total-table {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.order-total-table > div {
+  grid-template-columns: 1fr auto;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.order-total-table span {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.order-total-table .is-total {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.order-total-table .is-total b {
+  font-size: 1.45rem;
+}
+
 .summary-stat {
   display: grid;
   gap: 0.35rem;
@@ -601,9 +705,59 @@ select {
   background: rgba(6, 78, 59, 0.24);
 }
 
+.dark .policy-list-table,
+.dark .checkout-table {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .policy-list-row,
+.dark .checkout-table-row {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .checkout-table-head {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dark .order-total-panel {
+  color: #020617;
+  background: #fff;
+}
+
+.dark .order-coupon-select span,
+.dark .order-total-table span {
+  color: rgba(15, 23, 42, 0.7);
+}
+
+.dark .order-total-table {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+.dark .order-total-table > div {
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+.dark .order-total-table .is-total {
+  background: rgba(15, 23, 42, 0.08);
+}
+
 .dark .summary-stat {
   color: #f8fafc;
   background: rgba(15, 23, 42, 0.9);
+}
+
+@media (max-width: 760px) {
+  .checkout-table-head {
+    display: none;
+  }
+
+  .checkout-table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .policy-list-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .data-notice {

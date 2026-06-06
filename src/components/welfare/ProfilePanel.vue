@@ -14,6 +14,13 @@ const {
   currentUser,
   currentUserLevelCard,
   profileForm,
+  invitationForm,
+  currentUserInviteCode,
+  currentUserInvitationBinding,
+  currentUserInviter,
+  currentUserInvitees,
+  currentUserInvitationBindDeadline,
+  canBindCurrentUserInvitation,
   temporaryAiKeyForm,
   temporaryAiKeys,
   generatedTemporaryAiKey,
@@ -22,6 +29,8 @@ const {
   sub2ApiKeys,
   generatedSub2ApiKey,
   updateCurrentProfile,
+  bindInvitationCode,
+  vouchInvitation,
   generateTemporaryAiKey,
   refreshTemporaryAiKeys,
   revokeTemporaryAiKey,
@@ -76,6 +85,38 @@ function saveProfile() {
     clearLocalDraft(profileDraftKey)
     closeProfileDialog()
   }, '个人信息已更新')
+}
+
+function copyInviteCode() {
+  runSafely(async () => {
+    if (!currentUserInviteCode.value)
+      throw new Error('邀请码不存在')
+    if (!globalThis.navigator?.clipboard)
+      throw new Error('当前浏览器不支持剪贴板复制')
+    await globalThis.navigator.clipboard.writeText(currentUserInviteCode.value)
+  }, '邀请码已复制')
+}
+
+function bindInvite() {
+  runSafely(async () => {
+    await bindInvitationCode()
+  }, '邀请关系已绑定')
+}
+
+function vouch(bindingId: string) {
+  runSafely(async () => {
+    await vouchInvitation(bindingId)
+  }, '担保状态已更新')
+}
+
+function invitationGuaranteeText(binding: { inviterVouchedAt?: string, inviteeVouchedAt?: string }) {
+  if (binding.inviterVouchedAt && binding.inviteeVouchedAt)
+    return '双方已担保'
+  if (binding.inviterVouchedAt)
+    return '邀请人已担保'
+  if (binding.inviteeVouchedAt)
+    return '被邀请人已担保'
+  return '待担保'
 }
 
 function createTemporaryKey() {
@@ -248,6 +289,113 @@ onUnmounted(() => {
           </div>
         </div>
         <TxStatusBadge :text="roleText" :status="currentUser?.role === 'admin' ? 'success' : 'info'" size="sm" />
+      </div>
+    </TxCard>
+
+    <TxCard class="solid-panel xl:col-span-2" background="pure" :padding="20" :radius="28">
+      <div class="flex flex-wrap gap-3 items-start justify-between">
+        <div>
+          <h3 class="text-xl fw-900">
+            邀请与担保
+          </h3>
+          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+            注册后 8 小时内可绑定邀请人；绑定后双方可互相担保，关系会长期用于审核复盘。
+          </p>
+        </div>
+        <TxStatusBadge :text="currentUserInvitationBinding ? '已绑定' : canBindCurrentUserInvitation ? '可绑定' : '已过期'" :status="currentUserInvitationBinding ? 'success' : canBindCurrentUserInvitation ? 'info' : 'warning'" size="sm" />
+      </div>
+
+      <div v-if="!currentUser" class="text-sm text-slate-500 mt-5 p-6 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
+        登录后可查看邀请码。
+      </div>
+      <div v-else class="mt-5 gap-5 grid lg:grid-cols-[1fr_1fr]">
+        <div class="p-4 rounded-2xl bg-white dark:bg-[#151820]">
+          <div class="text-sm fw-900">
+            我的邀请码
+          </div>
+          <div class="mt-3 gap-3 grid sm:grid-cols-[1fr_auto]">
+            <TxInput :model-value="currentUserInviteCode" readonly />
+            <TxButton variant="secondary" @click="copyInviteCode">
+              复制
+            </TxButton>
+          </div>
+          <div class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
+            邀请他人注册后，对方需在 8 小时内绑定该邀请码。
+          </div>
+        </div>
+
+        <div class="p-4 rounded-2xl bg-white dark:bg-[#151820]">
+          <div class="text-sm fw-900">
+            我的邀请人
+          </div>
+          <div v-if="currentUserInvitationBinding" class="mt-3 space-y-3">
+            <div class="flex flex-wrap gap-3 items-center justify-between">
+              <div>
+                <div class="text-sm fw-800">
+                  {{ currentUserInviter?.profile.displayName || currentUserInvitationBinding.inviterUserId }}
+                </div>
+                <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                  {{ invitationGuaranteeText(currentUserInvitationBinding) }} · {{ formatDate(currentUserInvitationBinding.createdAt) }}
+                </div>
+              </div>
+              <TxButton size="sm" variant="secondary" :disabled="!!currentUserInvitationBinding.inviteeVouchedAt" @click="vouch(currentUserInvitationBinding.id)">
+                {{ currentUserInvitationBinding.inviteeVouchedAt ? '已担保' : '为邀请人担保' }}
+              </TxButton>
+            </div>
+          </div>
+          <div v-else class="mt-3 space-y-3">
+            <div class="text-xs text-slate-500 leading-5 dark:text-slate-400">
+              绑定截止：{{ currentUserInvitationBindDeadline ? formatDate(currentUserInvitationBindDeadline) : '未登录' }}
+            </div>
+            <div v-if="canBindCurrentUserInvitation" class="gap-3 grid sm:grid-cols-[1fr_auto]">
+              <TxInput v-model="invitationForm.code" placeholder="输入邀请人的邀请码" />
+              <TxButton variant="primary" @click="bindInvite">
+                绑定
+              </TxButton>
+            </div>
+            <div v-else class="text-xs text-amber-700 leading-5 p-3 rounded-2xl bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30">
+              注册已超过 8 小时，不能再补绑邀请人。
+            </div>
+          </div>
+          <div v-if="invitationForm.message" class="text-xs text-slate-500 mt-3 dark:text-slate-400">
+            {{ invitationForm.message }}
+          </div>
+        </div>
+
+        <div class="lg:col-span-2">
+          <div class="flex flex-wrap gap-3 items-center justify-between">
+            <div class="text-sm fw-900">
+              我邀请的人
+            </div>
+            <span class="text-xs text-slate-500 fw-800 dark:text-slate-400">{{ currentUserInvitees.length }} 个绑定</span>
+          </div>
+          <div class="admin-table mt-3">
+            <div class="admin-table-row admin-table-head grid-cols-[minmax(0,1.2fr)_160px_160px_auto]">
+              <span>用户</span>
+              <span>绑定时间</span>
+              <span>担保状态</span>
+              <span>操作</span>
+            </div>
+            <div v-if="!currentUserInvitees.length" class="admin-empty">
+              暂无邀请绑定
+            </div>
+            <div v-for="item in currentUserInvitees" :key="item.binding.id" class="admin-table-row grid-cols-[minmax(0,1.2fr)_160px_160px_auto]">
+              <div class="min-w-0">
+                <div class="fw-800 truncate">
+                  {{ item.user?.profile.displayName || item.binding.inviteeUserId }}
+                </div>
+                <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                  {{ item.user?.profile.email || '未知邮箱' }}
+                </div>
+              </div>
+              <span>{{ formatDate(item.binding.createdAt) }}</span>
+              <span>{{ invitationGuaranteeText(item.binding) }}</span>
+              <TxButton size="sm" variant="secondary" :disabled="!!item.binding.inviterVouchedAt" @click="vouch(item.binding.id)">
+                {{ item.binding.inviterVouchedAt ? '已担保' : '为 TA 担保' }}
+              </TxButton>
+            </div>
+          </div>
+        </div>
       </div>
     </TxCard>
 

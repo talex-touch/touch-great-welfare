@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
+import { createUserInviteCode } from '~/composables/welfare'
 import { assertAdminRequest, errorResponse, json, maskSecret, now, readJson } from './auth'
 import { bytesToHex, sha256Hex } from './crypto'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
@@ -527,6 +528,7 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
       profile: {
         displayName: userInfo.name?.trim() || username || provider.name,
         email,
+        inviteCode: createUserInviteCode(userId),
         avatar: userInfo.picture || userInfo.avatar_url || undefined,
         oauthProviderId: provider.id,
         oauthSubject: subject,
@@ -546,6 +548,7 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
       ...localUser.profile,
       displayName: localUser.profile.displayName || userInfo.name?.trim() || username || provider.name,
       email: localUser.profile.email || email,
+      inviteCode: localUser.profile.inviteCode || createUserInviteCode(localUser.id),
       avatar: userInfo.picture || userInfo.avatar_url || localUser.profile.avatar,
       oauthProviderId: provider.id,
       oauthSubject: subject,

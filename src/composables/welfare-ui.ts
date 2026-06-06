@@ -18,7 +18,6 @@ import {
   saveNotificationProviderConfig,
   saveNotificationSettings,
   savePushSubscription,
-  sendEducationEmailCode as sendEducationEmailCodeMail,
   urlBase64ToUint8Array,
 } from './notifications'
 import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from './oauth'
@@ -35,6 +34,7 @@ import {
   calculateLlmApiCostPoints,
   calculateLlmApiRateLimitChangeCost,
   DEFAULT_LLM_API_MODELS,
+  EDUCATION_EMAIL_REVIEW_INBOX,
   LLM_API_BUDGET_OPTIONS,
   LLM_API_DEFAULT_MODEL_KEY,
   LLM_API_EXTENDED_PROCESSING_HOURS,
@@ -82,6 +82,11 @@ export const profileForm = reactive({
   bio: '',
   githubUsername: '',
   selectedRepo: '',
+})
+
+export const invitationForm = reactive({
+  code: '',
+  message: '',
 })
 
 export const rechargeForm = reactive({
@@ -274,6 +279,7 @@ export const resourceApplicationForm = reactive({
   duration: RESOURCE_DEFAULT_DURATION,
   selectedResourceTypes: ['database'] as ResourceType[],
   acceptedTermIds: [] as ResourceTermId[],
+  selectedCouponId: '',
 })
 
 export const resourceApplicationItems = ref<Array<{
@@ -297,6 +303,7 @@ export const resourceProvisionDrafts = reactive<Record<string, string>>({})
 export const applicationFiles = ref<UploadLikeFile[]>([])
 
 export const studentForm = reactive({
+  realName: '',
   category: '大学生',
   school: '北京大学',
   grade: '2026 级',
@@ -308,6 +315,10 @@ export const studentForm = reactive({
 
 export const educationEmailVerificationForm = reactive({
   code: '',
+  challengeId: '',
+  subject: '',
+  body: '',
+  mailto: '',
   sentTo: '',
   expiresAt: '',
   loading: false,
@@ -465,6 +476,30 @@ export function useWelfareUiState() {
       .filter(item => item.userId === welfare.currentUser.value?.id)
       .slice(0, 8)
   })
+  const currentUserCoupons = computed(() => welfare.currentUserCoupons.value)
+  const availableCurrentUserCoupons = computed(() => {
+    const user = welfare.currentUser.value
+    return user ? welfare.availableCouponsForUser(user.id) : []
+  })
+  const currentUserDailyCheckIns = computed(() => welfare.currentUserDailyCheckIns.value)
+  const currentUserInviteCode = computed(() => welfare.currentUser.value?.profile.inviteCode ?? '')
+  const currentUserInvitationBinding = computed(() => welfare.currentUserInvitationBinding.value)
+  const currentUserInviter = computed(() => {
+    const binding = currentUserInvitationBinding.value
+    return binding ? welfare.state.users.find(user => user.id === binding.inviterUserId) : undefined
+  })
+  const currentUserInvitees = computed(() => welfare.currentUserInviteeBindings.value.map(binding => ({
+    binding,
+    user: welfare.state.users.find(user => user.id === binding.inviteeUserId),
+  })))
+  const currentUserInvitationBindDeadline = computed(() => welfare.currentUser.value ? welfare.invitationBindDeadline(welfare.currentUser.value) : '')
+  const canBindCurrentUserInvitation = computed(() => welfare.currentUser.value ? welfare.canBindInvitation(welfare.currentUser.value) : false)
+  const todayCheckIn = computed(() => {
+    const today = new Date()
+    const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    return currentUserDailyCheckIns.value.find(item => item.dateKey === dateKey)
+  })
+  const currentCheckInStreak = computed(() => currentUserDailyCheckIns.value[0]?.streak ?? 0)
   const selectedApplicationPolicyStatus = computed(() => welfare.applicationPolicyStatus(applicationForm.type, {
     userId: welfare.currentUser.value?.id,
     title: applicationForm.title,
@@ -519,6 +554,17 @@ export function useWelfareUiState() {
     }
     applicationForm.waiveRejectionReviewFee = false
     resetApplicationSecurity()
+  })
+  watch(() => studentForm.educationEmail, () => {
+    educationEmailVerificationForm.code = ''
+    educationEmailVerificationForm.challengeId = ''
+    educationEmailVerificationForm.subject = ''
+    educationEmailVerificationForm.body = ''
+    educationEmailVerificationForm.mailto = ''
+    educationEmailVerificationForm.sentTo = ''
+    educationEmailVerificationForm.expiresAt = ''
+    educationEmailVerificationForm.verified = false
+    educationEmailVerificationForm.message = ''
   })
 
   function statusText(status: string) {
@@ -628,6 +674,7 @@ export function useWelfareUiState() {
       tpmLimit: model.tpmLimit,
       defaultRpmLimit: model.rpmLimit,
       defaultTpmLimit: model.tpmLimit,
+      rateLimitMode: 'default',
       duration: RESOURCE_DEFAULT_DURATION,
       usageScenario: '',
       uploadsUserData: false,
@@ -714,6 +761,7 @@ export function useWelfareUiState() {
     resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
     resourceApplicationForm.selectedResourceTypes = ['database']
     resourceApplicationForm.acceptedTermIds = []
+    resourceApplicationForm.selectedCouponId = ''
     resourceApplicationItems.value = []
     addResourceApplicationItem('database')
   }
@@ -748,6 +796,7 @@ export function useWelfareUiState() {
       selectedResourceTypes: resourceApplicationForm.selectedResourceTypes,
       resourceItems: resourceApplicationItems.value,
       acceptedTermIds: resourceApplicationForm.acceptedTermIds,
+      couponId: saveAsDraft ? undefined : resourceApplicationForm.selectedCouponId || undefined,
       attachments: applicationFiles.value,
       saveAsDraft,
       ...security,
@@ -804,7 +853,19 @@ export function useWelfareUiState() {
     studentFiles.value = []
   }
 
-  async function requestEducationEmailCode() {
+  function applyEducationEmailChallenge(challenge: ReturnType<typeof welfare.createEducationEmailChallenge>) {
+    educationEmailVerificationForm.challengeId = challenge.id
+    educationEmailVerificationForm.code = challenge.code
+    educationEmailVerificationForm.subject = challenge.subject
+    educationEmailVerificationForm.body = challenge.body
+    educationEmailVerificationForm.mailto = challenge.mailto
+    educationEmailVerificationForm.sentTo = challenge.email
+    educationEmailVerificationForm.expiresAt = challenge.expiresAt
+    educationEmailVerificationForm.verified = false
+    educationEmailVerificationForm.message = `请使用该教育邮箱向 ${EDUCATION_EMAIL_REVIEW_INBOX} 发送邮件，管理员会人工复核`
+  }
+
+  async function generateEducationEmailChallenge() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
@@ -812,15 +873,8 @@ export function useWelfareUiState() {
     educationEmailVerificationForm.loading = true
     educationEmailVerificationForm.message = ''
     try {
-      const challenge = welfare.sendEducationEmailCode(studentForm.educationEmail)
-      await sendEducationEmailCodeMail(welfare.currentUser.value.id, {
-        email: challenge.email,
-        code: challenge.code,
-      })
-      educationEmailVerificationForm.sentTo = challenge.email
-      educationEmailVerificationForm.expiresAt = challenge.expiresAt
-      educationEmailVerificationForm.verified = false
-      educationEmailVerificationForm.message = '验证码已发送，请在 10 分钟内填写'
+      const challenge = welfare.createEducationEmailChallenge(studentForm.educationEmail, studentForm.realName)
+      applyEducationEmailChallenge(challenge)
       await saveWelfareState(welfare.state)
     }
     finally {
@@ -828,17 +882,26 @@ export function useWelfareUiState() {
     }
   }
 
-  async function confirmEducationEmailCode() {
-    welfare.assertPersistenceReady()
-    if (!welfare.currentUser.value)
-      throw new Error('请先登录')
+  async function ensureEducationEmailChallenge() {
+    if (educationEmailVerificationForm.challengeId && educationEmailVerificationForm.body)
+      return
 
-    const challenge = welfare.verifyEducationEmailCode(studentForm.educationEmail, educationEmailVerificationForm.code)
-    educationEmailVerificationForm.sentTo = challenge.email
-    educationEmailVerificationForm.expiresAt = challenge.expiresAt
-    educationEmailVerificationForm.verified = true
-    educationEmailVerificationForm.message = '教育邮箱已完成验证码校验，仍需人工复核'
-    await saveWelfareState(welfare.state)
+    await generateEducationEmailChallenge()
+  }
+
+  async function copyEducationEmailTemplate() {
+    await ensureEducationEmailChallenge()
+    const text = `${educationEmailVerificationForm.subject}\n\n${educationEmailVerificationForm.body}`
+    if (!globalThis.navigator?.clipboard)
+      throw new Error('当前浏览器不支持剪贴板复制')
+    await globalThis.navigator.clipboard.writeText(text)
+    educationEmailVerificationForm.message = '邮件模板已复制，请使用教育邮箱发送到平台收件箱'
+  }
+
+  async function openEducationEmailClient() {
+    await ensureEducationEmailChallenge()
+    globalThis.location.href = educationEmailVerificationForm.mailto
+    educationEmailVerificationForm.message = '已打开系统邮件客户端，请确认发件邮箱为你的教育邮箱'
   }
 
   async function persistApplicationPolicy() {
@@ -1643,10 +1706,35 @@ export function useWelfareUiState() {
     return status
   }
 
+  async function checkInToday() {
+    const result = welfare.checkInToday()
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
+  async function bindInvitationCode() {
+    const result = welfare.bindInvitationCode(invitationForm.code)
+    invitationForm.code = ''
+    invitationForm.message = '邀请关系已绑定'
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
+  async function vouchInvitation(bindingId: string) {
+    const result = welfare.vouchInvitation(bindingId)
+    invitationForm.message = '担保状态已更新'
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
   return {
     ...welfare,
     adminForm,
     profileForm,
+    invitationForm,
     rechargeForm,
     rechargeConfigForm,
     githubAppConfigForm,
@@ -1721,6 +1809,17 @@ export function useWelfareUiState() {
     heroProgress,
     pendingCount,
     latestTransactions,
+    currentUserCoupons,
+    availableCurrentUserCoupons,
+    currentUserDailyCheckIns,
+    currentUserInviteCode,
+    currentUserInvitationBinding,
+    currentUserInviter,
+    currentUserInvitees,
+    currentUserInvitationBindDeadline,
+    canBindCurrentUserInvitation,
+    todayCheckIn,
+    currentCheckInStreak,
     statusText,
     statusTone,
     typeIcon,
@@ -1737,8 +1836,12 @@ export function useWelfareUiState() {
     approveResourceItem,
     completeResourceProvision,
     resetStudentFiles,
-    requestEducationEmailCode,
-    confirmEducationEmailCode,
+    generateEducationEmailChallenge,
+    copyEducationEmailTemplate,
+    openEducationEmailClient,
+    checkInToday,
+    bindInvitationCode,
+    vouchInvitation,
     persistApplicationPolicy,
     crowdReviewDraftFor,
     submitCrowdReviewDraft,
