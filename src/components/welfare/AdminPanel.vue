@@ -4,7 +4,7 @@ import type { CreditTransaction, RequestKind, StudentVerification, WelfareApplic
 import { TxButton, TxCard, TxCheckbox, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatPoints } from '~/composables/welfare'
+import { formatDate, formatPoints, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { ADMIN_TABS, useWelfareUiState } from '~/composables/welfare-ui'
 
 const {
@@ -118,6 +118,12 @@ const studentStatusText: Record<string, string> = {
   rejected: '已退回',
 }
 
+const verificationTypeFilterOptions = [
+  { value: ALL_FILTER, label: '全部认证' },
+  { value: 'student', label: '学生认证' },
+  { value: 'frontline', label: '一线认证' },
+]
+
 const transactionTypeText: Record<string, string> = {
   recharge: '充值',
   spend: '扣费',
@@ -129,7 +135,7 @@ const transactionTypeText: Record<string, string> = {
 const dashboardActivityTypeText: Record<string, string> = {
   user: '用户',
   application: '申请',
-  student: '学生认证',
+  student: '认证申请',
   transaction: '积分',
 }
 
@@ -151,7 +157,7 @@ const dashboardActivityTypeOptions = [
   { value: ALL_FILTER, label: '全部活动' },
   { value: 'user', label: '用户' },
   { value: 'application', label: '申请' },
-  { value: 'student', label: '学生认证' },
+  { value: 'student', label: '认证申请' },
   { value: 'transaction', label: '积分' },
 ]
 
@@ -200,7 +206,7 @@ const auditAreaFilterOptions = [
   { value: '用户', label: '用户' },
   { value: '积分', label: '积分' },
   { value: '申请', label: '申请' },
-  { value: '学生认证', label: '学生认证' },
+  { value: '认证申请', label: '认证申请' },
 ]
 
 const userFilters = reactive({
@@ -236,6 +242,7 @@ const studentFilters = reactive({
   query: '',
   from: '',
   to: '',
+  verificationType: ALL_FILTER,
   status: ALL_FILTER,
   page: 1,
   pageSize: 10,
@@ -454,6 +461,7 @@ function resetApplicationFilters() {
 
 function resetStudentFilters() {
   resetBaseFilters(studentFilters)
+  studentFilters.verificationType = ALL_FILTER
   studentFilters.status = ALL_FILTER
 }
 
@@ -490,7 +498,7 @@ watch(
 )
 
 watch(
-  () => [studentFilters.query, studentFilters.from, studentFilters.to, studentFilters.status, studentFilters.pageSize],
+  () => [studentFilters.query, studentFilters.from, studentFilters.to, studentFilters.verificationType, studentFilters.status, studentFilters.pageSize],
   () => {
     studentFilters.page = 1
   },
@@ -599,7 +607,7 @@ const selectedUserDetail = computed(() => {
   const spendTransactions = transactions.filter(item => item.delta < 0)
   const incomeTransactions = transactions.filter(item => item.delta > 0)
   const pipelineSpend = spendTransactions.filter(isPipelineSpendTransaction)
-  const studentSpend = spendTransactions.filter(item => isStudentRef(item.refId) || item.reason.includes('学生认证'))
+  const studentSpend = spendTransactions.filter(item => isStudentRef(item.refId) || item.reason.includes('学生认证') || item.reason.includes('一线认证'))
   const rechargeIncome = incomeTransactions.filter(item => item.type === 'recharge')
   const manualAdjustments = transactions.filter(item => item.type === 'adjustment')
   const invitationBinding = state.invitationBindings.find(item => item.inviteeUserId === user.id)
@@ -616,9 +624,9 @@ const selectedUserDetail = computed(() => {
     })),
     ...studentVerifications.map(item => ({
       id: `student-${item.id}`,
-      kind: '认证',
+      kind: verificationTypeLabel(item.verificationType),
       title: `${item.realName} · ${item.category}`,
-      detail: `${item.school || '未填写学校'} · ${studentStatusLabel(item.status)} · 审核费 ${formatPoints(item.reviewFee)}`,
+      detail: `${verificationOrganizationLabel(item.verificationType)} ${item.school || '未填写'} · ${studentStatusLabel(item.status)} · 审核费 ${formatPoints(item.reviewFee)}`,
       tone: item.status,
       time: item.createdAt,
     })),
@@ -740,7 +748,7 @@ const dashboardMetrics = computed(() => {
     {
       label: '待处理审核',
       value: (pendingApplicationCount + pendingStudentCount).toLocaleString('zh-CN'),
-      note: `${pendingApplicationCount} 个申请 / ${pendingStudentCount} 个学生认证`,
+      note: `${pendingApplicationCount} 个申请 / ${pendingStudentCount} 个认证申请`,
       icon: 'i-carbon-review',
     },
     {
@@ -797,9 +805,9 @@ const dashboardActivityRows = computed(() => {
     rows.push({
       id: `dashboard-student-${verification.id}`,
       type: 'student',
-      title: verification.category,
+      title: `${verificationTypeLabel(verification.verificationType)} · ${verification.category}`,
       user: userDisplayName(verification.userId),
-      detail: `${verification.school || '未填写学校'} · ${studentStatusText[verification.status]}`,
+      detail: `${verificationOrganizationLabel(verification.verificationType)} ${verification.school || '未填写'} · ${studentStatusText[verification.status]}`,
       tone: verification.status === 'rejected' ? 'danger' : verification.status === 'pending' ? 'warning' : 'success',
       createdAt: verification.createdAt,
     })
@@ -871,7 +879,7 @@ const dataGroups = computed(() => [
     note: `${state.applications.filter(item => ['pending_review', 'needs_supplement'].includes(item.status)).length} 个待处理，${state.applications.filter(item => item.status === 'rejected').length} 个已退回`,
   },
   {
-    title: '学生认证',
+    title: '认证申请',
     count: state.studentVerifications.length,
     note: `${state.studentVerifications.filter(item => item.status === 'pending').length} 个待审核，${state.studentVerifications.filter(item => item.status === 'approved').length} 个已通过`,
   },
@@ -897,9 +905,11 @@ const applicationRows = computed(() => [...state.applications]
   .sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
 
 const studentRows = computed(() => [...state.studentVerifications]
+  .filter(item => studentFilters.verificationType === ALL_FILTER || item.verificationType === studentFilters.verificationType)
   .filter(item => studentFilters.status === ALL_FILTER || item.status === studentFilters.status)
   .filter(item => isInDateRange(item.createdAt, studentFilters))
   .filter(item => matchesQuery(studentFilters.query, [
+    verificationTypeLabel(item.verificationType),
     item.realName,
     item.category,
     item.school,
@@ -997,10 +1007,10 @@ const auditEvents = computed(() => {
     events.push({
       id: `student-created-${verification.id}`,
       time: verification.createdAt,
-      area: '学生认证',
+      area: '认证申请',
       action: '提交材料',
       actor: userDisplayName(verification.userId),
-      detail: `${verification.category} · ${verification.school || '未填写学校'} · ${studentStatusText[verification.status] ?? verification.status}`,
+      detail: `${verificationTypeLabel(verification.verificationType)} · ${verification.category} · ${verificationOrganizationLabel(verification.verificationType)} ${verification.school || '未填写'} · ${studentStatusText[verification.status] ?? verification.status}`,
       tone: verification.status === 'pending' ? 'warning' : 'info',
     })
 
@@ -1008,10 +1018,10 @@ const auditEvents = computed(() => {
       events.push({
         id: `student-reviewed-${verification.id}`,
         time: verification.reviewedAt,
-        area: '学生认证',
+        area: '认证申请',
         action: verification.status === 'rejected' ? '退回认证' : '通过认证',
         actor: '管理员',
-        detail: `${verification.category} · ${userDisplayName(verification.userId)}`,
+        detail: `${verificationTypeLabel(verification.verificationType)} · ${verification.category} · ${userDisplayName(verification.userId)}`,
         tone: verification.status === 'rejected' ? 'danger' : 'success',
       })
     }
@@ -2700,7 +2710,7 @@ onMounted(() => {
               <div class="flex flex-wrap gap-3 items-start justify-between">
                 <div class="text-lg fw-900 flex gap-2 items-center">
                   <span class="i-carbon-education" />
-                  学生认证数据
+                  认证申请数据
                 </div>
                 <span class="text-xs fw-800 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
                   {{ studentPagination.total }} / {{ state.studentVerifications.length }} 条
@@ -2710,7 +2720,7 @@ onMounted(() => {
               <div class="admin-filter-bar mt-5">
                 <label class="admin-filter-field admin-filter-field--wide">
                   <span class="field-label">查询</span>
-                  <TxInput v-model="studentFilters.query" placeholder="类目 / 学校 / 用户 / 学历" />
+                  <TxInput v-model="studentFilters.query" placeholder="认证类型 / 类目 / 组织 / 用户" />
                 </label>
                 <label class="admin-filter-field">
                   <span class="field-label">开始日期</span>
@@ -2719,6 +2729,14 @@ onMounted(() => {
                 <label class="admin-filter-field">
                   <span class="field-label">结束日期</span>
                   <input v-model="studentFilters.to" type="date" class="admin-date-input">
+                </label>
+                <label class="admin-filter-field">
+                  <span class="field-label">认证类型</span>
+                  <select v-model="studentFilters.verificationType" class="form-select">
+                    <option v-for="option in verificationTypeFilterOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
                 </label>
                 <label class="admin-filter-field">
                   <span class="field-label">状态</span>
@@ -2737,25 +2755,25 @@ onMounted(() => {
                 <div class="admin-table-row admin-student-grid admin-table-head">
                   <span>类目</span>
                   <span>用户</span>
-                  <span>学校</span>
+                  <span>组织</span>
                   <span>状态</span>
                   <span>审核费</span>
                   <span>创建时间</span>
                 </div>
                 <div v-if="!studentRows.length" class="admin-empty">
-                  暂无学生认证数据
+                  暂无认证申请数据
                 </div>
                 <div v-for="item in studentPagination.rows" :key="item.id" class="admin-table-row admin-student-grid">
                   <div class="min-w-0">
                     <div class="fw-800 truncate">
-                      {{ item.realName }} · {{ item.category }}
+                      {{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }} · {{ item.category }}
                     </div>
                     <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                      {{ [item.grade, item.educationLevel].filter(Boolean).join(' · ') || '未填写年级学历' }}
+                      {{ [item.grade, item.educationLevel].filter(Boolean).join(' · ') || '未填写补充身份' }}
                     </div>
                   </div>
                   <span class="text-sm truncate">{{ userDisplayName(item.userId) }}</span>
-                  <span class="text-sm truncate">{{ item.school || '未填写' }}</span>
+                  <span class="text-sm truncate">{{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }}</span>
                   <span class="admin-pill" :class="statusPillClass(item.status)">{{ studentStatusText[item.status] }}</span>
                   <span class="fw-800">{{ item.feeReturned ? '已返还' : formatPoints(item.reviewFee) }}</span>
                   <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>

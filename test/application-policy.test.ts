@@ -11,9 +11,11 @@ const {
   applicationPowChallenge,
   createUserInviteCode,
   defaultApplicationPolicy,
+  normalizeVerificationType,
   RESOURCE_DEFAULT_DURATION,
   rollDailyCheckInPoints,
   solveApplicationPow,
+  verificationTypeLabel,
   useWelfareStore,
 } = await import('../src/composables/welfare')
 
@@ -209,6 +211,56 @@ describe('application policy', () => {
       category: '大学生',
       notes: '<p>已上传学生证和校园材料。</p>',
     })).toThrow('请填写真实姓名')
+  })
+
+  it('defaults verification records to student type', () => {
+    const store = useWelfareStore()
+
+    const beforePoints = store.state.users[0].points
+    store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      notes: '<p>已上传学生证和校园材料。</p>',
+    })
+
+    expect(store.state.studentVerifications[0].verificationType).toBe('student')
+    expect(store.state.transactions[0].reason).toBe('学生认证审核费')
+    expect(store.state.users[0].points).toBe(beforePoints - 800)
+  })
+
+  it('keeps frontline approval from marking student verification', () => {
+    const store = useWelfareStore()
+    store.state.users.push(user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@example.com',
+        studentVerified: false,
+      },
+    }))
+
+    store.submitStudentVerification({
+      verificationType: 'frontline',
+      realName: '一线伙伴',
+      category: '乡村振兴',
+      school: '驻村项目组',
+      notes: '<p>已上传单位证明、服务记录和项目材料。</p>',
+    })
+    const verificationId = store.state.studentVerifications[0].id
+
+    store.state.currentUserId = 'admin_1'
+    store.approveStudentVerification(verificationId, '通过')
+
+    expect(store.state.studentVerifications[0].verificationType).toBe('frontline')
+    expect(store.state.studentVerifications[0].feeReturned).toBe(true)
+    expect(store.state.users.find(item => item.id === 'user_1')?.profile.studentVerified).toBe(false)
+    expect(store.state.transactions[0].reason).toBe('一线认证通过返还审核费')
+  })
+
+  it('normalizes missing verification types as student', () => {
+    expect(normalizeVerificationType(undefined)).toBe('student')
+    expect(verificationTypeLabel(undefined)).toBe('学生认证')
   })
 
   it('grants daily check-in points and streak coupons', () => {

@@ -56,6 +56,7 @@ declare module 'vue-router/auto-routes' {
       | '/dashboard/profile'
       | '/dashboard/student'
       | '/dashboard/student/create'
+      | '/dashboard/verification'
       | '/dashboard/wallet'
     >,
     '/dashboard/': RouteRecordInfo<
@@ -136,6 +137,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/dashboard/verification': RouteRecordInfo<
+      '/dashboard/verification',
+      '/dashboard/verification',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/dashboard/wallet': RouteRecordInfo<
       '/dashboard/wallet',
       '/dashboard/wallet',
@@ -203,6 +211,7 @@ declare module 'vue-router/auto-routes' {
         | '/dashboard/profile'
         | '/dashboard/student'
         | '/dashboard/student/create'
+        | '/dashboard/verification'
         | '/dashboard/wallet'
       views:
         | 'default'
@@ -273,6 +282,12 @@ declare module 'vue-router/auto-routes' {
     'src/pages/dashboard/student/create.vue': {
       routes:
         | '/dashboard/student/create'
+      views:
+        | never
+    }
+    'src/pages/dashboard/verification.vue': {
+      routes:
+        | '/dashboard/verification'
       views:
         | never
     }

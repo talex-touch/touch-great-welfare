@@ -5,6 +5,8 @@ import {
   formatDate,
   formatRetentionExpiry,
   STUDENT_REVIEW_FEE,
+  verificationOrganizationLabel,
+  verificationTypeLabel,
 } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import ReviewQueues from './ReviewQueues.vue'
@@ -20,7 +22,7 @@ const {
 const router = useRouter()
 
 function goCreateStudentVerification() {
-  router.push('/dashboard/student/create')
+  router.push('/dashboard/verification')
 }
 </script>
 
@@ -30,23 +32,23 @@ function goCreateStudentVerification() {
       <div class="flex flex-wrap gap-4 items-center justify-between">
         <div>
           <h2 class="text-3xl fw-900 tracking-tight">
-            学生认证
+            认证申请
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            用户可提交任意类目信息与材料等待审核。为了避免反复无效审核，每次审核先扣 {{ STUDENT_REVIEW_FEE }} 积分；成功后返还。
+            用户可提交学生认证或一线认证材料等待审核。为了避免反复无效审核，每次审核先扣 {{ STUDENT_REVIEW_FEE }} 积分；成功后返还。
           </p>
         </div>
         <div class="flex flex-wrap gap-3 items-center">
-          <TxStatusBadge :text="currentUser?.profile.studentVerified ? '已认证' : '未认证'" :status="currentUser?.profile.studentVerified ? 'success' : 'warning'" />
+          <TxStatusBadge :text="currentUser?.profile.studentVerified ? '学生已认证' : '待认证'" :status="currentUser?.profile.studentVerified ? 'success' : 'warning'" />
           <TxButton variant="primary" :disabled="!currentUser" @click="goCreateStudentVerification">
             <span class="i-carbon-add" />
-            提交认证
+            选择认证
           </TxButton>
         </div>
       </div>
 
       <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
-        登录后可以申请学生认证。
+        登录后可以申请认证。
       </div>
       <div v-else class="mt-6">
         <div v-if="!currentStudentVerifications.length" class="text-sm text-slate-500 p-6 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
@@ -65,8 +67,8 @@ function goCreateStudentVerification() {
           >
             <div class="min-w-0">
               <div class="flex flex-wrap gap-2 items-center">
-                <b>{{ item.realName }} · {{ item.category }}</b>
-                <span v-if="item.school" class="text-xs text-slate-500">{{ item.school }}</span>
+                <b>{{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }} · {{ item.category }}</b>
+                <span v-if="item.school" class="text-xs text-slate-500">{{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school }}</span>
               </div>
               <div class="text-xs text-slate-500 mt-1">
                 {{ formatDate(item.createdAt) }}
@@ -77,7 +79,7 @@ function goCreateStudentVerification() {
               <div v-if="item.grade || item.educationLevel || item.identity" class="text-xs text-slate-500 mt-1">
                 {{ [item.grade, item.educationLevel, item.identity].filter(Boolean).join(' · ') }}
               </div>
-              <div v-if="item.educationEmail" class="text-xs text-slate-500 mt-1">
+              <div v-if="item.verificationType !== 'frontline' && item.educationEmail" class="text-xs text-slate-500 mt-1">
                 教育邮箱：{{ item.educationEmail }}
               </div>
             </div>

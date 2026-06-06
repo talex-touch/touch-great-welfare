@@ -3,7 +3,7 @@ import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-ap
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
-import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType } from './welfare'
+import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, VerificationType } from './welfare'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, saveAiConfig } from './ai'
@@ -302,7 +302,11 @@ export const resourceProvisionDrafts = reactive<Record<string, string>>({})
 
 export const applicationFiles = ref<UploadLikeFile[]>([])
 
+const defaultStudentNotes = '<h3>身份说明</h3><ul><li>2026 级本科生</li><li>已上传学生证或录取通知截图</li></ul><h3>材料清单</h3><ul><li>学生证照片</li><li>校园邮箱截图</li></ul>'
+const defaultFrontlineNotes = '<h3>身份说明</h3><ul><li>乡村振兴或公益一线相关工作人员</li><li>已上传单位证明、服务证明或项目材料</li></ul><h3>材料清单</h3><ul><li>组织/单位证明</li><li>服务记录或项目截图</li></ul>'
+
 export const studentForm = reactive({
+  verificationType: 'student' as VerificationType,
   realName: '',
   category: '大学生',
   school: '北京大学',
@@ -310,7 +314,7 @@ export const studentForm = reactive({
   educationLevel: '本科',
   identity: '',
   educationEmail: '',
-  notes: '<h3>身份说明</h3><ul><li>2026 级本科生</li><li>已上传学生证或录取通知截图</li></ul><h3>材料清单</h3><ul><li>学生证照片</li><li>校园邮箱截图</li></ul>',
+  notes: defaultStudentNotes,
 })
 
 export const educationEmailVerificationForm = reactive({
@@ -333,6 +337,20 @@ export const studentCategoryOptions = [
   '博士生',
   '科研工作者',
   '教师',
+  '其他',
+] as const
+
+export const verificationTypeOptions = [
+  { value: 'student', label: '学生认证', description: '面向在读学生、科研人员、教师等教育相关身份。' },
+  { value: 'frontline', label: '一线认证', description: '面向基层帮扶、乡村振兴、支教、驻村和公益一线工作人员。' },
+] as const
+
+export const frontlineCategoryOptions = [
+  '基层帮扶',
+  '乡村振兴',
+  '支教服务',
+  '驻村工作',
+  '公益一线',
   '其他',
 ] as const
 
@@ -376,7 +394,7 @@ export const crowdReviewDrafts = reactive<Record<string, {
   note: string
 }>>({})
 export const pointDrafts = reactive<Record<string, number>>({})
-export const selectedSection = ref<'apply' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('apply')
+export const selectedSection = ref<'apply' | 'verification' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('apply')
 export const ADMIN_TABS = {
   login: '登录配置',
   policy: '申请策略',
@@ -554,6 +572,32 @@ export function useWelfareUiState() {
     }
     applicationForm.waiveRejectionReviewFee = false
     resetApplicationSecurity()
+  })
+  watch(() => studentForm.verificationType, (type) => {
+    if (type === 'frontline') {
+      if ((studentCategoryOptions as readonly string[]).includes(studentForm.category))
+        studentForm.category = frontlineCategoryOptions[0]
+      if (studentForm.school === '北京大学')
+        studentForm.school = ''
+      if (studentForm.grade === '2026 级')
+        studentForm.grade = ''
+      if (studentForm.educationLevel === '本科')
+        studentForm.educationLevel = ''
+      if (studentForm.notes === defaultStudentNotes)
+        studentForm.notes = defaultFrontlineNotes
+      return
+    }
+
+    if ((frontlineCategoryOptions as readonly string[]).includes(studentForm.category))
+      studentForm.category = '大学生'
+    if (!studentForm.school)
+      studentForm.school = '北京大学'
+    if (!studentForm.grade)
+      studentForm.grade = '2026 级'
+    if (!studentForm.educationLevel)
+      studentForm.educationLevel = '本科'
+    if (studentForm.notes === defaultFrontlineNotes)
+      studentForm.notes = defaultStudentNotes
   })
   watch(() => studentForm.educationEmail, () => {
     educationEmailVerificationForm.code = ''
@@ -1772,6 +1816,8 @@ export function useWelfareUiState() {
     studentForm,
     educationEmailVerificationForm,
     studentFiles,
+    verificationTypeOptions,
+    frontlineCategoryOptions,
     studentCategoryOptions,
     studentEducationLevelOptions,
     studentGradeOptions,

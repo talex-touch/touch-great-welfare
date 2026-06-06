@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { FileUploader, TxButton, TxCard, TxCheckbox, TxInput, TxStep, TxSteps } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
 import {
@@ -9,6 +9,8 @@ import {
   formatBytes,
   MAX_ATTACHMENT_BYTES,
   STUDENT_REVIEW_FEE,
+  verificationOrganizationLabel,
+  verificationTypeLabel,
 } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
@@ -18,6 +20,8 @@ const {
   currentUser,
   educationEmailVerificationForm,
   studentForm,
+  verificationTypeOptions,
+  frontlineCategoryOptions,
   studentCategoryOptions,
   studentFiles,
   studentGradeOptions,
@@ -31,6 +35,7 @@ const {
 } = useWelfareUiState()
 
 const router = useRouter()
+const route = useRoute()
 const { runSafely } = useWelfareFeedback()
 const hasStudentConsent = ref(false)
 const currentStep = ref<'notice' | 'details'>('notice')
@@ -43,6 +48,11 @@ let gradeSuggestionsCloseTimer: ReturnType<typeof setTimeout> | undefined
 let schoolSuggestionsCloseTimer: ReturnType<typeof setTimeout> | undefined
 
 const activeStep = computed(() => currentStep.value === 'notice' ? 0 : 1)
+const selectedVerificationType = computed(() => studentForm.verificationType)
+const isStudentVerification = computed(() => selectedVerificationType.value === 'student')
+const currentVerificationLabel = computed(() => verificationTypeLabel(selectedVerificationType.value))
+const currentOrganizationLabel = computed(() => verificationOrganizationLabel(selectedVerificationType.value))
+const currentCategoryOptions = computed(() => isStudentVerification.value ? [...studentCategoryOptions] : [...frontlineCategoryOptions])
 const INITIAL_SCHOOL_SUGGESTION_LIMIT = 48
 
 const filteredStudentSchoolSuggestions = computed(() => {
@@ -59,7 +69,7 @@ const filteredStudentSchoolSuggestions = computed(() => {
   ]
 })
 
-const filteredStudentGradeOptions = computed(() => [...studentGradeOptions])
+const filteredStudentGradeOptions = computed(() => isStudentVerification.value ? [...studentGradeOptions] : ['3 个月内', '半年内', '1 年', '2 年', '3 年及以上', '长期服务'])
 
 function continueToDetails() {
   currentStep.value = 'details'
@@ -70,7 +80,7 @@ function backToNotice() {
 }
 
 function cancelCreate() {
-  router.push('/dashboard/student')
+  router.push('/dashboard/verification')
 }
 
 function openCategorySuggestions() {
@@ -117,6 +127,10 @@ function selectStudentCategory(category: string) {
   isCategorySuggestionsOpen.value = false
 }
 
+function selectVerificationType(type: typeof verificationTypeOptions[number]['value']) {
+  studentForm.verificationType = type
+}
+
 function selectStudentGrade(grade: string) {
   studentForm.grade = grade
   isGradeSuggestionsOpen.value = false
@@ -138,6 +152,7 @@ function onSubmitStudentVerification() {
   runSafely(() => {
     submitStudentVerification({
       realName: studentForm.realName,
+      verificationType: studentForm.verificationType,
       category: studentForm.category,
       school: studentForm.school,
       identity: studentForm.identity,
@@ -149,8 +164,8 @@ function onSubmitStudentVerification() {
     })
     resetStudentFiles()
     clearLocalDraft(studentDraftKey)
-    router.push('/dashboard/student')
-  }, `学生认证已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
+    router.push('/dashboard/verification')
+  }, `${currentVerificationLabel.value}已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
 }
 
 function onGenerateEducationEmailChallenge() {
@@ -173,6 +188,10 @@ function onOpenEducationEmailClient() {
 
 onMounted(() => {
   restoreLocalDraft(studentDraftKey, studentForm)
+  if (route.query.type === 'frontline')
+    studentForm.verificationType = 'frontline'
+  if (route.query.type === 'student')
+    studentForm.verificationType = 'student'
   persistLocalDraft(studentDraftKey, studentForm)
 })
 </script>
@@ -183,10 +202,10 @@ onMounted(() => {
       <div class="flex flex-wrap gap-4 items-start justify-between">
         <div>
           <h2 class="text-3xl fw-900 tracking-tight">
-            提交学生认证
+            提交认证申请
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            先确认材料处理边界，再填写认证信息。草稿会保存在本地浏览器。
+            先选择认证子类并确认材料处理边界，再填写认证信息。草稿会保存在本地浏览器。
           </p>
         </div>
         <TxButton variant="ghost" @click="cancelCreate">
@@ -201,14 +220,14 @@ onMounted(() => {
       </TxSteps>
 
       <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
-        登录后可以申请学生认证。
+        登录后可以申请认证。
       </div>
 
       <div v-else class="mt-6 space-y-6">
         <template v-if="currentStep === 'notice'">
-          <DataNotice mode="full" title="学生认证与材料免责确认" timing="before" />
+          <DataNotice mode="full" title="认证申请与材料免责确认" timing="before" />
           <label class="consent-check">
-            <TxCheckbox v-model="hasStudentConsent" variant="checkmark" aria-label="同意学生认证与材料免责确认" />
+            <TxCheckbox v-model="hasStudentConsent" variant="checkmark" aria-label="同意认证申请与材料免责确认" />
             <span>我确认认证资料由我自愿提供，已按需脱敏；继续填写即表示同意提交成功后生成云端记录、审核费规则、管理员审核处理和上述免责说明。</span>
           </label>
           <div class="flex justify-end">
@@ -225,7 +244,7 @@ onMounted(() => {
                 当前规则
               </div>
               <div class="text-xl fw-900">
-                审核费 {{ STUDENT_REVIEW_FEE }} 积分 · 通过后返还
+                {{ currentVerificationLabel }} · 审核费 {{ STUDENT_REVIEW_FEE }} 积分 · 通过后返还
               </div>
             </div>
             <div class="flex flex-wrap gap-3 items-center">
@@ -240,11 +259,29 @@ onMounted(() => {
 
           <DataNotice mode="compact" title="填写前提示" timing="before" />
 
+          <div class="gap-3 grid md:grid-cols-2">
+            <button
+              v-for="option in verificationTypeOptions"
+              :key="option.value"
+              type="button"
+              class="p-4 text-left border rounded-3xl transition"
+              :class="selectedVerificationType === option.value ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950' : 'border-black/10 bg-white hover:bg-slate-50 dark:border-white/10 dark:bg-[#151820] dark:hover:bg-white/8'"
+              @click="selectVerificationType(option.value)"
+            >
+              <div class="fw-900">
+                {{ option.label }}
+              </div>
+              <div class="text-sm leading-6 mt-1" :class="selectedVerificationType === option.value ? 'text-white/75 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'">
+                {{ option.description }}
+              </div>
+            </button>
+          </div>
+
           <div class="gap-5 grid md:grid-cols-2">
             <label class="gap-2 grid">
               <span class="field-label">真实姓名</span>
               <TxInput v-model="studentForm.realName" placeholder="必须填写，用于人工复核" />
-              <span class="field-hint">学生认证强制提供姓名；请勿填写昵称或无法复核的称呼。</span>
+              <span class="field-hint">认证申请强制提供姓名；请勿填写昵称或无法复核的称呼。</span>
             </label>
             <div class="gap-2 grid">
               <span class="field-label">认证类目</span>
@@ -263,7 +300,7 @@ onMounted(() => {
                 </TxInput>
                 <div v-if="isCategorySuggestionsOpen" class="school-suggestions-panel">
                   <button
-                    v-for="category in studentCategoryOptions"
+                    v-for="category in currentCategoryOptions"
                     :key="category"
                     type="button"
                     class="school-suggestion-option"
@@ -276,11 +313,11 @@ onMounted(() => {
               </div>
             </div>
             <div class="gap-2 grid">
-              <span class="field-label">学校 / 组织</span>
+              <span class="field-label">{{ currentOrganizationLabel }}</span>
               <div class="school-combobox">
                 <TxInput
                   v-model="studentForm.school"
-                  placeholder="输入学校名称，或选择保密 / 内置学校"
+                  :placeholder="isStudentVerification ? '输入学校名称，或选择保密 / 内置学校' : '填写服务组织、单位或项目名称'"
                   @focus="openSchoolSuggestions"
                   @input="openSchoolSuggestions"
                   @blur="closeSchoolSuggestionsSoon"
@@ -289,7 +326,7 @@ onMounted(() => {
                     <span class="i-carbon-chevron-down text-slate-500" />
                   </template>
                 </TxInput>
-                <div v-if="isSchoolSuggestionsOpen && filteredStudentSchoolSuggestions.length" class="school-suggestions-panel">
+                <div v-if="isStudentVerification && isSchoolSuggestionsOpen && filteredStudentSchoolSuggestions.length" class="school-suggestions-panel">
                   <button
                     v-for="school in filteredStudentSchoolSuggestions"
                     :key="school.name"
@@ -312,7 +349,7 @@ onMounted(() => {
                 <div class="school-combobox">
                   <TxInput
                     v-model="studentForm.grade"
-                    placeholder="可选择年级，也可自行输入"
+                    :placeholder="isStudentVerification ? '可选择年级，也可自行输入' : '填写服务周期，也可自行输入'"
                     @focus="openGradeSuggestions"
                     @input="openGradeSuggestions"
                     @blur="closeGradeSuggestionsSoon"
@@ -336,7 +373,7 @@ onMounted(() => {
                 </div>
               </div>
             </div>
-            <div class="gap-2 grid md:col-span-2">
+            <div v-if="isStudentVerification" class="gap-2 grid md:col-span-2">
               <label class="gap-2 grid">
                 <span class="field-label">教育邮箱邮件证明</span>
                 <TxInput v-model="studentForm.educationEmail" type="email" placeholder="name@school.edu.cn，可选" />

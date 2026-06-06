@@ -40,6 +40,7 @@ declare module 'vue' {
     TheFooter: typeof import('./src/components/TheFooter.vue')['default']
     TheInput: typeof import('./src/components/TheInput.vue')['default']
     TurnstileChallenge: typeof import('./src/components/welfare/TurnstileChallenge.vue')['default']
+    VerificationPanel: typeof import('./src/components/welfare/VerificationPanel.vue')['default']
     WalletPanel: typeof import('./src/components/welfare/WalletPanel.vue')['default']
   }
 }

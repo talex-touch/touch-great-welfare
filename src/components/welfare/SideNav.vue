@@ -9,8 +9,7 @@ const { selectedSection, unreadNotificationCount, activeAdminTab, adminTabItems 
 
 const navItems = [
   { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
-  { key: 'student', path: '/dashboard/student', icon: 'i-carbon-education', label: '学生认证' },
-  { key: 'openSource', path: '/dashboard/open-source', icon: 'i-carbon-logo-github', label: '开源认证' },
+  { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
   { key: 'notifications', path: '/dashboard/notifications', icon: 'i-carbon-notification', label: '消息中心' },
   { key: 'notificationSettings', path: '/dashboard/notification-settings', icon: 'i-carbon-settings-adjust', label: '通知设置' },
   { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人信息' },

@@ -11,7 +11,7 @@ const isUserMenuOpen = ref(false)
 const userMenuNavItems = [
   { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
   { key: 'wallet', path: '/dashboard/wallet', icon: 'i-carbon-wallet', label: '钱包充值' },
-  { key: 'openSource', path: '/dashboard/open-source', icon: 'i-carbon-logo-github', label: '开源认证' },
+  { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
 ] as const
 const accountMenuNavItems = [
   { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人信息' },

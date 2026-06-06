@@ -8,6 +8,7 @@ export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
 export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'needs_supplement' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
 export type ApplicationMessageType = 'comment' | 'supplement' | 'result_submission' | 'system'
 export type StudentStatus = 'pending' | 'approved' | 'rejected'
+export type VerificationType = 'student' | 'frontline'
 export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustment' | 'grant'
 export type AiReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_human' | 'failed'
 export type CrowdReviewTargetType = 'pro_application'
@@ -240,6 +241,7 @@ export interface ApplicationMessage {
 export interface StudentVerification {
   id: string
   userId: string
+  verificationType?: VerificationType
   realName: string
   category: string
   school?: string
@@ -443,6 +445,7 @@ export interface AppendApplicationContextPayload {
 }
 
 export interface SubmitStudentPayload {
+  verificationType?: VerificationType
   realName: string
   category: string
   school?: string
@@ -466,6 +469,18 @@ export interface UserReviewStats {
   pending: number
   studentApproved: number
   studentRejected: number
+}
+
+export function normalizeVerificationType(type?: string): VerificationType {
+  return type === 'frontline' ? 'frontline' : 'student'
+}
+
+export function verificationTypeLabel(type?: string) {
+  return normalizeVerificationType(type) === 'frontline' ? '一线认证' : '学生认证'
+}
+
+export function verificationOrganizationLabel(type?: string) {
+  return normalizeVerificationType(type) === 'frontline' ? '组织 / 单位' : '学校'
 }
 
 export interface UserLevelRule {
@@ -1217,6 +1232,7 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
 
   normalized.studentVerifications = normalized.studentVerifications.map(verification => ({
     ...verification,
+    verificationType: normalizeVerificationType(verification.verificationType),
     realName: verification.realName?.trim() || '未填写姓名',
     educationEmail: verification.educationEmail ? normalizeEmail(verification.educationEmail) : undefined,
     educationEmailVerified: !!verification.educationEmailVerified,
@@ -1301,11 +1317,13 @@ function userReviewStats(userId: string, source: Pick<WelfareState, 'application
     stats.submitted += 1
     if (verification.status === 'approved') {
       stats.approved += 1
-      stats.studentApproved += 1
+      if (normalizeVerificationType(verification.verificationType) === 'student')
+        stats.studentApproved += 1
     }
     if (verification.status === 'rejected') {
       stats.rejected += 1
-      stats.studentRejected += 1
+      if (normalizeVerificationType(verification.verificationType) === 'student')
+        stats.studentRejected += 1
     }
     if (verification.status === 'pending')
       stats.pending += 1
@@ -2904,6 +2922,7 @@ export function useWelfareStore() {
     assertPersistenceReady()
     assertCurrentUser(currentUser.value)
 
+    const verificationType = normalizeVerificationType(payload.verificationType)
     const realName = payload.realName.trim()
     if (!realName)
       throw new Error('请填写真实姓名')
@@ -2930,6 +2949,7 @@ export function useWelfareStore() {
     const verification: StudentVerification = {
       id: createId('stu'),
       userId: currentUser.value.id,
+      verificationType,
       realName,
       category: payload.category.trim(),
       school: payload.school?.trim(),
@@ -2950,7 +2970,7 @@ export function useWelfareStore() {
     if (emailChallenge)
       emailChallenge.submittedAt = verification.createdAt
 
-    addTransaction(currentUser.value.id, -STUDENT_REVIEW_FEE, 'spend', '学生认证审核费', verification.id)
+    addTransaction(currentUser.value.id, -STUDENT_REVIEW_FEE, 'spend', `${verificationTypeLabel(verificationType)}审核费`, verification.id)
     state.studentVerifications.unshift(verification)
   }
 
@@ -2968,10 +2988,10 @@ export function useWelfareStore() {
     verification.reply = richTextToPlainText(reply) ? sanitizeRichText(reply) : '认证通过，审核积分已返还。'
     verification.reviewedAt = now()
     verification.feeReturned = true
-    addTransaction(verification.userId, verification.reviewFee, 'refund', '学生认证通过返还审核费', verification.id)
+    addTransaction(verification.userId, verification.reviewFee, 'refund', `${verificationTypeLabel(verification.verificationType)}通过返还审核费`, verification.id)
 
     const user = state.users.find(item => item.id === verification.userId)
-    if (user)
+    if (user && normalizeVerificationType(verification.verificationType) === 'student')
       user.profile.studentVerified = true
   }
 

@@ -3,7 +3,7 @@ import { TxButton, TxCard, TxCheckbox, TxSelect, TxSelectItem, TxTag } from '@ta
 import { computed, onMounted } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { formatDate, formatPoints, formatRetentionExpiry, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
+import { formatDate, formatPoints, formatRetentionExpiry, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -136,14 +136,14 @@ function onApproveStudent(id: string) {
   runSafely(() => {
     approveStudentVerification(id, reviewDrafts[id] ?? '认证通过，欢迎加入公益计划。')
     delete reviewDrafts[id]
-  }, '学生认证已通过，审核积分已返还')
+  }, '认证申请已通过，审核积分已返还')
 }
 
 function onRejectStudent(id: string) {
   runSafely(() => {
     rejectStudentVerification(id, reviewDrafts[id] ?? '材料不足，请补充有效证明后再次申请。')
     delete reviewDrafts[id]
-  }, '学生认证已退回，审核费不返还')
+  }, '认证申请已退回，审核费不返还')
 }
 
 onMounted(() => {
@@ -353,23 +353,23 @@ onMounted(() => {
 
     <TxCard v-if="isAdmin && showStudent" class="solid-panel" background="pure" :padding="22" :radius="28">
       <h3 class="text-2xl fw-900">
-        学生认证审核
+        认证申请审核
       </h3>
       <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
         管理员可在此处理认证材料；通过后返还审核费，退回不返还。
       </p>
       <div class="mt-4 space-y-4">
         <div v-if="!pendingStudentVerifications.length" class="text-sm text-slate-500 p-8 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
-          暂无待审核学生认证
+          暂无待审核认证申请
         </div>
         <div v-for="item in pendingStudentVerifications" :key="item.id" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
           <div class="flex gap-3 items-start justify-between">
             <div>
               <div class="text-lg fw-900">
-                {{ item.realName }} · {{ item.category }}
+                {{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }} · {{ item.category }}
               </div>
               <div class="text-xs text-slate-500 mt-1">
-                {{ userName(item.userId) }} · {{ item.school || '未填写学校' }} · {{ item.attachments.length }} 个材料
+                {{ userName(item.userId) }} · {{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }} · {{ item.attachments.length }} 个材料
               </div>
               <div class="text-xs text-slate-500 mt-1">
                 云端记录预计保留至 {{ formatRetentionExpiry(item.createdAt) }}
@@ -377,7 +377,7 @@ onMounted(() => {
               <div v-if="item.grade || item.educationLevel || item.identity" class="text-xs text-slate-500 mt-1">
                 {{ [item.grade, item.educationLevel, item.identity].filter(Boolean).join(' · ') }}
               </div>
-              <div v-if="item.educationEmail" class="text-xs text-slate-500 mt-1">
+              <div v-if="item.verificationType !== 'frontline' && item.educationEmail" class="text-xs text-slate-500 mt-1">
                 教育邮箱：{{ item.educationEmail }}
               </div>
             </div>
