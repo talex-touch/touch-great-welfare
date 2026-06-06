@@ -16,6 +16,7 @@ export interface WorkerEnv {
 
 const STATE_KEY = 'default'
 const MAX_BODY_BYTES = 2 * 1024 * 1024
+const MASKED_SECRET_MARKER = '****'
 
 let pool: Pool | undefined
 let poolKey = ''
@@ -40,6 +41,77 @@ function isEncryptedWelfareStateEnvelope(value: unknown): value is EncryptedWelf
     && !Array.isArray(value)
     && (value as Record<string, unknown>).__encrypted === true
     && typeof (value as Record<string, unknown>).payload === 'string'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function maskSecret(value: unknown) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text)
+    return ''
+  if (text.length <= 8)
+    return MASKED_SECRET_MARKER
+  return `${text.slice(0, 4)}${MASKED_SECRET_MARKER}${text.slice(-4)}`
+}
+
+function isMaskedSecret(value: unknown) {
+  return typeof value === 'string' && value.includes(MASKED_SECRET_MARKER)
+}
+
+function clientVisibleWelfareState(state: unknown) {
+  if (!isRecord(state))
+    return state
+
+  const applicationPolicy = isRecord(state.applicationPolicy)
+    ? {
+        ...state.applicationPolicy,
+        turnstileSecretKey: maskSecret(state.applicationPolicy.turnstileSecretKey),
+      }
+    : state.applicationPolicy
+
+  return {
+    ...state,
+    applicationPolicy,
+  }
+}
+
+function canUpdateSensitiveState(previousState: unknown, request: Request) {
+  if (!isRecord(previousState))
+    return false
+
+  const userId = request.headers.get('x-welfare-user-id')?.trim()
+  if (!userId)
+    return false
+
+  const users = Array.isArray(previousState.users) ? previousState.users : []
+  const user = users.find(item => isRecord(item) && item.id === userId)
+  return isRecord(user) && user.role === 'admin'
+}
+
+function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request): T {
+  if (!isRecord(previousState) || !isRecord(nextState) || !isRecord(nextState.applicationPolicy))
+    return nextState
+
+  const previousPolicy = isRecord(previousState.applicationPolicy) ? previousState.applicationPolicy : {}
+  const previousTurnstileSecretKey = typeof previousPolicy.turnstileSecretKey === 'string'
+    ? previousPolicy.turnstileSecretKey.trim()
+    : ''
+  const nextTurnstileSecretKey = typeof nextState.applicationPolicy.turnstileSecretKey === 'string'
+    ? nextState.applicationPolicy.turnstileSecretKey.trim()
+    : ''
+
+  if (nextTurnstileSecretKey && !isMaskedSecret(nextTurnstileSecretKey) && canUpdateSensitiveState(previousState, request))
+    return nextState
+
+  return {
+    ...nextState,
+    applicationPolicy: {
+      ...nextState.applicationPolicy,
+      turnstileSecretKey: previousTurnstileSecretKey,
+    },
+  } as T
 }
 
 async function decodeStoredState(env: WorkerEnv, storedState: unknown) {
@@ -175,7 +247,7 @@ function assertStateShape(state: unknown): asserts state is Record<string, unkno
     throw new Error('state must be an object')
 
   const record = state as Record<string, unknown>
-  for (const key of ['users', 'applications', 'studentVerifications', 'educationEmailChallenges', 'crowdReviews', 'transactions']) {
+  for (const key of ['users', 'applications', 'studentVerifications', 'educationEmailChallenges', 'crowdReviews', 'squarePosts', 'squareBoosts', 'squareReports', 'transactions']) {
     if (record[key] !== undefined && !Array.isArray(record[key]))
       throw new Error(`${key} must be an array`)
   }
@@ -199,13 +271,13 @@ async function readPayload(request: Request) {
 export async function handleWelfareStateRequest(request: Request, env: WorkerEnv) {
   try {
     if (request.method === 'GET')
-      return json({ state: await readWelfareState(env) })
+      return json({ state: clientVisibleWelfareState(await readWelfareState(env)) })
 
     if (request.method === 'PUT') {
       const previousState = await readWelfareState(env)
       const payload = await readPayload(request)
       assertStateShape(payload.state)
-      const nextState = applyWelfareRetentionPolicy(payload.state).state
+      const nextState = applyWelfareRetentionPolicy(mergeSensitiveWelfareState(previousState, payload.state, request)).state
       await writeWelfareState(env, nextState)
       await dispatchWelfareStateChangeNotifications(env, previousState, nextState)
       return json({ ok: true })

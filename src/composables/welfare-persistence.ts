@@ -44,9 +44,10 @@ export async function loadWelfareState() {
   return result.state
 }
 
-export async function saveWelfareState(state: WelfareState) {
+export async function saveWelfareState(state: WelfareState, userId?: string) {
   await requestState<{ ok: true }>({
     method: 'PUT',
+    headers: userId ? { 'x-welfare-user-id': userId } : undefined,
     body: JSON.stringify({ state }),
   })
 }

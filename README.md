@@ -32,7 +32,15 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` 会先构建前端、应用本地 D1 migration，再启动 `wrangler dev`。本地业务数据写入 Cloudflare D1 local store，不需要本机 PostgreSQL。
+`pnpm dev` 会先启动本地 Worker API，应用 D1 migration 并加载 D1/R2 binding；Wrangler 就绪后再启动 Vite 开发服务器。日常前端开发访问 `http://localhost:3333`，Vite 提供 HMR，`/api/*` 会代理到 `http://127.0.0.1:8787` 的 Worker API。本地业务数据写入 Cloudflare D1 local store，不需要本机 PostgreSQL。
+
+需要验证生产式静态资源托管时，使用：
+
+```bash
+pnpm run dev:worker
+```
+
+`pnpm run dev:worker` 会先构建前端，再通过 `wrangler dev` 服务 `dist` 和 Worker API；这个模式用于集成预览，不提供前端 HMR。
 
 ## 校验
 

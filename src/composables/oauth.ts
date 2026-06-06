@@ -3,6 +3,7 @@ export interface PublicOAuthProvider {
   name: string
   logoUrl: string
   scopes: string
+  builtin?: boolean
 }
 
 export interface OAuthProviderConfigView extends PublicOAuthProvider {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { STUDENT_REVIEW_FEE, verificationTypeLabel } from '~/composables/welfare'
@@ -24,7 +24,7 @@ const verificationCards = computed(() => [
     icon: 'i-carbon-education',
     description: '在读学生、科研人员、教师等教育相关身份材料审核。',
     statusText: studentApproved.value ? '已认证' : '可申请',
-    statusTone: studentApproved.value ? 'success' : 'info',
+    statusTone: studentApproved.value ? 'success' : 'available',
     actionText: '提交材料',
     tags: [`审核费 ${STUDENT_REVIEW_FEE}`, '通过返还'],
   },
@@ -34,7 +34,7 @@ const verificationCards = computed(() => [
     icon: 'i-carbon-campsite',
     description: '基层帮扶、乡村振兴、支教、驻村、公益一线相关工作人员。',
     statusText: frontlineApproved.value ? '已通过' : '可申请',
-    statusTone: frontlineApproved.value ? 'success' : 'info',
+    statusTone: frontlineApproved.value ? 'success' : 'available',
     actionText: '提交材料',
     tags: ['基层帮扶', '乡村振兴', '支教服务'],
   },
@@ -65,7 +65,7 @@ function goCard(key: string) {
 
 <template>
   <section class="space-y-6">
-    <TxCard class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
+    <TxCard class="solid-panel verification-panel" background="pure" shadow="soft" :padding="24" :radius="28">
       <div class="flex flex-wrap gap-4 items-start justify-between">
         <div>
           <h2 class="text-3xl fw-900 tracking-tight">
@@ -95,7 +95,9 @@ function goCard(key: string) {
         >
           <div class="flex gap-3 items-start justify-between">
             <span class="verification-card__icon" :class="card.icon" />
-            <TxStatusBadge :text="card.statusText" :status="card.statusTone" size="sm" />
+            <span class="verification-status" :class="`verification-status--${card.statusTone}`">
+              {{ card.statusText }}
+            </span>
           </div>
           <div class="mt-5">
             <h3 class="text-xl fw-900">
@@ -106,7 +108,9 @@ function goCard(key: string) {
             </p>
           </div>
           <div class="mt-5 flex flex-wrap gap-2">
-            <TxTag v-for="tag in card.tags" :key="tag" :label="tag" color="#0369a1" background="rgba(14,165,233,.14)" />
+            <span v-for="tag in card.tags" :key="tag" class="verification-tag">
+              {{ tag }}
+            </span>
           </div>
           <div class="mt-6 flex items-center justify-between">
             <span class="text-xs text-slate-500 dark:text-slate-400">

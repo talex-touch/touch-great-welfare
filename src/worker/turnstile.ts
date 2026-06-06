@@ -10,6 +10,21 @@ interface TurnstileSiteVerifyResult {
   'error-codes'?: string[]
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function configuredTurnstileSecret(state: unknown, env: WorkerEnv) {
+  const policy = isRecord(state) && isRecord(state.applicationPolicy)
+    ? state.applicationPolicy
+    : {}
+  const savedSecret = typeof policy.turnstileSecretKey === 'string'
+    ? policy.turnstileSecretKey.trim()
+    : ''
+
+  return savedSecret || env.TURNSTILE_SECRET_KEY?.trim() || ''
+}
+
 export async function handleTurnstileRequest(request: Request, env: WorkerEnv) {
   try {
     const url = new URL(request.url)
@@ -18,8 +33,8 @@ export async function handleTurnstileRequest(request: Request, env: WorkerEnv) {
     if (path !== '/verify' || request.method !== 'POST')
       return json({ error: 'Not Found' }, 404)
 
-    await getAuthenticatedRequest(request, env)
-    const secret = env.TURNSTILE_SECRET_KEY?.trim()
+    const auth = await getAuthenticatedRequest(request, env)
+    const secret = configuredTurnstileSecret(auth.state, env)
     if (!secret)
       throw new Error('Turnstile Secret Key 未配置')
 

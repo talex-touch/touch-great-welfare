@@ -13,6 +13,7 @@ const {
   pointDrafts,
   userLevelCard,
   setUserCrowdReviewer,
+  setUserSuspended,
   setUserStudentVerified,
   unbindUserGitHub,
   rechargeConfigForm,
@@ -23,6 +24,9 @@ const {
   aiConfigForm,
   sub2ApiConfigForm,
   notificationProviderConfigForm,
+  siteBannerConfigForm,
+  adminAnnouncementForm,
+  adminAnnouncements,
   activeAdminTab,
   adjustUserPoints,
   refreshRechargeConfig,
@@ -39,6 +43,10 @@ const {
   verifySub2ApiConfig,
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
+  refreshSiteBannerConfig,
+  persistSiteBannerConfig,
+  refreshAdminAnnouncements,
+  sendAdminAnnouncement,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
@@ -68,6 +76,24 @@ const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
 const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
 type EditableOAuthProviderConfig = OAuthProviderConfigView & { clientSecret: string }
 
+const LINUX_DO_OAUTH_PRESET: EditableOAuthProviderConfig = {
+  id: 'linux-do',
+  name: 'LINUX DO',
+  logoUrl: '',
+  enabled: true,
+  configured: false,
+  builtin: true,
+  clientId: '',
+  clientSecret: '',
+  clientSecretMasked: '',
+  callbackUrl: defaultOAuthCallbackUrl(),
+  authorizeUrl: 'https://connect.linux.do/oauth2/authorize',
+  tokenUrl: 'https://connect.linux.do/oauth2/token',
+  userInfoUrl: 'https://connect.linux.do/api/user',
+  issuerUrl: 'https://linux.do',
+  scopes: '',
+}
+
 const isOAuthProviderDialogOpen = ref(false)
 const oauthProviderDialogMode = ref<'create' | 'edit'>('create')
 const editingOAuthProviderId = ref('')
@@ -77,6 +103,7 @@ const oauthProviderDraft = reactive<EditableOAuthProviderConfig>({
   logoUrl: '',
   enabled: true,
   configured: false,
+  builtin: false,
   clientId: '',
   clientSecret: '',
   clientSecretMasked: '',
@@ -201,6 +228,19 @@ const transactionDirectionFilterOptions = [
   { value: 'out', label: '扣减' },
 ]
 
+const bannerToneOptions = [
+  { value: 'info', label: '提示' },
+  { value: 'success', label: '成功' },
+  { value: 'warning', label: '警示' },
+] as const
+
+const announcementChannelOptions = [
+  { value: 'in_app', label: '站内' },
+  { value: 'email', label: '邮件' },
+  { value: 'feishu', label: '飞书' },
+  { value: 'browser_push', label: '浏览器推送' },
+] as const
+
 const auditAreaFilterOptions = [
   { value: ALL_FILTER, label: '全部模块' },
   { value: '用户', label: '用户' },
@@ -301,6 +341,16 @@ function roleToneClass(role: string) {
   if (role === 'reviewer')
     return 'text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30'
   return 'text-slate-700 bg-slate-100 dark:text-slate-200 dark:bg-white/10'
+}
+
+function accountStatusText(status?: string) {
+  return status === 'suspended' ? '已封禁' : '正常'
+}
+
+function accountStatusToneClass(status?: string) {
+  if (status === 'suspended')
+    return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'
+  return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
 }
 
 function levelToneClass(tone: string) {
@@ -1078,6 +1128,13 @@ function defaultOAuthCallbackUrl() {
   return typeof globalThis.location !== 'undefined' ? `${globalThis.location.origin}/api/oauth/callback` : '/api/oauth/callback'
 }
 
+function createLinuxDoOAuthPreset() {
+  return {
+    ...LINUX_DO_OAUTH_PRESET,
+    callbackUrl: defaultOAuthCallbackUrl(),
+  }
+}
+
 function resetOAuthProviderDraft(provider?: EditableOAuthProviderConfig) {
   Object.assign(oauthProviderDraft, provider
     ? {
@@ -1106,6 +1163,22 @@ function openAddOAuthProviderDialog() {
   oauthProviderDialogMode.value = 'create'
   editingOAuthProviderId.value = ''
   resetOAuthProviderDraft()
+  isOAuthProviderDialogOpen.value = true
+}
+
+function openLinuxDoOAuthProviderDialog() {
+  const existing = oauthProviderConfigs.value.find(provider => provider.id === LINUX_DO_OAUTH_PRESET.id)
+  oauthProviderDialogMode.value = existing ? 'edit' : 'create'
+  editingOAuthProviderId.value = existing?.id ?? ''
+  resetOAuthProviderDraft({
+    ...createLinuxDoOAuthPreset(),
+    ...existing,
+    enabled: true,
+    authorizeUrl: existing?.authorizeUrl || LINUX_DO_OAUTH_PRESET.authorizeUrl,
+    tokenUrl: existing?.tokenUrl || LINUX_DO_OAUTH_PRESET.tokenUrl,
+    userInfoUrl: existing?.userInfoUrl || LINUX_DO_OAUTH_PRESET.userInfoUrl,
+    issuerUrl: existing?.issuerUrl || LINUX_DO_OAUTH_PRESET.issuerUrl,
+  })
   isOAuthProviderDialogOpen.value = true
 }
 
@@ -1242,6 +1315,17 @@ function onUnbindGitHub(userId: string) {
   }, 'GitHub 认证已解绑')
 }
 
+function onToggleUserSuspended(userId: string, suspended: boolean) {
+  const action = suspended ? 'suspend-user' : 'restore-user'
+  if (!confirmUserAction(userId, action))
+    return
+
+  runSafely(() => {
+    setUserSuspended(userId, suspended, '违反平台使用政策或资源使用协议')
+    pendingAdminUserAction.value = ''
+  }, suspended ? '用户已封禁' : '用户已解封')
+}
+
 function saveRechargeConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -1290,13 +1374,39 @@ function saveNotificationProviderConfig() {
   }, '通知供应商配置已保存')
 }
 
+function saveSiteBannerConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistSiteBannerConfig()
+  }, '顶部 Banner 已保存')
+}
+
+function publishAdminAnnouncement() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await sendAdminAnnouncement()
+  }, '管理员通告已发送')
+}
+
+function reloadAdminAnnouncements() {
+  runSafely(() => refreshAdminAnnouncements(), '通告统计已刷新')
+}
+
+function notificationChannelLabel(channel: string) {
+  return announcementChannelOptions.find(item => item.value === channel)?.label ?? channel
+}
+
 onMounted(() => {
+  refreshSiteBannerConfig()
   refreshRechargeConfig().catch(() => {})
   refreshGitHubAppConfig().catch(() => {})
   refreshOAuthProviderConfigs().catch(() => {})
   refreshAiConfig().catch(() => {})
   refreshSub2ApiConfig().catch(() => {})
   refreshNotificationProviderConfig().catch(() => {})
+  refreshAdminAnnouncements().catch(() => {})
 })
 </script>
 
@@ -1392,6 +1502,9 @@ onMounted(() => {
               <div class="flex flex-wrap gap-2">
                 <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="onRefreshOAuthProviderConfigs">
                   刷新
+                </TxButton>
+                <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="openLinuxDoOAuthProviderDialog">
+                  添加 LINUX DO
                 </TxButton>
                 <TxButton size="sm" variant="secondary" :disabled="!isAdmin || oauthConfigForm.loading" @click="openAddOAuthProviderDialog">
                   添加登录源
@@ -1584,11 +1697,15 @@ onMounted(() => {
               </label>
               <label class="option-check">
                 <TxCheckbox v-model="state.applicationPolicy.turnstileEnabled" variant="checkmark" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
-                <span><b>启用 Turnstile</b><small>需要配置 Site Key，并在 Worker 环境配置 TURNSTILE_SECRET_KEY。</small></span>
+                <span><b>启用 Turnstile</b><small>需要配置 Site Key 和 Secret Key，Secret Key 会保存到服务端状态。</small></span>
               </label>
-              <label class="gap-2 grid lg:col-span-2">
+              <label class="gap-2 grid">
                 <span class="field-label">Turnstile Site Key</span>
                 <TxInput v-model="state.applicationPolicy.turnstileSiteKey" :disabled="!isAdmin || applicationPolicyConfigForm.loading || !state.applicationPolicy.turnstileEnabled" placeholder="0x4AAAA..." />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">Turnstile Secret Key</span>
+                <TxInput v-model="applicationPolicyConfigForm.turnstileSecretKey" type="password" :disabled="!isAdmin || applicationPolicyConfigForm.loading || !state.applicationPolicy.turnstileEnabled" :placeholder="state.applicationPolicy.turnstileSecretKey || '0x4AAAA...'" />
               </label>
             </div>
           </div>
@@ -1774,7 +1891,7 @@ onMounted(() => {
                     LLMApi 模型价格
                   </div>
                   <p class="field-hint mt-1">
-                    用户只能选择 Codex / ClaudeCode / Mimo；这里配置每个模型的价格、默认额度、IP、默认 RPM/TPM 与并发限制。
+                    用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。这里配置每个模型的价格、默认额度、IP、默认 RPM/TPM 与并发限制。
                   </p>
                 </div>
                 <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
@@ -1969,6 +2086,133 @@ onMounted(() => {
             </div>
             <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
               飞书 Webhook 仍由用户通知设置保存；这里仅配置全局邮件和浏览器推送供应商。
+            </div>
+          </div>
+
+          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+              <span class="i-carbon-information" />
+              顶部 Banner
+            </div>
+            <div class="gap-5 grid lg:grid-cols-2">
+              <label class="gap-2 grid">
+                <span class="field-label">标题</span>
+                <TxInput v-model="siteBannerConfigForm.title" :disabled="!isAdmin || siteBannerConfigForm.loading" placeholder="内测公告 / 推广宣传" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">展示样式</span>
+                <select v-model="siteBannerConfigForm.tone" class="form-select admin-page-size" :disabled="!isAdmin || siteBannerConfigForm.loading">
+                  <option v-for="option in bannerToneOptions" :key="option.value" :value="option.value">
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">内容</span>
+                <textarea v-model="siteBannerConfigForm.body" class="form-textarea min-h-24" :disabled="!isAdmin || siteBannerConfigForm.loading" placeholder="当前处于内测阶段，部分资源按批次开放。" />
+              </label>
+            </div>
+            <div class="mt-5 flex flex-wrap gap-3 items-center">
+              <label class="text-sm flex gap-2 items-center">
+                <TxCheckbox v-model="siteBannerConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || siteBannerConfigForm.loading" aria-label="启用顶部 Banner" />
+                启用顶部 Banner
+              </label>
+              <TxButton variant="primary" :disabled="!isAdmin || siteBannerConfigForm.loading" @click="saveSiteBannerConfig">
+                {{ siteBannerConfigForm.loading ? '保存中...' : '保存 Banner' }}
+              </TxButton>
+            </div>
+            <div v-if="siteBannerConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+              {{ siteBannerConfigForm.message }}
+            </div>
+          </div>
+
+          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <div class="text-lg fw-900 flex gap-2 items-center">
+                  <span class="i-carbon-notification-new" />
+                  管理员通告
+                </div>
+                <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
+                  面向用户批量发送站内通告，可查看每个用户的已读状态。
+                </p>
+              </div>
+              <TxButton variant="secondary" :disabled="!isAdmin || adminAnnouncementForm.loading" @click="reloadAdminAnnouncements">
+                刷新统计
+              </TxButton>
+            </div>
+            <div class="mt-5 gap-5 grid lg:grid-cols-2">
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">通告标题</span>
+                <TxInput v-model="adminAnnouncementForm.title" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="维护通知 / 资源开放提醒" />
+              </label>
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">通告内容</span>
+                <textarea v-model="adminAnnouncementForm.body" class="form-textarea min-h-28" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="请输入要推送给所有用户的内容。" />
+              </label>
+            </div>
+            <div class="mt-5 flex flex-wrap gap-4 items-center">
+              <label v-for="option in announcementChannelOptions" :key="option.value" class="text-sm flex gap-2 items-center">
+                <TxCheckbox v-model="adminAnnouncementForm.channels[option.value]" variant="checkmark" :disabled="option.value === 'in_app' || !isAdmin || adminAnnouncementForm.loading" :aria-label="option.label" />
+                {{ option.label }}
+              </label>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-4 items-center">
+              <label class="text-sm flex gap-2 items-center">
+                <TxCheckbox v-model="adminAnnouncementForm.forcePopup" variant="checkmark" :disabled="!isAdmin || adminAnnouncementForm.loading" aria-label="强制弹窗" />
+                强制弹窗
+              </label>
+              <label class="text-sm flex gap-2 items-center">
+                <TxCheckbox v-model="adminAnnouncementForm.forcePush" variant="checkmark" :disabled="!isAdmin || adminAnnouncementForm.loading" aria-label="强制推送" />
+                强制推送
+              </label>
+              <TxButton variant="primary" :disabled="!isAdmin || adminAnnouncementForm.loading" @click="publishAdminAnnouncement">
+                {{ adminAnnouncementForm.loading ? '发送中...' : '发送通告' }}
+              </TxButton>
+            </div>
+            <div v-if="adminAnnouncementForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+              {{ adminAnnouncementForm.message }}
+            </div>
+
+            <div class="admin-table mt-5">
+              <div class="admin-table-row admin-announcement-grid admin-table-head">
+                <span>通告</span>
+                <span>渠道</span>
+                <span>已读</span>
+                <span>发送时间</span>
+              </div>
+              <div v-if="!adminAnnouncements.length" class="admin-empty">
+                暂无管理员通告。
+              </div>
+              <div v-for="announcement in adminAnnouncements" :key="announcement.id" class="admin-table-row admin-announcement-grid">
+                <div class="min-w-0">
+                  <b class="block truncate">{{ announcement.title }}</b>
+                  <span class="text-xs text-slate-500 line-clamp-2 dark:text-slate-400">{{ announcement.body }}</span>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span v-if="announcement.forcePopup" class="admin-pill text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30">强制弹窗</span>
+                    <span v-if="announcement.forcePush" class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">强制推送</span>
+                  </div>
+                  <details class="mt-3">
+                    <summary class="text-xs text-slate-500 cursor-pointer dark:text-slate-400">
+                      查看用户已读明细
+                    </summary>
+                    <div class="admin-detail-list mt-2">
+                      <div v-for="recipient in announcement.recipients" :key="recipient.notificationId">
+                        <span>
+                          {{ recipient.displayName }}
+                          <small class="text-slate-400">· {{ recipient.email || recipient.userId }}</small>
+                        </span>
+                        <b :class="recipient.readAt ? 'text-emerald-600' : 'text-amber-600'">
+                          {{ recipient.readAt ? `已读 ${formatDate(recipient.readAt)}` : '未读' }}
+                        </b>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+                <span>{{ announcement.channels.map(notificationChannelLabel).join(' / ') }}</span>
+                <span>{{ announcement.readCount }} / {{ announcement.totalCount }}</span>
+                <span>{{ formatDate(announcement.createdAt) }}</span>
+              </div>
             </div>
           </div>
         </TxTabItem>
@@ -2202,6 +2446,9 @@ onMounted(() => {
                   <span class="admin-pill" :class="roleToneClass(selectedUserDetail.user.role)">
                     {{ roleText(selectedUserDetail.user.role) }}
                   </span>
+                  <span class="admin-pill" :class="accountStatusToneClass(selectedUserDetail.user.accountStatus)">
+                    {{ accountStatusText(selectedUserDetail.user.accountStatus) }}
+                  </span>
                   <span class="admin-pill" :class="levelToneClass(selectedUserDetail.level.tone)">
                     {{ selectedUserDetail.level.name }}
                   </span>
@@ -2230,6 +2477,18 @@ onMounted(() => {
                     账号与认证
                   </div>
                   <div class="admin-detail-list mt-4">
+                    <div>
+                      <span>账号状态</span>
+                      <b>{{ accountStatusText(selectedUserDetail.user.accountStatus) }}</b>
+                    </div>
+                    <div v-if="selectedUserDetail.user.accountStatus === 'suspended'">
+                      <span>封禁原因</span>
+                      <b>{{ selectedUserDetail.user.suspendedReason || '违反平台使用政策' }}</b>
+                    </div>
+                    <div v-if="selectedUserDetail.user.accountStatus === 'suspended'">
+                      <span>封禁时间</span>
+                      <b>{{ formatOptionalDate(selectedUserDetail.user.suspendedAt) }}</b>
+                    </div>
                     <div>
                       <span>创建时间</span>
                       <b>{{ formatDate(selectedUserDetail.user.createdAt) }}</b>
@@ -2289,6 +2548,22 @@ onMounted(() => {
                     </TxButton>
                     <TxButton size="sm" variant="danger" :disabled="!isAdmin || !selectedUserDetail.user.profile.githubAuthorized" @click="onUnbindGitHub(selectedUserDetail.user.id)">
                       {{ pendingAdminUserAction === userActionKey(selectedUserDetail.user.id, 'unbind-github') ? '确认解绑' : '解绑 GitHub' }}
+                    </TxButton>
+                    <TxButton
+                      v-if="selectedUserDetail.user.role !== 'admin'"
+                      size="sm"
+                      :variant="selectedUserDetail.user.accountStatus === 'suspended' ? 'secondary' : 'danger'"
+                      :disabled="!isAdmin"
+                      @click="onToggleUserSuspended(selectedUserDetail.user.id, selectedUserDetail.user.accountStatus !== 'suspended')"
+                    >
+                      {{
+                        pendingAdminUserAction === userActionKey(
+                          selectedUserDetail.user.id,
+                          selectedUserDetail.user.accountStatus === 'suspended' ? 'restore-user' : 'suspend-user',
+                        )
+                          ? '确认执行'
+                          : selectedUserDetail.user.accountStatus === 'suspended' ? '解除封禁' : '封禁用户'
+                      }}
                     </TxButton>
                   </div>
                 </section>

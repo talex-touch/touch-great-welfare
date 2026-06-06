@@ -15,6 +15,7 @@ export type CrowdReviewTargetType = 'pro_application'
 export type CrowdReviewDecision = 'approve' | 'reject' | 'needs_admin'
 export type UserLevelKey = 'starter' | 'steady' | 'trusted' | 'priority' | 'guardian'
 export type LlmApiModelRegion = 'domestic' | 'global' | 'custom'
+export type SquarePostType = 'application_template' | 'review'
 export type ResourceType = 'database' | 'llm_api_quota' | 'git_repository' | 'cicd' | 'vpn' | 'ip_allowlist' | 'server' | 'gpu' | 'k8s_namespace' | 'object_storage'
 export type ResourceApprovalStatus = 'pending' | 'approved' | 'rejected' | 'adjusted_approved'
 export type ResourceProvisionStatus = 'not_required' | 'pending' | 'completed'
@@ -112,6 +113,10 @@ export interface User {
   role: UserRole
   profile: UserProfile
   points: number
+  accountStatus: 'active' | 'suspended'
+  suspendedReason?: string
+  suspendedAt?: string
+  suspendedBy?: string
   createdAt: string
   lastLoginAt: string
 }
@@ -160,6 +165,10 @@ export interface WelfareApplication {
   couponName?: string
   couponDiscountRate?: number
   couponDiscountAmount?: number
+  sharedToSquare?: boolean
+  squarePostId?: string
+  squareDiscountRate?: number
+  squareDiscountAmount?: number
   pricingDiscountRate?: number
   pricingPromotionName?: string
   pricingPromotionEndsAt?: string
@@ -320,6 +329,45 @@ export interface CrowdReview {
   createdAt: string
 }
 
+export interface SquarePost {
+  id: string
+  userId: string
+  type: SquarePostType
+  title: string
+  content: string
+  applicationId?: string
+  requestType?: RequestKind
+  template?: Partial<SubmitApplicationPayload & SubmitResourceApplicationPayload>
+  penaltyCount?: number
+  lastPenaltyAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SquareBoost {
+  id: string
+  postId: string
+  userId: string
+  mode?: 'boost' | 'post_approval_vote'
+  declaration: string
+  pointsGranted: number
+  createdAt: string
+  reportedAt?: string
+  reportReason?: string
+  reportedBy?: string
+  penaltyApplied?: boolean
+  cooldownUntil?: string
+}
+
+export interface SquareReport {
+  id: string
+  postId: string
+  boostId: string
+  reporterId: string
+  reason: string
+  createdAt: string
+}
+
 export interface CreditTransaction {
   id: string
   userId: string
@@ -346,7 +394,17 @@ export interface ApplicationPolicyConfig {
   powDifficulty: number
   turnstileEnabled: boolean
   turnstileSiteKey: string
+  turnstileSecretKey: string
   categories: Record<RequestKind, ApplicationKindPolicy>
+}
+
+export interface SiteBannerConfig {
+  enabled: boolean
+  title: string
+  body: string
+  tone: 'info' | 'success' | 'warning'
+  updatedAt?: string
+  updatedBy?: string
 }
 
 export interface WelfareState {
@@ -354,6 +412,7 @@ export interface WelfareState {
   currentUserId?: string
   oauth: OauthConfig
   applicationPolicy: ApplicationPolicyConfig
+  siteBanner: SiteBannerConfig
   applications: WelfareApplication[]
   studentVerifications: StudentVerification[]
   educationEmailChallenges: EducationEmailChallenge[]
@@ -361,6 +420,9 @@ export interface WelfareState {
   dailyCheckIns: DailyCheckIn[]
   invitationBindings: InvitationBinding[]
   crowdReviews: CrowdReview[]
+  squarePosts: SquarePost[]
+  squareBoosts: SquareBoost[]
+  squareReports: SquareReport[]
   transactions: CreditTransaction[]
   createdAt: string
 }
@@ -388,6 +450,8 @@ export interface SubmitApplicationPayload {
   waiveRejectionReviewFee?: boolean
   powNonce?: string
   turnstileVerified?: boolean
+  shareToSquare?: boolean
+  squarePostContent?: string
   llmApiModelKey?: string
   llmApiBudgetUsd?: number
   llmApiCustomRpmLimit?: number
@@ -423,6 +487,16 @@ export interface SubmitResourceApplicationPayload {
   saveAsDraft?: boolean
   powNonce?: string
   turnstileVerified?: boolean
+  shareToSquare?: boolean
+  squarePostContent?: string
+}
+
+export interface CreateSquarePostPayload {
+  type: SquarePostType
+  title: string
+  content: string
+  applicationId?: string
+  shareTemplate?: boolean
 }
 
 export interface ReviewApplicationItemPayload {
@@ -596,6 +670,11 @@ export const ACTIVITY_DAYS = 7
 export const ACTIVITY_START_AT = '2026-06-01T00:00:00.000Z'
 export const ACTIVITY_END_AT = '2026-06-08T00:00:00.000Z'
 export const ACTIVITY_NAME = '限时 0.1 折'
+export const LLM_API_BUDGET_ACTIVITY_TIERS = [
+  { minBudgetUsd: 500, discountRate: 1 },
+  { minBudgetUsd: 300, discountRate: 0.07 },
+  { minBudgetUsd: 100, discountRate: 0.05 },
+] as const
 export const PRO_BASE_COST = 10880
 export const PRO_PUBLIC_COST = BASE_REQUEST_COST.pro
 export const PRO_CONTEXT_APPEND_COST = 10880
@@ -603,9 +682,11 @@ export const PRO_STANDARD_PROCESSING_HOURS = 72
 export const PRO_EXPEDITED_PROCESSING_HOURS = 48
 export const PRO_EXPEDITE_COST = 1100
 export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
-export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'claude-code', 'mimo'] as const
+export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'gpt-pro', 'claude-code', 'mimo'] as const
+export const LLM_API_SELECTABLE_MODEL_KEYS = ['codex', 'gpt-pro'] as const
 export const LLM_API_MODEL_COST_MULTIPLIERS: Record<typeof LLM_API_ALLOWED_MODEL_KEYS[number], number> = {
   'codex': 1,
+  'gpt-pro': 20,
   'claude-code': 10,
   'mimo': 0.1,
 }
@@ -632,12 +713,28 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     concurrencyLimit: 1,
   },
   {
+    key: 'gpt-pro',
+    name: 'GPT PRO',
+    provider: 'OpenAI',
+    region: 'global',
+    description: '适合高质量复杂推理、长任务、关键代码改造和高成本模型调用。',
+    enabled: true,
+    pointsPerUsd: 200,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 1,
+    rpmLimit: 1,
+    tpmLimit: 8000,
+    concurrencyLimit: 1,
+  },
+  {
     key: 'claude-code',
     name: 'ClaudeCode',
     provider: 'Anthropic',
     region: 'global',
     description: '适合长上下文代码分析、重构和复杂推理。',
-    enabled: true,
+    enabled: false,
     pointsPerUsd: 100,
     defaultBudgetUsd: 10,
     minBudgetUsd: 10,
@@ -653,7 +750,7 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     provider: 'Mimo',
     region: 'global',
     description: '适合轻量代码任务、快速原型和日常开发辅助。',
-    enabled: true,
+    enabled: false,
     pointsPerUsd: 1,
     defaultBudgetUsd: 10,
     minBudgetUsd: 10,
@@ -670,30 +767,50 @@ export const RESOURCE_TERMS: ResourceTermConfig[] = [
     id: 'general_resource_terms',
     title: '通用资源使用条款',
     version: '2026.06',
-    content: ['仅将资源用于已说明的公益/研发目的。', '不得共享账号、密钥或临时权限；到期后应主动释放资源。', '若用途、负责人或成本归属变化，应重新提交或补充申请。'],
+    content: [
+      '仅将资源用于已说明的公益、研发、学习或开源目的，不得转借、倒卖、出租或挪作未审批用途。',
+      '不得共享账号、密钥或临时权限；到期后应主动释放资源并删除不再需要的访问凭据。',
+      '违反使用政策、提交虚假材料、滥用资源或造成安全风险时，平台可直接封禁账号且不退还任何已预扣或已消费积分。',
+      '管理员可在后台基于审计记录封禁用户；被封禁用户不得继续提交申请、复用额度或参与广场互动。',
+    ],
   },
   {
     id: 'database_security_terms',
     title: '数据库安全条款',
     version: '2026.06',
-    content: ['遵循最小权限原则，不导出、不传播未授权数据。', '生产环境和敏感数据操作需保留操作范围说明。', '临时运维权限到期自动回收，异常操作需及时上报。'],
+    content: [
+      '遵循最小权限原则，不导出、不传播、不长期保存未授权数据。',
+      '生产环境和敏感数据操作需保留操作范围说明，禁止绕过审批进行批量查询、复制、下载或外发。',
+      '临时运维权限到期自动回收，异常查询、误操作、权限泄露或数据风险需立即停止并上报。',
+      '因违规访问、泄露或滥用数据导致封禁的，相关预扣积分、已消费积分和审核费用均不退还。',
+    ],
   },
   {
     id: 'llm_api_compliance_terms',
     title: '大模型 API 合规条款',
     version: '2026.06',
-    content: ['不得向模型上传未脱敏的个人隐私、密钥、商业机密或受限代码。', '额度和预算归属申请项目，超额或滥用需由负责人说明。', '按申请记录执行日志留存、脱敏和审计要求。'],
+    content: [
+      '不得向模型上传未脱敏的个人隐私、密钥、商业机密、未公开数据、受限代码或其他违反模型/平台使用政策的内容。',
+      '额度、RPM、TPM、预算和有效期仅归属申请项目，禁止共享、倒卖、转租、代理滥用、绕过限流或用于未说明业务。',
+      '平台按申请记录执行日志留存、脱敏、风控和审计；超额、异常消耗或高风险调用需由负责人说明。',
+      '因违反模型供应商或平台使用政策导致账号、Key、项目或用户被封禁的，平台不退还任何积分，并可继续追溯处理关联账号。',
+    ],
   },
   {
     id: 'infrastructure_resource_terms',
     title: '基础设施资源条款',
     version: '2026.06',
-    content: ['服务器、GPU、K8s、对象存储等资源仅用于申请场景。', '禁止挖矿、转租、压测未授权系统或绕过安全策略。', '资源到期应及时释放，产生费用计入申请成本归属。'],
+    content: [
+      '服务器、GPU、K8s、对象存储、VPN、IP 白名单等资源仅用于申请项目。',
+      '不得挖矿、转租、部署恶意程序、压测未授权系统、搭建违规代理或规避安全策略。',
+      '资源到期或项目结束后应释放实例、命名空间、白名单、Bucket、临时凭据和其他持续计费资源。',
+      '因违规部署、攻击、滥用网络、造成安全事件或违反云平台政策被封禁的，不退还任何积分，管理员可立即中止和回收资源。',
+    ],
   },
 ]
 export const RESOURCE_TYPE_CONFIGS: ResourceTypeConfig[] = [
   { resourceType: 'database', displayName: '数据库', category: 'database', description: 'MySQL / PostgreSQL / Redis 权限或实例访问。', icon: 'i-carbon-data-base', enabled: true, availability: 'available', subtypes: ['mysql', 'postgresql', 'redis'], termsIds: ['database_security_terms'], approverGroup: 'DBA' },
-  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'Codex、ClaudeCode、Mimo 三选一额度。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['codex', 'claude-code', 'mimo'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
+  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'Codex、GPT PRO 二选一额度；ClaudeCode、Mimo 暂停开放。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['codex', 'gpt-pro'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
   { resourceType: 'git_repository', displayName: 'Git 仓库权限', category: 'access', description: '代码仓库只读、开发者、维护者权限。', icon: 'i-carbon-logo-github', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['gitlab', 'github', 'gitee'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
   { resourceType: 'cicd', displayName: 'CI/CD 权限', category: 'access', description: '流水线执行、配置、部署权限。', icon: 'i-carbon-continuous-deployment', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['pipeline', 'runner', 'deployment'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
   { resourceType: 'vpn', displayName: 'VPN', category: 'access', description: '内网访问 VPN 权限。', icon: 'i-carbon-vpn', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['personal', 'project'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
@@ -730,6 +847,14 @@ export const EDUCATION_EMAIL_REVIEW_INBOX = 'welfare@tagzxia.com'
 export const DAILY_CHECK_IN_MAX_POINTS = 30
 export const DAILY_CHECK_IN_COUPON_TTL_DAYS = 30
 export const INVITATION_BIND_WINDOW_HOURS = 8
+export const SQUARE_SHARE_DISCOUNT_RATE = 0.95
+export const SQUARE_BOOST_DISCOUNT_STEP = 0.01
+export const SQUARE_BOOSTS_PER_DISCOUNT_STEP = 3
+export const SQUARE_MIN_DISCOUNT_RATE = 0.8
+export const SQUARE_BOOST_REWARD_POINTS = 5
+export const SQUARE_DAILY_BOOST_LIMIT = 10
+export const SQUARE_BOOST_REPORT_PENALTY_POINTS = 10
+export const SQUARE_BOOST_REPORT_COOLDOWN_DAYS = 3
 export { DATA_RETENTION_DAYS }
 
 const DEFAULT_KIND_POLICY: ApplicationKindPolicy = {
@@ -749,6 +874,7 @@ export function defaultApplicationPolicy(): ApplicationPolicyConfig {
     powDifficulty: 3,
     turnstileEnabled: false,
     turnstileSiteKey: '',
+    turnstileSecretKey: '',
     categories: {
       code: { ...DEFAULT_KIND_POLICY, dailyLimit: 80, perUserDailyLimit: 3 },
       image: { ...DEFAULT_KIND_POLICY, dailyLimit: 40, perUserDailyLimit: 2 },
@@ -891,6 +1017,28 @@ export function calculateActivityPrice(cost: number, referenceTime = now()) {
   return Math.max(1, Math.ceil(cost * ACTIVITY_DISCOUNT_RATE))
 }
 
+export function llmApiBudgetActivityDiscountRate(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  const budget = normalizeLlmApiBudgetUsd(budgetUsd, model)
+  const tier = LLM_API_BUDGET_ACTIVITY_TIERS.find(item => budget >= item.minBudgetUsd)
+  return tier?.discountRate ?? ACTIVITY_DISCOUNT_RATE
+}
+
+export function calculateLlmApiBudgetActivityPrice(cost: number, budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0], referenceTime = now()) {
+  if (!isPromotionActive(referenceTime))
+    return cost
+
+  return applyRateDiscount(cost, llmApiBudgetActivityDiscountRate(budgetUsd, model))
+}
+
+export function calculateSquareBoostDiscountRate(boostCount: number) {
+  const steps = Math.floor(Math.max(0, boostCount) / SQUARE_BOOSTS_PER_DISCOUNT_STEP)
+  return Math.max(SQUARE_MIN_DISCOUNT_RATE, SQUARE_SHARE_DISCOUNT_RATE - steps * SQUARE_BOOST_DISCOUNT_STEP)
+}
+
+export function applyRateDiscount(cost: number, rate: number) {
+  return Math.max(1, Math.ceil(cost * Math.max(0.01, Math.min(1, rate))))
+}
+
 export function buildPricingSnapshot(type: RequestKind, referenceTime = now()) {
   const baseCost = BASE_REQUEST_COST[type]
   const discountedCost = calculateActivityPrice(baseCost, referenceTime)
@@ -965,6 +1113,18 @@ export function resolveLlmApiModel(modelKey?: string, models: readonly LlmApiMod
   return enabledModels.find(item => item.key === modelKey)
     ?? enabledModels.find(item => item.key === LLM_API_DEFAULT_MODEL_KEY)
     ?? enabledModels[0]
+    ?? DEFAULT_LLM_API_MODELS[0]
+}
+
+export function isSelectableLlmApiModelKey(modelKey: string) {
+  return LLM_API_SELECTABLE_MODEL_KEYS.includes(modelKey as typeof LLM_API_SELECTABLE_MODEL_KEYS[number])
+}
+
+export function resolveSelectableLlmApiModel(modelKey?: string, models: readonly LlmApiModelPricing[] = DEFAULT_LLM_API_MODELS) {
+  const selectableModels = normalizeLlmApiModelPricings(models).filter(item => item.enabled && isSelectableLlmApiModelKey(item.key))
+  return selectableModels.find(item => item.key === modelKey)
+    ?? selectableModels.find(item => item.key === LLM_API_DEFAULT_MODEL_KEY)
+    ?? selectableModels[0]
     ?? DEFAULT_LLM_API_MODELS[0]
 }
 
@@ -1085,6 +1245,12 @@ function defaultState(): WelfareState {
     users: [],
     oauth: defaultOauth(),
     applicationPolicy: defaultApplicationPolicy(),
+    siteBanner: {
+      enabled: false,
+      title: '',
+      body: '',
+      tone: 'info',
+    },
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
@@ -1092,6 +1258,9 @@ function defaultState(): WelfareState {
     dailyCheckIns: [],
     invitationBindings: [],
     crowdReviews: [],
+    squarePosts: [],
+    squareBoosts: [],
+    squareReports: [],
     transactions: [],
     createdAt: now(),
   }
@@ -1117,12 +1286,25 @@ export function normalizeApplicationPolicy(input?: Partial<ApplicationPolicyConf
     powDifficulty: Math.max(1, Math.min(6, Math.trunc(Number(input?.powDifficulty ?? fallback.powDifficulty)))),
     turnstileEnabled: !!(input?.turnstileEnabled ?? fallback.turnstileEnabled),
     turnstileSiteKey: input?.turnstileSiteKey?.trim() ?? fallback.turnstileSiteKey,
+    turnstileSecretKey: input?.turnstileSecretKey?.trim() ?? fallback.turnstileSecretKey,
     categories: {
       code: normalizeApplicationKindPolicy(input?.categories?.code, fallback.categories.code),
       image: normalizeApplicationKindPolicy(input?.categories?.image, fallback.categories.image),
       pro: normalizeApplicationKindPolicy(input?.categories?.pro, fallback.categories.pro),
       resource: normalizeApplicationKindPolicy(input?.categories?.resource, fallback.categories.resource),
     },
+  }
+}
+
+export function normalizeSiteBanner(input?: Partial<SiteBannerConfig>): SiteBannerConfig {
+  const tone = ['info', 'success', 'warning'].includes(input?.tone ?? '') ? input!.tone! : 'info'
+  return {
+    enabled: !!input?.enabled,
+    title: input?.title?.trim() ?? '',
+    body: input?.body?.trim() ?? '',
+    tone,
+    updatedAt: input?.updatedAt,
+    updatedBy: input?.updatedBy,
   }
 }
 
@@ -1136,6 +1318,7 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       ...input.oauth,
     },
     applicationPolicy: normalizeApplicationPolicy(input.applicationPolicy),
+    siteBanner: normalizeSiteBanner(input.siteBanner),
     users: input.users ?? [],
     applications: input.applications ?? [],
     studentVerifications: input.studentVerifications ?? [],
@@ -1144,11 +1327,18 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     dailyCheckIns: input.dailyCheckIns ?? [],
     invitationBindings: input.invitationBindings ?? [],
     crowdReviews: input.crowdReviews ?? [],
+    squarePosts: input.squarePosts ?? [],
+    squareBoosts: input.squareBoosts ?? [],
+    squareReports: input.squareReports ?? [],
     transactions: input.transactions ?? [],
   }
 
   normalized.users = normalized.users.map(user => ({
     ...user,
+    accountStatus: user.accountStatus === 'suspended' ? 'suspended' : 'active',
+    suspendedReason: user.accountStatus === 'suspended' ? user.suspendedReason : undefined,
+    suspendedAt: user.accountStatus === 'suspended' ? user.suspendedAt : undefined,
+    suspendedBy: user.accountStatus === 'suspended' ? user.suspendedBy : undefined,
     profile: {
       ...user.profile,
       inviteCode: user.profile.inviteCode || createUserInviteCode(user.id),
@@ -1265,6 +1455,34 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
   normalized.invitationBindings = normalized.invitationBindings
     .filter(item => item && typeof item === 'object')
 
+  normalized.squarePosts = normalized.squarePosts
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      ...item,
+      type: item.type === 'review' ? 'review' : 'application_template',
+      content: sanitizeRichText(item.content || ''),
+      penaltyCount: Math.max(0, Math.trunc(Number(item.penaltyCount || 0))),
+      updatedAt: item.updatedAt || item.createdAt || now(),
+    }))
+
+  normalized.squareBoosts = normalized.squareBoosts
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      ...item,
+      mode: item.mode === 'post_approval_vote' ? 'post_approval_vote' : 'boost',
+      pointsGranted: Math.max(0, Math.trunc(Number(item.pointsGranted || 0))),
+      penaltyApplied: !!item.penaltyApplied,
+    }))
+
+  normalized.squareReports = normalized.squareReports
+    .filter(item => item && typeof item === 'object')
+
+  for (const post of normalized.squarePosts) {
+    const penalizedBoosts = normalized.squareBoosts.filter(item => item.postId === post.id && item.penaltyApplied)
+    post.penaltyCount = Math.max(post.penaltyCount || 0, penalizedBoosts.length)
+    post.lastPenaltyAt = post.lastPenaltyAt || penalizedBoosts.map(item => item.reportedAt).filter(Boolean).sort().at(-1)
+  }
+
   return applyWelfareRetentionPolicy(normalized).state
 }
 
@@ -1273,12 +1491,19 @@ function assertCurrentUser(user?: User): asserts user is User {
     throw new Error('请先通过 GitHub App 授权登录')
 }
 
+function assertUserActive(user?: User): asserts user is User {
+  assertCurrentUser(user)
+  if (user.accountStatus === 'suspended')
+    throw new Error(user.suspendedReason ? `账号已被封禁：${user.suspendedReason}` : '账号已被封禁')
+}
+
 function assertAdmin(user?: User): asserts user is User {
   if (!user || user.role !== 'admin')
     throw new Error('需要管理员权限')
 }
 
 function assertCrowdReviewer(user?: User): asserts user is User {
+  assertUserActive(user)
   if (!user || !['admin', 'reviewer'].includes(user.role))
     throw new Error('需要众包审核权限')
 }
@@ -1533,15 +1758,16 @@ function resourceDurationExtensionCost(duration?: string) {
 function estimatedResourceItemCostParts(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
   const durationCost = resourceDurationExtensionCost(item.duration || readString(item.payload, 'duration'))
   if (item.resourceType === 'llm_api_quota') {
-    const model = resolveLlmApiModel(readString(item.payload, 'model'))
-    const budgetCost = calculateLlmApiCostPoints(Number(item.payload.budgetLimit || model.defaultBudgetUsd), model)
+    const model = resolveSelectableLlmApiModel(readString(item.payload, 'model'))
+    const budgetUsd = Number(item.payload.budgetLimit || model.defaultBudgetUsd)
+    const budgetCost = calculateLlmApiCostPoints(budgetUsd, model)
     const rateCost = calculateLlmApiRateLimitChangeCost(Number(item.payload.rpmLimit || model.rpmLimit), model.rpmLimit, Number(item.payload.tpmLimit || model.tpmLimit), model.tpmLimit)
     return {
       base: budgetCost,
       rate: rateCost,
       duration: durationCost,
       original: budgetCost + rateCost + durationCost,
-      discounted: calculateActivityPrice(budgetCost, referenceTime) + rateCost + durationCost,
+      discounted: calculateLlmApiBudgetActivityPrice(budgetCost, budgetUsd, model, referenceTime) + rateCost + durationCost,
     }
   }
   const base = item.resourceType === 'database'
@@ -1585,8 +1811,8 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
 
   if (item.resourceType === 'llm_api_quota') {
     const modelKey = readString(item.payload, 'model')
-    if (!LLM_API_ALLOWED_MODEL_KEYS.includes(modelKey as typeof LLM_API_ALLOWED_MODEL_KEYS[number]))
-      throw new Error('大模型只能选择 Codex、ClaudeCode 或 Mimo')
+    if (!isSelectableLlmApiModelKey(modelKey))
+      throw new Error('大模型只能选择 Codex 或 GPT PRO')
     const budget = Number(item.payload.budgetLimit)
     if (!Number.isFinite(budget) || budget < 10 || budget > 1000)
       throw new Error('大模型 Token 额度必须在 $10 到 $1000 之间')
@@ -1818,6 +2044,17 @@ export function useWelfareStore() {
   const totalReservedApplications = computed(() => state.applications
     .filter(item => item.status === 'reserved')
     .length)
+  const squarePosts = computed(() => state.squarePosts
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+  const currentUserSquareBoosts = computed(() => {
+    if (!currentUser.value)
+      return []
+
+    return state.squareBoosts
+      .filter(item => item.userId === currentUser.value?.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  })
 
   function userName(userId: string) {
     return state.users.find(user => user.id === userId)?.profile.displayName ?? '未知用户'
@@ -1988,13 +2225,13 @@ export function useWelfareStore() {
       .at(-1)
   }
 
-  function addTransaction(userId: string, delta: number, type: CreditTransactionType, reason: string, refId?: string) {
+  function addTransaction(userId: string, delta: number, type: CreditTransactionType, reason: string, refId?: string, allowDebt = false) {
     const user = state.users.find(item => item.id === userId)
     if (!user)
       throw new Error('用户不存在')
 
     const next = user.points + delta
-    if (next < 0)
+    if (next < 0 && !allowDebt)
       throw new Error('积分不足')
 
     user.points = next
@@ -2044,14 +2281,26 @@ export function useWelfareStore() {
     if (!coupon)
       return { payableCost: cost, discountAmount: 0 }
 
-    const payableCost = Math.max(1, Math.ceil(cost * coupon.discountRate))
+    const payableCost = applyRateDiscount(cost, coupon.discountRate)
     return {
       payableCost,
       discountAmount: Math.max(0, cost - payableCost),
     }
   }
 
-  function resourceCheckoutSnapshot(userId: string, items: SubmitResourceApplicationPayload['resourceItems'], couponId: string | undefined, createdAt: string) {
+  function squareDiscountSnapshot(cost: number, shareToSquare: boolean) {
+    if (!shareToSquare)
+      return { cost, discountRate: 1, discountAmount: 0 }
+
+    const payableCost = applyRateDiscount(cost, SQUARE_SHARE_DISCOUNT_RATE)
+    return {
+      cost: payableCost,
+      discountRate: SQUARE_SHARE_DISCOUNT_RATE,
+      discountAmount: Math.max(0, cost - payableCost),
+    }
+  }
+
+  function resourceCheckoutSnapshot(userId: string, items: SubmitResourceApplicationPayload['resourceItems'], couponId: string | undefined, createdAt: string, shareToSquare = false) {
     const baseCost = items.reduce((sum, item) => sum + estimatedResourceItemCost(item), 0)
     const activityCost = items.reduce((sum, item) => sum + discountedResourceItemCost(item, createdAt), 0)
     const coupon = couponId
@@ -2061,20 +2310,243 @@ export function useWelfareStore() {
       throw new Error('优惠券不可用或已过期')
 
     const couponResult = applyCouponDiscount(activityCost, coupon)
+    const squareResult = squareDiscountSnapshot(couponResult.payableCost, shareToSquare)
     return {
       baseCost,
       activityCost,
-      cost: couponResult.payableCost,
+      cost: squareResult.cost,
       activityDiscountRate: baseCost > 0 ? activityCost / baseCost : 1,
       activityDiscountAmount: Math.max(0, baseCost - activityCost),
       coupon,
       couponDiscountAmount: couponResult.discountAmount,
+      squareDiscountRate: squareResult.discountRate,
+      squareDiscountAmount: squareResult.discountAmount,
     }
+  }
+
+  function buildResourceSquarePost(application: WelfareApplication, payload: SubmitResourceApplicationPayload, actualResourceTypes: ResourceType[], squarePostId: string, createdAt: string): SquarePost {
+    return {
+      id: squarePostId,
+      userId: application.userId,
+      type: 'application_template',
+      title: application.title,
+      content: sanitizeRichText(payload.squarePostContent || payload.reason),
+      applicationId: application.id,
+      requestType: 'resource',
+      template: {
+        title: application.title,
+        departmentId: payload.departmentId,
+        projectId: payload.projectId,
+        reason: payload.reason,
+        businessBackground: payload.businessBackground,
+        urgency: payload.urgency,
+        expectedEffectiveAt: payload.expectedEffectiveAt,
+        costCenter: payload.costCenter,
+        ownerId: payload.ownerId,
+        duration: payload.duration,
+        selectedResourceTypes: actualResourceTypes,
+        resourceItems: payload.resourceItems.map(item => ({
+          resourceType: item.resourceType,
+          resourceSubtype: item.resourceSubtype,
+          payload: item.payload,
+          requestedQuota: item.requestedQuota,
+          requestedPermission: item.requestedPermission,
+          duration: item.duration,
+        })),
+        acceptedTermIds: payload.acceptedTermIds,
+      },
+      createdAt,
+      updatedAt: createdAt,
+    }
+  }
+
+  function squarePostBoosts(postId: string) {
+    return state.squareBoosts
+      .filter(item => item.postId === postId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  }
+
+  function squarePostValidBoosts(postId: string) {
+    return squarePostBoosts(postId).filter(item => (item.mode ?? 'boost') === 'boost' && !item.reportedAt)
+  }
+
+  function squarePostDiscountRate(postId: string) {
+    return calculateSquareBoostDiscountRate(squarePostValidBoosts(postId).length)
+  }
+
+  function squarePostApplication(postId: string) {
+    const post = state.squarePosts.find(item => item.id === postId)
+    return post?.applicationId
+      ? state.applications.find(item => item.id === post.applicationId)
+      : undefined
+  }
+
+  function isSquarePostAfterApproval(postId: string) {
+    const application = squarePostApplication(postId)
+    return !!application && ['answered', 'completed', 'closed', 'approved', 'partial_approved'].includes(application.status)
+  }
+
+  function squareBoostCooldownUntil(userId: string, referenceTime = now()) {
+    const reference = new Date(referenceTime).getTime()
+    return state.squareBoosts
+      .filter(item => item.userId === userId && item.cooldownUntil)
+      .map(item => item.cooldownUntil!)
+      .filter((value) => {
+        const time = new Date(value).getTime()
+        return Number.isFinite(time) && Number.isFinite(reference) && time > reference
+      })
+      .sort()
+      .at(-1)
+  }
+
+  function createSquarePost(payload: CreateSquarePostPayload) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    const title = payload.title.trim()
+    const content = sanitizeRichText(payload.content)
+    if (!title)
+      throw new Error('请填写广场标题')
+    if (isRichTextEmpty(content))
+      throw new Error('请填写广场内容')
+
+    const application = payload.applicationId
+      ? state.applications.find(item => item.id === payload.applicationId && item.userId === currentUser.value?.id)
+      : undefined
+    if (payload.applicationId && !application)
+      throw new Error('只能分享自己的申请记录')
+
+    const createdAt = now()
+    const post: SquarePost = {
+      id: createId('square'),
+      userId: currentUser.value.id,
+      type: payload.type,
+      title,
+      content,
+      applicationId: application?.id,
+      requestType: application?.type,
+      template: payload.shareTemplate && application
+        ? {
+            type: application.type,
+            title: application.title,
+            description: application.description,
+            githubRepo: application.githubRepo,
+            extendStorage: application.storageExtended,
+            expediteProcessing: application.expedited,
+            selectedResourceTypes: application.selectedResourceTypes,
+            resourceItems: application.resourceItems?.map(item => ({
+              resourceType: item.resourceType,
+              resourceSubtype: item.resourceSubtype,
+              payload: item.payload,
+              requestedQuota: item.requestedQuota,
+              requestedPermission: item.requestedPermission,
+              duration: item.duration,
+            })),
+          }
+        : undefined,
+      createdAt,
+      updatedAt: createdAt,
+    }
+    state.squarePosts.unshift(post)
+    return post
+  }
+
+  function boostSquarePost(postId: string, declaration: string) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    const post = state.squarePosts.find(item => item.id === postId)
+    if (!post)
+      throw new Error('广场内容不存在')
+    if (post.userId === currentUser.value.id)
+      throw new Error('不能为自己的广场内容拼一刀')
+    if (state.squareBoosts.some(item => item.postId === postId && item.userId === currentUser.value?.id))
+      throw new Error('你已经为该内容助力过')
+    const afterApproval = isSquarePostAfterApproval(postId)
+    if (!afterApproval) {
+      const cooldownUntil = squareBoostCooldownUntil(currentUser.value.id)
+      if (cooldownUntil)
+        throw new Error(`举报处罚冷却中，请在 ${formatDate(cooldownUntil)} 后再参与拼一刀`)
+    }
+
+    const createdAt = now()
+    if (!afterApproval) {
+      const dailyBoostCount = state.squareBoosts.filter(item =>
+        item.userId === currentUser.value?.id
+        && (item.mode ?? 'boost') === 'boost'
+        && localDateKey(item.createdAt) === localDateKey(createdAt),
+      ).length
+      if (dailyBoostCount >= SQUARE_DAILY_BOOST_LIMIT)
+        throw new Error(`今日助力机会已用完，每人每天最多 ${SQUARE_DAILY_BOOST_LIMIT} 次`)
+    }
+
+    const normalizedDeclaration = sanitizeRichText(declaration)
+    if (richTextToPlainText(normalizedDeclaration).trim().length < 20)
+      throw new Error(afterApproval ? '投票宣言至少 20 字，请说明为什么继续支持这个领域' : '助力宣言至少 20 字，请说明为什么支持这个领域')
+
+    const boost: SquareBoost = {
+      id: createId('boost'),
+      postId,
+      userId: currentUser.value.id,
+      mode: afterApproval ? 'post_approval_vote' : 'boost',
+      declaration: normalizedDeclaration,
+      pointsGranted: afterApproval ? 0 : SQUARE_BOOST_REWARD_POINTS,
+      createdAt,
+    }
+    state.squareBoosts.unshift(boost)
+    if (!afterApproval)
+      addTransaction(currentUser.value.id, SQUARE_BOOST_REWARD_POINTS, 'grant', '广场拼一刀助力奖励', boost.id)
+    return boost
+  }
+
+  function reportSquareBoost(boostId: string, reason: string) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    const boost = state.squareBoosts.find(item => item.id === boostId)
+    if (!boost)
+      throw new Error('助力记录不存在')
+    if ((boost.mode ?? 'boost') === 'post_approval_vote')
+      throw new Error('结束后助力投票不产生奖惩，不支持举报扣分')
+    if (boost.userId === currentUser.value.id)
+      throw new Error('不能举报自己的助力宣言')
+    if (state.squareReports.some(item => item.boostId === boostId && item.reporterId === currentUser.value?.id))
+      throw new Error('你已经举报过该助力宣言')
+    const normalizedReason = reason.trim()
+    if (normalizedReason.length < 6)
+      throw new Error('请说明举报理由')
+
+    const createdAt = now()
+    const cooldownUntil = addDays(createdAt, SQUARE_BOOST_REPORT_COOLDOWN_DAYS)
+    const report: SquareReport = {
+      id: createId('report'),
+      postId: boost.postId,
+      boostId,
+      reporterId: currentUser.value.id,
+      reason: normalizedReason,
+      createdAt,
+    }
+    boost.reportedAt = createdAt
+    boost.reportReason = normalizedReason
+    boost.reportedBy = currentUser.value.id
+    boost.cooldownUntil = cooldownUntil
+    if (!boost.penaltyApplied) {
+      addTransaction(boost.userId, -SQUARE_BOOST_REPORT_PENALTY_POINTS, 'spend', '广场助力被举报扣除积分', boost.id, true)
+      boost.penaltyApplied = true
+      const post = state.squarePosts.find(item => item.id === boost.postId)
+      if (post) {
+        post.penaltyCount = (post.penaltyCount || 0) + 1
+        post.lastPenaltyAt = createdAt
+        post.updatedAt = createdAt
+      }
+    }
+    state.squareReports.unshift(report)
+    return report
   }
 
   function checkInToday() {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const createdAt = now()
     const dateKey = localDateKey(new Date(createdAt))
@@ -2125,7 +2597,7 @@ export function useWelfareStore() {
 
   function bindInvitationCode(code: string) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const normalizedCode = normalizeInviteCode(code)
     if (!normalizedCode)
@@ -2154,7 +2626,7 @@ export function useWelfareStore() {
 
   function vouchInvitation(bindingId: string) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const binding = state.invitationBindings.find(item => item.id === bindingId)
     if (!binding)
@@ -2194,6 +2666,7 @@ export function useWelfareStore() {
         studentVerified: false,
       },
       points: 0,
+      accountStatus: 'active',
       createdAt: now(),
       lastLoginAt: now(),
     }
@@ -2221,7 +2694,7 @@ export function useWelfareStore() {
 
   function updateCurrentProfile(profile: Partial<UserProfile>) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     currentUser.value.profile = {
       ...currentUser.value.profile,
@@ -2231,7 +2704,7 @@ export function useWelfareStore() {
 
   function submitApplication(payload: SubmitApplicationPayload) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const title = payload.title.trim()
     const description = sanitizeRichText(payload.description)
@@ -2260,7 +2733,7 @@ export function useWelfareStore() {
       turnstileVerified: payload.turnstileVerified,
     })
     const pricing = buildPricingSnapshot(payload.type, createdAt)
-    const llmApiModel = payload.type === 'code' ? resolveLlmApiModel(payload.llmApiModelKey ?? (payload.codexBudgetUsd ? 'codex' : undefined)) : undefined
+    const llmApiModel = payload.type === 'code' ? resolveSelectableLlmApiModel(payload.llmApiModelKey ?? (payload.codexBudgetUsd ? 'codex' : undefined)) : undefined
     const llmApiBudgetUsd = payload.type === 'code' && llmApiModel ? normalizeLlmApiBudgetUsd(payload.llmApiBudgetUsd ?? payload.codexBudgetUsd, llmApiModel) : undefined
     const llmApiCustomRpmLimit = llmApiModel && payload.llmApiCustomRpmLimit !== undefined ? Math.max(1, Math.trunc(Number(payload.llmApiCustomRpmLimit))) : undefined
     const llmApiCustomTpmLimit = llmApiModel && payload.llmApiCustomTpmLimit !== undefined ? Math.max(1, Math.trunc(Number(payload.llmApiCustomTpmLimit))) : undefined
@@ -2272,12 +2745,15 @@ export function useWelfareStore() {
     const expedited = payload.type === 'pro' && !!payload.expediteProcessing
     const expediteCost = expedited ? PRO_EXPEDITE_COST : 0
     const rejectionReviewFeeWaived = payload.type !== 'code' && !!payload.waiveRejectionReviewFee
-    const prepaidCost = cost + storageExtensionCost + expediteCost
+    const squareResult = squareDiscountSnapshot(cost, !!payload.shareToSquare)
+    const prepaidCost = squareResult.cost + storageExtensionCost + expediteCost
     if (currentUser.value.points < prepaidCost)
       throw new Error(`积分不足，本次申请需要预扣 ${prepaidCost} 积分`)
 
+    const applicationId = createId('app')
+    const squarePostId = payload.shareToSquare ? createId('square') : undefined
     const application: WelfareApplication = {
-      id: createId('app'),
+      id: applicationId,
       userId: currentUser.value.id,
       type: payload.type,
       title,
@@ -2287,8 +2763,12 @@ export function useWelfareStore() {
       attachments: toAttachmentMeta(payload.attachments),
       status: 'pending_review',
       baseCost: llmApiBudgetUsd ? cost : pricing.baseCost,
-      cost,
+      cost: squareResult.cost,
       costCharged: true,
+      sharedToSquare: !!payload.shareToSquare,
+      squarePostId,
+      squareDiscountRate: squareResult.discountRate,
+      squareDiscountAmount: squareResult.discountAmount,
       pricingDiscountRate: llmApiBudgetUsd ? 1 : pricing.discountRate,
       pricingPromotionName: llmApiBudgetUsd ? undefined : pricing.promotionName,
       pricingPromotionEndsAt: llmApiBudgetUsd ? undefined : pricing.promotionEndsAt,
@@ -2299,7 +2779,7 @@ export function useWelfareStore() {
         risk: 'medium',
       },
       aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
-      rejectionReviewFee: calculateRejectionReviewFee(cost),
+      rejectionReviewFee: calculateRejectionReviewFee(squareResult.cost),
       rejectionReviewFeeWaived,
       rejectionFraudulent: false,
       llmApiModelKey: llmApiModel?.key,
@@ -2339,11 +2819,37 @@ export function useWelfareStore() {
       createdAt,
     }
 
-    addTransaction(currentUser.value.id, -cost, 'spend', `${payload.type.toUpperCase()} 申请预扣`, application.id)
+    addTransaction(currentUser.value.id, -application.cost, 'spend', `${payload.type.toUpperCase()} 申请预扣`, application.id)
     if (storageExtended)
       addTransaction(currentUser.value.id, -storageExtensionCost, 'spend', '延长申请存储服务 7 天预扣', application.id)
     if (expediteCost)
       addTransaction(currentUser.value.id, -expediteCost, 'spend', 'Pro 处理加速预扣', application.id)
+
+    if (payload.shareToSquare && squarePostId) {
+      state.squarePosts.unshift({
+        id: squarePostId,
+        userId: currentUser.value.id,
+        type: 'application_template',
+        title,
+        content: sanitizeRichText(payload.squarePostContent || description),
+        applicationId: application.id,
+        requestType: payload.type,
+        template: {
+          type: payload.type,
+          title,
+          description,
+          githubRepo: payload.githubRepo,
+          extendStorage: payload.extendStorage,
+          expediteProcessing: payload.expediteProcessing,
+          llmApiModelKey: payload.llmApiModelKey,
+          llmApiBudgetUsd: payload.llmApiBudgetUsd,
+          llmApiCustomRpmLimit: payload.llmApiCustomRpmLimit,
+          llmApiCustomTpmLimit: payload.llmApiCustomTpmLimit,
+        },
+        createdAt,
+        updatedAt: createdAt,
+      })
+    }
 
     state.applications.unshift(application)
     return application
@@ -2351,7 +2857,7 @@ export function useWelfareStore() {
 
   function submitResourceApplication(payload: SubmitResourceApplicationPayload) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const title = payload.title.trim()
     const resourceTypes = Array.from(new Set(payload.selectedResourceTypes))
@@ -2390,13 +2896,14 @@ export function useWelfareStore() {
     const actualResourceTypes = Array.from(new Set(resourceItems.map(item => item.resourceType)))
     const checkout = isDraft
       ? undefined
-      : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, createdAt)
+      : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, createdAt, !!payload.shareToSquare)
     if (checkout && currentUser.value.points < checkout.cost)
       throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
     const termsAcceptances = isDraft
       ? []
       : buildResourceTermsAcceptances(actualResourceTypes, payload.acceptedTermIds, currentUser.value.id, createdAt)
 
+    const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
     const application: WelfareApplication = {
       id: applicationId,
       userId: currentUser.value.id,
@@ -2413,6 +2920,10 @@ export function useWelfareStore() {
       couponName: checkout?.coupon?.name,
       couponDiscountRate: checkout?.coupon?.discountRate,
       couponDiscountAmount: checkout?.couponDiscountAmount,
+      sharedToSquare: !isDraft && !!payload.shareToSquare,
+      squarePostId,
+      squareDiscountRate: checkout?.squareDiscountRate,
+      squareDiscountAmount: checkout?.squareDiscountAmount,
       pricingDiscountRate: checkout?.activityDiscountRate ?? 1,
       pricingPromotionName: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_NAME : undefined,
       pricingPromotionEndsAt: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined,
@@ -2449,6 +2960,9 @@ export function useWelfareStore() {
         checkout.coupon.usedAt = createdAt
         checkout.coupon.usedApplicationId = application.id
       }
+      if (squarePostId) {
+        state.squarePosts.unshift(buildResourceSquarePost(application, payload, actualResourceTypes, squarePostId, createdAt))
+      }
     }
 
     state.applications.unshift(application)
@@ -2457,7 +2971,7 @@ export function useWelfareStore() {
 
   function updateResourceDraft(applicationId: string, payload: SubmitResourceApplicationPayload) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const application = state.applications.find(item => item.id === applicationId)
     if (!application || application.type !== 'resource')
@@ -2483,9 +2997,10 @@ export function useWelfareStore() {
     const actualResourceTypes = Array.from(new Set(resourceItems.map(item => item.resourceType)))
     const checkout = isDraft
       ? undefined
-      : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, updatedAt)
+      : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, updatedAt, !!payload.shareToSquare)
     if (checkout && currentUser.value.points < checkout.cost)
       throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
+    const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
     application.title = payload.title.trim()
     application.description = buildResourceDescription(payload)
     application.attachments = toAttachmentMeta(payload.attachments)
@@ -2510,6 +3025,10 @@ export function useWelfareStore() {
       application.couponName = checkout?.coupon?.name
       application.couponDiscountRate = checkout?.coupon?.discountRate
       application.couponDiscountAmount = checkout?.couponDiscountAmount
+      application.sharedToSquare = !!payload.shareToSquare
+      application.squarePostId = squarePostId
+      application.squareDiscountRate = checkout?.squareDiscountRate
+      application.squareDiscountAmount = checkout?.squareDiscountAmount
       application.pricingDiscountRate = checkout?.activityDiscountRate ?? 1
       application.pricingPromotionName = checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_NAME : undefined
       application.pricingPromotionEndsAt = checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined
@@ -2520,6 +3039,8 @@ export function useWelfareStore() {
         checkout.coupon.usedAt = updatedAt
         checkout.coupon.usedApplicationId = application.id
       }
+      if (squarePostId)
+        state.squarePosts.unshift(buildResourceSquarePost(application, payload, actualResourceTypes, squarePostId, updatedAt))
     }
     return application
   }
@@ -2732,7 +3253,7 @@ export function useWelfareStore() {
 
   function submitApplicationSupplement(applicationId: string, content: string, attachments: FileLike[] = []) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const application = state.applications.find(item => item.id === applicationId)
     if (!application)
@@ -2764,7 +3285,7 @@ export function useWelfareStore() {
 
   function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: FileLike[] = []) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const application = state.applications.find(item => item.id === applicationId)
     if (!application)
@@ -2791,7 +3312,7 @@ export function useWelfareStore() {
 
   function appendApplicationContext(payload: AppendApplicationContextPayload) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const source = state.applications.find(item => item.id === payload.applicationId)
     if (!source || source.userId !== currentUser.value.id || source.type !== 'pro')
@@ -2879,7 +3400,7 @@ export function useWelfareStore() {
 
   function createEducationEmailChallenge(email: string, realName = '') {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const normalizedEmail = normalizeEmail(email)
     assertEducationEmail(normalizedEmail)
@@ -2920,7 +3441,7 @@ export function useWelfareStore() {
 
   function submitStudentVerification(payload: SubmitStudentPayload) {
     assertPersistenceReady()
-    assertCurrentUser(currentUser.value)
+    assertUserActive(currentUser.value)
 
     const verificationType = normalizeVerificationType(payload.verificationType)
     const realName = payload.realName.trim()
@@ -3076,6 +3597,32 @@ export function useWelfareStore() {
     user.role = enabled ? 'reviewer' : 'user'
   }
 
+  function setUserSuspended(userId: string, suspended: boolean, reason = '') {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const user = state.users.find(item => item.id === userId)
+    if (!user)
+      throw new Error('用户不存在')
+    if (user.role === 'admin')
+      throw new Error('管理员账号不能封禁')
+    if (user.id === currentUser.value.id)
+      throw new Error('不能封禁当前管理员账号')
+
+    if (suspended) {
+      user.accountStatus = 'suspended'
+      user.suspendedReason = reason.trim() || '违反平台使用政策'
+      user.suspendedAt = now()
+      user.suspendedBy = currentUser.value.id
+      return
+    }
+
+    user.accountStatus = 'active'
+    user.suspendedReason = undefined
+    user.suspendedAt = undefined
+    user.suspendedBy = undefined
+  }
+
   function setUserStudentVerified(userId: string, verified: boolean) {
     assertPersistenceReady()
     assertAdmin(currentUser.value)
@@ -3115,6 +3662,18 @@ export function useWelfareStore() {
     addTransaction(userId, Math.trunc(amount), 'adjustment', reason.trim() || '管理员手动调整')
   }
 
+  function updateSiteBanner(payload: Partial<SiteBannerConfig>) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    state.siteBanner = normalizeSiteBanner({
+      ...state.siteBanner,
+      ...payload,
+      updatedAt: now(),
+      updatedBy: currentUser.value.id,
+    })
+  }
+
   return {
     state,
     isHydrated,
@@ -3128,6 +3687,8 @@ export function useWelfareStore() {
     currentUserDailyCheckIns,
     currentUserInvitationBinding,
     currentUserInviteeBindings,
+    squarePosts,
+    currentUserSquareBoosts,
     isAdmin,
     canCrowdReview,
     pendingApplications,
@@ -3143,6 +3704,11 @@ export function useWelfareStore() {
     userEmail,
     userLevelCard,
     availableCouponsForUser,
+    squarePostBoosts,
+    squarePostValidBoosts,
+    squarePostDiscountRate,
+    isSquarePostAfterApproval,
+    squareBoostCooldownUntil,
     checkInToday,
     invitationBindDeadline,
     canBindInvitation,
@@ -3171,12 +3737,17 @@ export function useWelfareStore() {
     submitStudentVerification,
     approveStudentVerification,
     rejectStudentVerification,
+    createSquarePost,
+    boostSquarePost,
+    reportSquareBoost,
     crowdReviewsFor,
     submitCrowdReview,
     setUserCrowdReviewer,
+    setUserSuspended,
     setUserStudentVerified,
     unbindUserGitHub,
     adjustUserPoints,
+    updateSiteBanner,
     ensureWelfareStateLoaded,
     reloadWelfareState,
     assertPersistenceReady,

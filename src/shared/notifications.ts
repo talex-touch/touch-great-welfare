@@ -1,5 +1,5 @@
 export type NotificationChannel = 'in_app' | 'email' | 'feishu' | 'browser_push'
-export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_approved' | 'student_rejected' | 'ai_image_succeeded' | 'ai_image_failed'
+export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_approved' | 'student_rejected' | 'ai_image_succeeded' | 'ai_image_failed' | 'admin_announcement'
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
 
 export interface NotificationItem {
@@ -44,6 +44,42 @@ export interface NotificationListResult {
   unreadCount: number
 }
 
+export interface AdminAnnouncementRecipient {
+  userId: string
+  displayName: string
+  email: string
+  readAt?: string
+  notificationId: string
+}
+
+export interface AdminAnnouncementSummary {
+  id: string
+  title: string
+  body: string
+  channels: NotificationChannel[]
+  forcePopup: boolean
+  forcePush: boolean
+  createdAt: string
+  createdBy: string
+  totalCount: number
+  readCount: number
+  unreadCount: number
+  recipients: AdminAnnouncementRecipient[]
+}
+
+export interface AdminAnnouncementListResult {
+  announcements: AdminAnnouncementSummary[]
+}
+
+export interface CreateAdminAnnouncementPayload {
+  title: string
+  body: string
+  channels: NotificationChannel[]
+  forcePopup: boolean
+  forcePush: boolean
+  targetUserIds?: string[]
+}
+
 export const EMAIL_NOTIFICATION_COST = 5
 
 export function notificationEventText(event: NotificationEvent) {
@@ -56,6 +92,7 @@ export function notificationEventText(event: NotificationEvent) {
     student_rejected: '学生认证退回',
     ai_image_succeeded: '图片生成完成',
     ai_image_failed: '图片生成失败',
+    admin_announcement: '管理员通告',
   }
   return map[event]
 }

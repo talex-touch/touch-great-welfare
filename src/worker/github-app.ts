@@ -575,6 +575,7 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
         studentVerified: false,
       },
       points: 0,
+      accountStatus: 'active',
       createdAt: now(),
       lastLoginAt: now(),
     }

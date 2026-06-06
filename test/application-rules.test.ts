@@ -15,6 +15,8 @@ describe('application billing rules', async () => {
     calculateActivityPrice,
     calculateApplicationPrepaidCost,
     calculateCodexCostPoints,
+    calculateLlmApiBudgetActivityPrice,
+    calculateLlmApiCostPoints,
     calculateRejectionReviewFee,
     CODEX_DEFAULT_BUDGET_USD,
     CODEX_EXTENDED_PROCESSING_HOURS,
@@ -36,6 +38,19 @@ describe('application billing rules', async () => {
   it('applies the 7-day 0.1 discount activity to application prices', () => {
     expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_START_AT)).toBe(120)
     expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_END_AT)).toBe(12000)
+  })
+
+  it('applies tiered activity discounts to LLM API resource budgets', () => {
+    const cost99 = calculateLlmApiCostPoints(99)
+    const cost100 = calculateLlmApiCostPoints(100)
+    const cost300 = calculateLlmApiCostPoints(300)
+    const cost500 = calculateLlmApiCostPoints(500)
+
+    expect(calculateLlmApiBudgetActivityPrice(cost99, 99, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost99 * 0.01))
+    expect(calculateLlmApiBudgetActivityPrice(cost100, 100, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost100 * 0.05))
+    expect(calculateLlmApiBudgetActivityPrice(cost300, 300, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost300 * 0.07))
+    expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_START_AT)).toBe(cost500)
+    expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_END_AT)).toBe(cost500)
   })
 
   it('includes storage and expedited processing in prepaid cost', () => {

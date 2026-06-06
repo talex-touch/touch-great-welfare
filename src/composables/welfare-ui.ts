@@ -3,12 +3,15 @@ import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-ap
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
-import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, VerificationType } from './welfare'
+import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, VerificationType } from './welfare'
+import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, saveAiConfig } from './ai'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
+  createAdminAnnouncement,
+  loadAdminAnnouncements,
   loadNotificationProviderConfig,
   loadNotifications,
   loadNotificationSettings,
@@ -39,6 +42,7 @@ import {
   LLM_API_DEFAULT_MODEL_KEY,
   LLM_API_EXTENDED_PROCESSING_HOURS,
   LLM_API_EXTENDED_REVIEW_THRESHOLD_USD,
+  LLM_API_SELECTABLE_MODEL_KEYS,
   LLM_API_STANDARD_PROCESSING_HOURS,
   llmApiRequiresExtendedReview,
   MAX_ACTIVE_USER_REQUESTS,
@@ -49,7 +53,7 @@ import {
   PRO_EXPEDITED_PROCESSING_HOURS,
   PRO_STANDARD_PROCESSING_HOURS,
   REQUEST_COST,
-  resolveLlmApiModel,
+  resolveSelectableLlmApiModel,
   RESOURCE_DEFAULT_DURATION,
   RESOURCE_TERMS,
   RESOURCE_TYPE_CONFIGS,
@@ -94,6 +98,9 @@ export const rechargeForm = reactive({
   loading: false,
   statusMessage: '',
 })
+
+export const RECHARGE_MIN_LDC = 1
+export const RECHARGE_MAX_LDC = 1000
 
 export const rechargeConfigForm = reactive({
   enabled: true,
@@ -235,6 +242,32 @@ export const notificationProviderConfigForm = reactive({
   message: '',
 })
 
+export const siteBannerConfigForm = reactive({
+  enabled: false,
+  title: '',
+  body: '',
+  tone: 'info' as 'info' | 'success' | 'warning',
+  loading: false,
+  message: '',
+})
+
+export const adminAnnouncementForm = reactive({
+  title: '',
+  body: '',
+  channels: {
+    in_app: true,
+    email: false,
+    feishu: false,
+    browser_push: false,
+  } as Record<NotificationChannel, boolean>,
+  forcePopup: false,
+  forcePush: false,
+  loading: false,
+  message: '',
+})
+
+export const adminAnnouncements = ref<Awaited<ReturnType<typeof loadAdminAnnouncements>>['announcements']>([])
+
 export const notificationList = ref<Awaited<ReturnType<typeof loadNotifications>>['notifications']>([])
 export const unreadNotificationCount = ref(0)
 export const notificationsLoading = ref(false)
@@ -248,6 +281,7 @@ export const applicationSecurityForm = reactive({
 })
 
 export const applicationPolicyConfigForm = reactive({
+  turnstileSecretKey: '',
   loading: false,
   message: '',
 })
@@ -280,7 +314,20 @@ export const resourceApplicationForm = reactive({
   selectedResourceTypes: ['database'] as ResourceType[],
   acceptedTermIds: [] as ResourceTermId[],
   selectedCouponId: '',
+  shareToSquare: false,
+  squarePostContent: '',
 })
+
+export const squarePostForm = reactive({
+  postType: 'review' as SquarePostType,
+  title: '',
+  content: '',
+  applicationId: '',
+  shareTemplate: true,
+})
+
+export const squareBoostDrafts = reactive<Record<string, string>>({})
+export const squareReportDrafts = reactive<Record<string, string>>({})
 
 export const resourceApplicationItems = ref<Array<{
   id: string
@@ -394,7 +441,7 @@ export const crowdReviewDrafts = reactive<Record<string, {
   note: string
 }>>({})
 export const pointDrafts = reactive<Record<string, number>>({})
-export const selectedSection = ref<'apply' | 'verification' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('apply')
+export const selectedSection = ref<'home' | 'apply' | 'square' | 'verification' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('home')
 export const ADMIN_TABS = {
   login: '登录配置',
   policy: '申请策略',
@@ -464,12 +511,17 @@ export const codexAccessLimits = {
 
 export function useWelfareUiState() {
   const repoOptions = computed(() => welfare.currentUser.value?.profile.githubRepos ?? [])
+  const activeSiteBanner = computed(() => {
+    const banner = welfare.state.siteBanner
+    return banner.enabled && (banner.title || banner.body) ? banner : undefined
+  })
   const totalApplicationBytes = computed(() => applicationFiles.value.reduce((sum, file) => sum + file.size, 0))
   const totalStudentBytes = computed(() => studentFiles.value.reduce((sum, file) => sum + file.size, 0))
   const activeRequestCount = computed(() => welfare.currentUser.value ? welfare.activeRequestCount(welfare.currentUser.value.id) : 0)
   const canCreateRequest = computed(() => activeRequestCount.value < MAX_ACTIVE_USER_REQUESTS)
   const enabledLlmApiModels = computed(() => aiConfigForm.llmApiModels.filter(item => item.enabled))
-  const selectedLlmApiModel = computed(() => resolveLlmApiModel(applicationForm.llmApiModelKey, aiConfigForm.llmApiModels))
+  const selectableLlmApiModels = computed(() => aiConfigForm.llmApiModels.filter(item => item.enabled && (LLM_API_SELECTABLE_MODEL_KEYS as readonly string[]).includes(item.key)))
+  const selectedLlmApiModel = computed(() => resolveSelectableLlmApiModel(applicationForm.llmApiModelKey, aiConfigForm.llmApiModels))
   const selectedLlmApiBudgetUsd = computed(() => normalizeLlmApiBudgetUsd(applicationForm.llmApiBudgetUsd, selectedLlmApiModel.value))
   const selectedCodexBudgetUsd = selectedLlmApiBudgetUsd
   const selectedLlmApiRateLimitChangeCost = computed(() => calculateLlmApiRateLimitChangeCost(applicationForm.llmApiCustomRpmLimit, selectedLlmApiModel.value.rpmLimit, applicationForm.llmApiCustomTpmLimit, selectedLlmApiModel.value.tpmLimit))
@@ -541,7 +593,25 @@ export function useWelfareUiState() {
     applicationForm.githubRepo = welfare.currentUser.value.profile.githubAuthorized ? profileForm.selectedRepo : ''
   }
 
+  function syncApplicationLlmApiModel(resetLimits = false) {
+    const model = selectedLlmApiModel.value
+    const modelChanged = applicationForm.llmApiModelKey !== model.key
+    if (modelChanged)
+      applicationForm.llmApiModelKey = model.key
+
+    if (modelChanged || resetLimits) {
+      applicationForm.llmApiBudgetUsd = model.defaultBudgetUsd
+      applicationForm.llmApiCustomRpmLimit = model.rpmLimit
+      applicationForm.llmApiCustomTpmLimit = model.tpmLimit
+      return
+    }
+
+    applicationForm.llmApiBudgetUsd = normalizeLlmApiBudgetUsd(applicationForm.llmApiBudgetUsd, model)
+  }
+
   watch(welfare.currentUser, syncProfileForm, { immediate: true })
+  watch(() => applicationForm.llmApiModelKey, () => syncApplicationLlmApiModel(true), { immediate: true })
+  watch(selectableLlmApiModels, () => syncApplicationLlmApiModel(true))
   watch(() => profileForm.githubUsername, () => {
     if (!repoOptions.value.includes(profileForm.selectedRepo))
       profileForm.selectedRepo = repoOptions.value[0] ?? ''
@@ -709,7 +779,7 @@ export function useWelfareUiState() {
   }
 
   function defaultLlmApiPayload() {
-    const model = resolveLlmApiModel(LLM_API_DEFAULT_MODEL_KEY, aiConfigForm.llmApiModels)
+    const model = resolveSelectableLlmApiModel(LLM_API_DEFAULT_MODEL_KEY, aiConfigForm.llmApiModels)
     return {
       model: model.key,
       modelName: model.name,
@@ -806,6 +876,8 @@ export function useWelfareUiState() {
     resourceApplicationForm.selectedResourceTypes = ['database']
     resourceApplicationForm.acceptedTermIds = []
     resourceApplicationForm.selectedCouponId = ''
+    resourceApplicationForm.shareToSquare = false
+    resourceApplicationForm.squarePostContent = ''
     resourceApplicationItems.value = []
     addResourceApplicationItem('database')
   }
@@ -831,7 +903,7 @@ export function useWelfareUiState() {
       departmentId: resourceApplicationForm.departmentId,
       projectId: resourceApplicationForm.projectId,
       reason: resourceApplicationForm.reason,
-      businessBackground: resourceApplicationForm.reason,
+      businessBackground: resourceApplicationForm.businessBackground,
       urgency: resourceApplicationForm.urgency,
       expectedEffectiveAt: resourceApplicationForm.expectedEffectiveAt,
       costCenter: resourceApplicationForm.costCenter,
@@ -843,6 +915,8 @@ export function useWelfareUiState() {
       couponId: saveAsDraft ? undefined : resourceApplicationForm.selectedCouponId || undefined,
       attachments: applicationFiles.value,
       saveAsDraft,
+      shareToSquare: !saveAsDraft && resourceApplicationForm.shareToSquare,
+      squarePostContent: resourceApplicationForm.squarePostContent,
       ...security,
     })
     await saveWelfareState(welfare.state)
@@ -957,7 +1031,13 @@ export function useWelfareUiState() {
     applicationPolicyConfigForm.message = ''
     try {
       welfare.state.applicationPolicy = normalizeApplicationPolicy(welfare.state.applicationPolicy)
-      await saveWelfareState(welfare.state)
+      const turnstileSecretKey = applicationPolicyConfigForm.turnstileSecretKey.trim()
+      if (turnstileSecretKey)
+        welfare.state.applicationPolicy.turnstileSecretKey = turnstileSecretKey
+
+      await saveWelfareState(welfare.state, welfare.currentUser.value.id)
+      await welfare.reloadWelfareState()
+      applicationPolicyConfigForm.turnstileSecretKey = ''
       applicationPolicyConfigForm.message = '申请策略配置已保存'
     }
     finally {
@@ -1544,6 +1624,80 @@ export function useWelfareUiState() {
     }
   }
 
+  function refreshSiteBannerConfig() {
+    siteBannerConfigForm.enabled = welfare.state.siteBanner.enabled
+    siteBannerConfigForm.title = welfare.state.siteBanner.title
+    siteBannerConfigForm.body = welfare.state.siteBanner.body
+    siteBannerConfigForm.tone = welfare.state.siteBanner.tone
+  }
+
+  async function persistSiteBannerConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    siteBannerConfigForm.loading = true
+    siteBannerConfigForm.message = ''
+    try {
+      welfare.updateSiteBanner({
+        enabled: siteBannerConfigForm.enabled,
+        title: siteBannerConfigForm.title,
+        body: siteBannerConfigForm.body,
+        tone: siteBannerConfigForm.tone,
+      })
+      await saveWelfareState(welfare.state, welfare.currentUser.value.id)
+      await welfare.reloadWelfareState()
+      refreshSiteBannerConfig()
+      siteBannerConfigForm.message = '顶部 Banner 已保存'
+    }
+    finally {
+      siteBannerConfigForm.loading = false
+    }
+  }
+
+  async function refreshAdminAnnouncements() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    adminAnnouncementForm.loading = true
+    try {
+      adminAnnouncements.value = (await loadAdminAnnouncements(welfare.currentUser.value.id)).announcements
+    }
+    finally {
+      adminAnnouncementForm.loading = false
+    }
+  }
+
+  async function sendAdminAnnouncement() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    const channels = Object.entries(adminAnnouncementForm.channels)
+      .filter(([, enabled]) => enabled)
+      .map(([channel]) => channel as NotificationChannel)
+
+    adminAnnouncementForm.loading = true
+    adminAnnouncementForm.message = ''
+    try {
+      adminAnnouncements.value = (await createAdminAnnouncement(welfare.currentUser.value.id, {
+        title: adminAnnouncementForm.title,
+        body: adminAnnouncementForm.body,
+        channels,
+        forcePopup: adminAnnouncementForm.forcePopup,
+        forcePush: adminAnnouncementForm.forcePush,
+      })).announcements
+      adminAnnouncementForm.title = ''
+      adminAnnouncementForm.body = ''
+      adminAnnouncementForm.message = '管理员通告已发送'
+      await refreshNotifications()
+    }
+    finally {
+      adminAnnouncementForm.loading = false
+    }
+  }
+
   async function submitImageGenerationApplication(applicationId?: string) {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
@@ -1733,6 +1887,8 @@ export function useWelfareUiState() {
     const amount = Number(rechargeForm.amount)
     if (!Number.isInteger(amount) || amount <= 0)
       throw new Error('当前积分充值仅支持正整数')
+    if (amount < RECHARGE_MIN_LDC || amount > RECHARGE_MAX_LDC)
+      throw new Error(`单次充值金额需在 ${RECHARGE_MIN_LDC}-${RECHARGE_MAX_LDC} LDC 之间`)
 
     rechargeForm.loading = true
     rechargeForm.statusMessage = '正在创建 LINUX DO Credit 充值订单...'
@@ -1776,6 +1932,41 @@ export function useWelfareUiState() {
     return result
   }
 
+  async function createSquarePost() {
+    const postType = squarePostForm.applicationId ? 'application_template' : squarePostForm.postType
+    const result = welfare.createSquarePost({
+      type: postType,
+      title: squarePostForm.title,
+      content: squarePostForm.content,
+      applicationId: squarePostForm.applicationId || undefined,
+      shareTemplate: postType === 'application_template',
+    })
+    squarePostForm.postType = 'review'
+    squarePostForm.title = ''
+    squarePostForm.content = ''
+    squarePostForm.applicationId = ''
+    squarePostForm.shareTemplate = true
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
+  async function boostSquarePost(postId: string) {
+    const result = welfare.boostSquarePost(postId, squareBoostDrafts[postId] || '')
+    delete squareBoostDrafts[postId]
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
+  async function reportSquareBoost(boostId: string) {
+    const result = welfare.reportSquareBoost(boostId, squareReportDrafts[boostId] || '')
+    delete squareReportDrafts[boostId]
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
   return {
     ...welfare,
     adminForm,
@@ -1795,6 +1986,10 @@ export function useWelfareUiState() {
     sub2ApiKeys,
     generatedSub2ApiKey,
     notificationProviderConfigForm,
+    siteBannerConfigForm,
+    activeSiteBanner,
+    adminAnnouncementForm,
+    adminAnnouncements,
     temporaryAiKey,
     temporaryAiKeyExpiresAt,
     temporaryAiKeyForm,
@@ -1809,6 +2004,9 @@ export function useWelfareUiState() {
     lastRechargeStatus,
     applicationForm,
     resourceApplicationForm,
+    squarePostForm,
+    squareBoostDrafts,
+    squareReportDrafts,
     resourceApplicationItems,
     resourceReviewDrafts,
     resourceProvisionDrafts,
@@ -1841,6 +2039,7 @@ export function useWelfareUiState() {
     codexBudgetOptions,
     codexAccessLimits,
     enabledLlmApiModels,
+    selectableLlmApiModels,
     selectedLlmApiModel,
     repoOptions,
     totalApplicationBytes,
@@ -1923,6 +2122,10 @@ export function useWelfareUiState() {
     revokeTemporaryAiKey,
     refreshNotificationProviderConfig,
     persistNotificationProviderConfig,
+    refreshSiteBannerConfig,
+    persistSiteBannerConfig,
+    refreshAdminAnnouncements,
+    sendAdminAnnouncement,
     generateTemporaryAiKey,
     submitImageGenerationApplication,
     submitApplicationWithAiReview,
@@ -1934,5 +2137,8 @@ export function useWelfareUiState() {
     readAllNotifications,
     startRecharge,
     refreshRechargeStatus,
+    createSquarePost,
+    boostSquarePost,
+    reportSquareBoost,
   }
 }

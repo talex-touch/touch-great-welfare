@@ -54,6 +54,7 @@ declare module 'vue-router/auto-routes' {
       | '/dashboard/notifications'
       | '/dashboard/open-source'
       | '/dashboard/profile'
+      | '/dashboard/square'
       | '/dashboard/student'
       | '/dashboard/student/create'
       | '/dashboard/verification'
@@ -119,6 +120,13 @@ declare module 'vue-router/auto-routes' {
     '/dashboard/profile': RouteRecordInfo<
       '/dashboard/profile',
       '/dashboard/profile',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/square': RouteRecordInfo<
+      '/dashboard/square',
+      '/dashboard/square',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -209,6 +217,7 @@ declare module 'vue-router/auto-routes' {
         | '/dashboard/notifications'
         | '/dashboard/open-source'
         | '/dashboard/profile'
+        | '/dashboard/square'
         | '/dashboard/student'
         | '/dashboard/student/create'
         | '/dashboard/verification'
@@ -269,6 +278,12 @@ declare module 'vue-router/auto-routes' {
     'src/pages/dashboard/profile.vue': {
       routes:
         | '/dashboard/profile'
+      views:
+        | never
+    }
+    'src/pages/dashboard/square.vue': {
+      routes:
+        | '/dashboard/square'
       views:
         | never
     }

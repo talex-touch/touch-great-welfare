@@ -57,6 +57,12 @@ export function assertWelfareState(input: Partial<WelfareState>): asserts input 
     input.invitationBindings = []
   if (!Array.isArray(input.crowdReviews))
     input.crowdReviews = []
+  if (!Array.isArray(input.squarePosts))
+    input.squarePosts = []
+  if (!Array.isArray(input.squareBoosts))
+    input.squareBoosts = []
+  if (!Array.isArray(input.squareReports))
+    input.squareReports = []
   if (!Array.isArray(input.transactions))
     throw new Error('积分流水状态未初始化')
 }

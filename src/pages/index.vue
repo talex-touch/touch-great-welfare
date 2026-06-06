@@ -1,12 +1,10 @@
 <script setup lang="ts">
-import HeroPanel from '~/components/welfare/HeroPanel.vue'
+import HomeOverviewPanel from '~/components/welfare/HomeOverviewPanel.vue'
 import PageShell from '~/components/welfare/PageShell.vue'
 </script>
 
 <template>
   <PageShell>
-    <section class="mx-auto max-w-3xl">
-      <HeroPanel />
-    </section>
+    <HomeOverviewPanel />
   </PageShell>
 </template>

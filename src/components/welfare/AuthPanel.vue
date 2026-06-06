@@ -187,7 +187,7 @@ onMounted(() => {
           {{ currentUser.points.toLocaleString('zh-CN') }}
         </div>
         <div class="text-xs mt-3 op70">
-          LLMApi 仅可选 Codex / ClaudeCode / Mimo；{{ pricingSummary.activityName }}：Image {{ pricingSummary.currentRequestCost.image }} / Pro {{ pricingSummary.currentRequestCost.pro }}；学生认证审核扣 {{ pricingSummary.studentReviewFee }}，成功返还。
+          LLMApi 仅可选 Codex / GPT PRO；{{ pricingSummary.activityName }}：Image {{ pricingSummary.currentRequestCost.image }} / Pro {{ pricingSummary.currentRequestCost.pro }}；学生认证审核扣 {{ pricingSummary.studentReviewFee }}，成功返还。
         </div>
       </div>
       <div class="gap-3 grid sm:grid-cols-2">

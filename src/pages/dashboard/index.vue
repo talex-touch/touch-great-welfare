@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 onMounted(() => {
-  router.replace('/dashboard/apply')
+  router.replace('/')
 })
 </script>
 

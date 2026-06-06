@@ -9,12 +9,18 @@ import VueMacros from 'unplugin-vue-macros/vite'
 import { defineConfig } from 'vitest/config'
 import { VueRouterAutoImports } from 'vue-router/unplugin'
 import VueRouter from 'vue-router/vite'
-import { handleDevGitHubAppRequest, handleDevWelfareStateRequest } from './src/worker/dev-api'
 
 export default defineConfig({
   resolve: {
     alias: {
       '~/': `${path.resolve(__dirname, 'src')}/`,
+    },
+  },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8787',
+      },
     },
   },
   plugins: [
@@ -61,17 +67,6 @@ export default defineConfig({
     // https://github.com/antfu/unocss
     // see uno.config.ts for config
     UnoCSS(),
-    {
-      name: 'worker-api-guard',
-      configureServer(server) {
-        server.middlewares.use('/api/welfare-state', (req, res) => {
-          void handleDevWelfareStateRequest(req, res)
-        })
-        server.middlewares.use('/api/github-app', (req, res) => {
-          void handleDevGitHubAppRequest(req, res)
-        })
-      },
-    },
   ],
 
   // https://github.com/vitest-dev/vitest

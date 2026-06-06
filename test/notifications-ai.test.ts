@@ -25,6 +25,7 @@ function applicationPolicy(): ApplicationPolicyConfig {
     powDifficulty: 3,
     turnstileEnabled: false,
     turnstileSiteKey: '',
+    turnstileSecretKey: '',
     categories: {
       code: { enabled: true, dailyLimit: 80, perUserDailyLimit: 3, openStart: '', openEnd: '', closedReason: '' },
       image: { enabled: true, dailyLimit: 40, perUserDailyLimit: 2, openStart: '', openEnd: '', closedReason: '' },
@@ -54,6 +55,9 @@ function state(points = 120): WelfareState {
     dailyCheckIns: [],
     invitationBindings: [],
     crowdReviews: [],
+    squarePosts: [],
+    squareBoosts: [],
+    squareReports: [],
     transactions: [],
     createdAt: '2026-06-01T00:00:00.000Z',
   }

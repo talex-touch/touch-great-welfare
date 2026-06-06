@@ -38,6 +38,9 @@ function sanitizeImageSrc(value: string) {
   if (/^https?:/i.test(trimmed))
     return trimmed
 
+  if (/^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(trimmed))
+    return trimmed
+
   return ''
 }
 

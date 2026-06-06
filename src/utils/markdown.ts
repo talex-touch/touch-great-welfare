@@ -15,6 +15,17 @@ function sanitizeUrl(value: string, allowMailto = true) {
   return pattern.test(trimmed) ? trimmed : ''
 }
 
+function sanitizeImageUrl(value: string) {
+  const trimmed = value.trim()
+  if (/^https?:/i.test(trimmed))
+    return trimmed
+
+  if (/^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(trimmed))
+    return trimmed
+
+  return ''
+}
+
 function isAttachmentUrl(value: string) {
   return /^(?:attachment|附件):/i.test(value.trim())
 }
@@ -40,7 +51,7 @@ function renderInline(value: string) {
       output += `<strong>${imageMarker ? '🖼️ 图片附件' : '📎 附件'}：</strong>${escapeHtml(label)}`
     }
     else if (imageMarker) {
-      const src = sanitizeUrl(url, false)
+      const src = sanitizeImageUrl(url)
       output += src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label)}">` : renderBasicInline(source)
     }
     else {

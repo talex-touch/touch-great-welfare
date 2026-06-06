@@ -53,6 +53,7 @@ const isStudentVerification = computed(() => selectedVerificationType.value === 
 const currentVerificationLabel = computed(() => verificationTypeLabel(selectedVerificationType.value))
 const currentOrganizationLabel = computed(() => verificationOrganizationLabel(selectedVerificationType.value))
 const currentCategoryOptions = computed(() => isStudentVerification.value ? [...studentCategoryOptions] : [...frontlineCategoryOptions])
+const selectedVerificationOption = computed(() => verificationTypeOptions.find(option => option.value === selectedVerificationType.value) ?? verificationTypeOptions[0])
 const INITIAL_SCHOOL_SUGGESTION_LIMIT = 48
 
 const filteredStudentSchoolSuggestions = computed(() => {
@@ -127,10 +128,6 @@ function selectStudentCategory(category: string) {
   isCategorySuggestionsOpen.value = false
 }
 
-function selectVerificationType(type: typeof verificationTypeOptions[number]['value']) {
-  studentForm.verificationType = type
-}
-
 function selectStudentGrade(grade: string) {
   studentForm.grade = grade
   isGradeSuggestionsOpen.value = false
@@ -186,12 +183,24 @@ function onOpenEducationEmailClient() {
   }, '已打开邮件客户端')
 }
 
+function resetEducationEmailProof() {
+  studentForm.educationEmail = ''
+  educationEmailVerificationForm.code = ''
+  educationEmailVerificationForm.challengeId = ''
+  educationEmailVerificationForm.subject = ''
+  educationEmailVerificationForm.body = ''
+  educationEmailVerificationForm.mailto = ''
+  educationEmailVerificationForm.sentTo = ''
+  educationEmailVerificationForm.expiresAt = ''
+  educationEmailVerificationForm.verified = false
+  educationEmailVerificationForm.message = ''
+}
+
 onMounted(() => {
   restoreLocalDraft(studentDraftKey, studentForm)
-  if (route.query.type === 'frontline')
-    studentForm.verificationType = 'frontline'
-  if (route.query.type === 'student')
-    studentForm.verificationType = 'student'
+  studentForm.verificationType = route.query.type === 'frontline' ? 'frontline' : 'student'
+  if (studentForm.verificationType === 'frontline')
+    resetEducationEmailProof()
   persistLocalDraft(studentDraftKey, studentForm)
 })
 </script>
@@ -199,18 +208,18 @@ onMounted(() => {
 <template>
   <section class="space-y-6">
     <TxCard class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
-      <div class="flex flex-wrap gap-4 items-start justify-between">
-        <div>
-          <h2 class="text-3xl fw-900 tracking-tight">
+      <div class="resource-create-header">
+        <button class="resource-back-button" type="button" title="返回列表" @click="cancelCreate">
+          <span class="i-carbon-chevron-left" />
+        </button>
+        <div class="min-w-0">
+          <h2 class="resource-create-title">
             提交认证申请
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
             先选择认证子类并确认材料处理边界，再填写认证信息。草稿会保存在本地浏览器。
           </p>
         </div>
-        <TxButton variant="ghost" @click="cancelCreate">
-          返回列表
-        </TxButton>
       </div>
 
       <TxSteps :active="activeStep" class="mt-6" size="small">
@@ -259,31 +268,33 @@ onMounted(() => {
 
           <DataNotice mode="compact" title="填写前提示" timing="before" />
 
-          <div class="gap-3 grid md:grid-cols-2">
-            <button
-              v-for="option in verificationTypeOptions"
-              :key="option.value"
-              type="button"
-              class="p-4 text-left border rounded-3xl transition"
-              :class="selectedVerificationType === option.value ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950' : 'border-black/10 bg-white hover:bg-slate-50 dark:border-white/10 dark:bg-[#151820] dark:hover:bg-white/8'"
-              @click="selectVerificationType(option.value)"
-            >
-              <div class="fw-900">
-                {{ option.label }}
+          <div class="verification-type-lock">
+            <div class="verification-type-lock__main">
+              <span class="verification-type-lock__icon i-carbon-locked" />
+              <div>
+                <div class="verification-type-lock__eyebrow">
+                  认证子类已锁定
+                </div>
+                <div class="verification-type-lock__title">
+                  {{ selectedVerificationOption.label }}
+                </div>
+                <p class="verification-type-lock__description">
+                  {{ selectedVerificationOption.description }}
+                </p>
               </div>
-              <div class="text-sm leading-6 mt-1" :class="selectedVerificationType === option.value ? 'text-white/75 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'">
-                {{ option.description }}
-              </div>
-            </button>
+            </div>
+            <TxButton variant="ghost" @click="cancelCreate">
+              重新选择
+            </TxButton>
           </div>
 
           <div class="gap-5 grid md:grid-cols-2">
-            <label class="gap-2 grid">
+            <label class="verification-form-field gap-2 grid">
               <span class="field-label">真实姓名</span>
               <TxInput v-model="studentForm.realName" placeholder="必须填写，用于人工复核" />
               <span class="field-hint">认证申请强制提供姓名；请勿填写昵称或无法复核的称呼。</span>
             </label>
-            <div class="gap-2 grid">
+            <div class="verification-form-field gap-2 grid">
               <span class="field-label">认证类目</span>
               <div class="school-combobox">
                 <TxInput
@@ -312,7 +323,7 @@ onMounted(() => {
                 </div>
               </div>
             </div>
-            <div class="gap-2 grid">
+            <div class="verification-form-field gap-2 grid">
               <span class="field-label">{{ currentOrganizationLabel }}</span>
               <div class="school-combobox">
                 <TxInput
@@ -344,7 +355,7 @@ onMounted(() => {
               </div>
             </div>
             <div class="gap-5 grid md:col-span-2 md:grid-cols-2">
-              <div class="gap-2 grid">
+              <div class="verification-form-field gap-2 grid">
                 <span class="field-label">年级</span>
                 <div class="school-combobox">
                   <TxInput
@@ -423,7 +434,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="text-sm text-amber-800 leading-6 p-5 border border-amber-400/25 rounded-3xl bg-amber-50 dark:text-amber-200 md:col-span-2">
+          <div class="verification-submit-warning md:col-span-2">
             提交后会立即扣除 {{ STUDENT_REVIEW_FEE }} 积分作为审核费；如果审核通过，系统自动返还这 {{ STUDENT_REVIEW_FEE }} 积分。确认提交即视为同意本次规则和数据处理说明。
           </div>
 

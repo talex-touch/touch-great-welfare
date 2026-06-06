@@ -1,4 +1,6 @@
 import type {
+  AdminAnnouncementListResult,
+  CreateAdminAnnouncementPayload,
   NotificationListResult,
   NotificationSettingsView,
   PushSubscriptionPayload,
@@ -93,6 +95,17 @@ export function loadNotificationProviderConfig(adminUserId: string) {
 export function saveNotificationProviderConfig(adminUserId: string, payload: SaveNotificationProviderConfigPayload) {
   return requestNotifications<NotificationProviderConfigView>('/api/notifications/provider-config', adminUserId, {
     method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function loadAdminAnnouncements(adminUserId: string) {
+  return requestNotifications<AdminAnnouncementListResult>('/api/notifications/admin-announcements', adminUserId)
+}
+
+export function createAdminAnnouncement(adminUserId: string, payload: CreateAdminAnnouncementPayload) {
+  return requestNotifications<AdminAnnouncementListResult>('/api/notifications/admin-announcements', adminUserId, {
+    method: 'POST',
     body: JSON.stringify(payload),
   })
 }

@@ -24,6 +24,27 @@ const editorStyle = computed(() => ({
   minHeight: `${props.minHeight}px`,
 }))
 
+function clipboardImageFiles(event: ClipboardEvent) {
+  return Array.from(event.clipboardData?.items ?? [])
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter((file): file is File => !!file)
+}
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(String(reader.result || '')))
+    reader.addEventListener('error', () => reject(reader.error))
+    reader.readAsDataURL(file)
+  })
+}
+
+function insertHtml(html: string) {
+  document.execCommand('insertHTML', false, sanitizeRichText(html))
+  emitEditorHtml()
+}
+
 function syncEditorHtml(value = props.modelValue) {
   const editor = editorRef.value
   if (!editor || isFocused.value)
@@ -71,12 +92,20 @@ function cancelLink() {
   linkUrl.value = ''
 }
 
-function onPaste(event: ClipboardEvent) {
+async function onPaste(event: ClipboardEvent) {
   event.preventDefault()
+  const imageFiles = clipboardImageFiles(event)
+  if (imageFiles.length) {
+    const imageHtml = (await Promise.all(imageFiles.map(fileToDataUrl)))
+      .map((src, index) => `<p><img src="${src}" alt="粘贴图片 ${index + 1}"></p>`)
+      .join('')
+    insertHtml(imageHtml)
+    return
+  }
+
   const html = event.clipboardData?.getData('text/html')
   const text = event.clipboardData?.getData('text/plain') ?? ''
-  document.execCommand('insertHTML', false, html ? sanitizeRichText(html) : text.replace(/\n/g, '<br>'))
-  emitEditorHtml()
+  insertHtml(html || text.replace(/\n/g, '<br>'))
 }
 
 function onFocus() {

@@ -65,13 +65,32 @@ interface UserInfoResponse {
   email?: string
   email_verified?: boolean
   name?: string
+  username?: string
   preferred_username?: string
   nickname?: string
   picture?: string
   avatar_url?: string
+  avatar_template?: string
 }
 
 const DEFAULT_SCOPES = 'openid profile email'
+const LINUX_DO_PROVIDER_ID = 'linux-do'
+const BUILTIN_OAUTH_PROVIDERS: OAuthProviderRecord[] = [
+  {
+    id: LINUX_DO_PROVIDER_ID,
+    enabled: false,
+    name: 'LINUX DO',
+    logo_url: '',
+    client_id: '',
+    client_secret: '',
+    callback_url: '/api/oauth/callback',
+    authorize_url: 'https://connect.linux.do/oauth2/authorize',
+    token_url: 'https://connect.linux.do/oauth2/token',
+    userinfo_url: 'https://connect.linux.do/api/user',
+    issuer_url: 'https://linux.do',
+    scopes: '',
+  },
+]
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 const stateSigner = {
   secret: '',
@@ -250,6 +269,15 @@ async function listStoredProviders(env: WorkerEnv) {
   return result.rows
 }
 
+function mergeBuiltinProviders(providers: OAuthProviderRecord[]) {
+  const providerById = new Map(providers.map(provider => [provider.id, provider]))
+  for (const provider of BUILTIN_OAUTH_PROVIDERS) {
+    if (!providerById.has(provider.id))
+      providerById.set(provider.id, provider)
+  }
+  return [...providerById.values()].sort((left, right) => left.name.localeCompare(right.name))
+}
+
 async function getStoredProvider(env: WorkerEnv, id: string) {
   await ensureOAuthSchema(env)
   if (shouldUseD1(env)) {
@@ -364,6 +392,7 @@ function configView(provider: OAuthProviderRecord, request: Request) {
     id: provider.id,
     enabled: !!provider.enabled,
     configured: providerConfigured(provider),
+    builtin: BUILTIN_OAUTH_PROVIDERS.some(item => item.id === provider.id),
     name: provider.name,
     logoUrl: provider.logo_url || '',
     clientId: provider.client_id,
@@ -385,6 +414,7 @@ async function handlePublicProviders(request: Request, env: WorkerEnv) {
       name: provider.name,
       logoUrl: provider.logo_url || '',
       scopes: provider.scopes,
+      builtin: BUILTIN_OAUTH_PROVIDERS.some(item => item.id === provider.id),
     }))
   return json({ providers })
 }
@@ -392,7 +422,7 @@ async function handlePublicProviders(request: Request, env: WorkerEnv) {
 async function handleProviderConfigs(request: Request, env: WorkerEnv) {
   if (request.method === 'GET') {
     await assertAdminRequest(request, env)
-    const providers = (await listStoredProviders(env)).map(provider => configView(provider, request))
+    const providers = mergeBuiltinProviders(await listStoredProviders(env)).map(provider => configView(provider, request))
     return json({ providers })
   }
 
@@ -421,14 +451,16 @@ async function handleProviderConfigs(request: Request, env: WorkerEnv) {
         token_url: item.tokenUrl?.trim() || existing?.token_url || '',
         userinfo_url: item.userInfoUrl?.trim() || existing?.userinfo_url || '',
         issuer_url: item.issuerUrl?.trim() || existing?.issuer_url || '',
-        scopes: item.scopes?.trim() || existing?.scopes || DEFAULT_SCOPES,
+        scopes: item.scopes === undefined ? (existing?.scopes ?? DEFAULT_SCOPES) : item.scopes.trim(),
       }
-      if (!provider.client_id)
-        throw new Error(`${provider.name} 缺少 Client ID`)
-      if (!provider.client_secret)
-        throw new Error(`${provider.name} 缺少 Client Secret`)
-      if (!provider.authorize_url || !provider.token_url || !provider.userinfo_url)
-        throw new Error(`${provider.name} 缺少授权、Token 或 UserInfo 地址`)
+      if (provider.enabled) {
+        if (!provider.client_id)
+          throw new Error(`${provider.name} 缺少 Client ID`)
+        if (!provider.client_secret)
+          throw new Error(`${provider.name} 缺少 Client Secret`)
+        if (!provider.authorize_url || !provider.token_url || !provider.userinfo_url)
+          throw new Error(`${provider.name} 缺少授权、Token 或 UserInfo 地址`)
+      }
       await upsertProvider(env, provider)
     }
 
@@ -464,7 +496,8 @@ async function handleAuthorize(request: Request, env: WorkerEnv) {
   authorizeUrl.searchParams.set('client_id', provider.client_id)
   authorizeUrl.searchParams.set('redirect_uri', runtimeUrl(request, provider.callback_url))
   authorizeUrl.searchParams.set('response_type', 'code')
-  authorizeUrl.searchParams.set('scope', provider.scopes || DEFAULT_SCOPES)
+  if (provider.scopes.trim())
+    authorizeUrl.searchParams.set('scope', provider.scopes.trim())
   authorizeUrl.searchParams.set('state', state)
 
   return json({ authorizeUrl: authorizeUrl.toString(), state })
@@ -518,6 +551,21 @@ async function createUserId(providerId: string, subject: string) {
   return `oauth_${providerId}_${(await sha256Hex(`${providerId}:${subject}`)).slice(0, 24)}`
 }
 
+function resolveUserAvatar(provider: OAuthProviderRecord, userInfo: UserInfoResponse) {
+  const rawAvatar = userInfo.picture || userInfo.avatar_url || userInfo.avatar_template
+  if (!rawAvatar)
+    return undefined
+
+  const sizedAvatar = rawAvatar.replace('{size}', '120')
+  if (sizedAvatar.startsWith('//'))
+    return `https:${sizedAvatar}`
+  if (sizedAvatar.startsWith('/')) {
+    const baseUrl = provider.id === LINUX_DO_PROVIDER_ID ? 'https://linux.do' : provider.issuer_url || provider.userinfo_url
+    return new URL(sizedAvatar, baseUrl).toString()
+  }
+  return sizedAvatar
+}
+
 async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, oauthState: OAuthState, userInfo: UserInfoResponse) {
   const state = await readWelfareState(env) as Partial<WelfareState>
   if (!Array.isArray(state.users) || !Array.isArray(state.transactions))
@@ -528,7 +576,8 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
     throw new Error('OAuth UserInfo 缺少 sub/id')
   const email = pickUserEmail(provider, userInfo)
   const userId = await createUserId(provider.id, subject)
-  const username = userInfo.preferred_username || userInfo.nickname || email.split('@')[0]
+  const username = userInfo.preferred_username || userInfo.username || userInfo.nickname || email.split('@')[0]
+  const avatar = resolveUserAvatar(provider, userInfo)
 
   let localUser = state.users.find(item =>
     item.profile.oauthProviderId === provider.id
@@ -545,7 +594,7 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
         displayName: userInfo.name?.trim() || username || provider.name,
         email,
         inviteCode: createUserInviteCode(userId),
-        avatar: userInfo.picture || userInfo.avatar_url || undefined,
+        avatar,
         oauthProviderId: provider.id,
         oauthSubject: subject,
         oauthUsername: username,
@@ -553,6 +602,7 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
         studentVerified: false,
       },
       points: 0,
+      accountStatus: 'active',
       createdAt: now(),
       lastLoginAt: now(),
     }
@@ -565,7 +615,7 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
       displayName: localUser.profile.displayName || userInfo.name?.trim() || username || provider.name,
       email: localUser.profile.email || email,
       inviteCode: localUser.profile.inviteCode || createUserInviteCode(localUser.id),
-      avatar: userInfo.picture || userInfo.avatar_url || localUser.profile.avatar,
+      avatar: avatar || localUser.profile.avatar,
       oauthProviderId: provider.id,
       oauthSubject: subject,
       oauthUsername: username,

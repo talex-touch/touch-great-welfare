@@ -1,6 +1,9 @@
 import type { WorkerEnv } from './welfare-state'
 import type { CreditTransaction, User, WelfareApplication, WelfareState } from '~/composables/welfare'
 import type {
+  AdminAnnouncementListResult,
+  AdminAnnouncementSummary,
+  CreateAdminAnnouncementPayload,
   DeliveryStatus,
   NotificationChannel,
   NotificationEvent,
@@ -86,8 +89,10 @@ export interface CreateNotificationInput {
 }
 
 const NOTIFICATION_LIMIT = 80
+const ADMIN_ANNOUNCEMENT_LIMIT = 1200
 const NOTIFICATION_PROVIDER_CONFIG_ID = 'default'
 const DEFAULT_VAPID_SUBJECT = 'mailto:admin@welfare.dev'
+const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
 
 function encryptionSecret(env: WorkerEnv) {
   return env.NOTIFY_SECRET_KEY ?? ''
@@ -116,6 +121,26 @@ function mapNotification(row: NotificationRow): NotificationItem {
     readAt: toIso(row.read_at),
     createdAt: toIso(row.created_at) ?? now(),
   }
+}
+
+function safeNotificationData(row: NotificationRow) {
+  try {
+    return JSON.parse(row.data || '{}') as Record<string, unknown>
+  }
+  catch {
+    return {}
+  }
+}
+
+function normalizeNotificationChannels(channels: NotificationChannel[] | undefined, forcePush = false) {
+  const normalized = new Set<NotificationChannel>(['in_app'])
+  for (const channel of channels ?? []) {
+    if (ADMIN_ANNOUNCEMENT_CHANNELS.includes(channel))
+      normalized.add(channel)
+  }
+  if (forcePush)
+    normalized.add('browser_push')
+  return [...normalized]
 }
 
 function assertEmail(value: string) {
@@ -1126,6 +1151,204 @@ async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: No
   }
 }
 
+async function dispatchAdminAnnouncementChannels(
+  env: WorkerEnv,
+  user: User,
+  settings: NotificationSettingsRow | null,
+  notificationId: string,
+  input: CreateNotificationInput,
+  channels: NotificationChannel[],
+  forcePush: boolean,
+) {
+  if (channels.includes('email')) {
+    const address = settings?.email_address || user.profile.email
+    try {
+      const providerId = await sendEmail(env, address, input.title, input.body)
+      await recordDelivery(env, notificationId, 'email', 'sent', '', 0, providerId)
+    }
+    catch (error) {
+      await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '邮箱发送失败')
+    }
+  }
+
+  if (channels.includes('feishu')) {
+    if (!settings?.feishu_webhook_encrypted) {
+      await recordDelivery(env, notificationId, 'feishu', 'skipped', '飞书 Webhook 未配置')
+    }
+    else {
+      try {
+        await sendFeishu(env, settings.feishu_webhook_encrypted, input.title, input.body)
+        await recordDelivery(env, notificationId, 'feishu', 'sent')
+      }
+      catch (error) {
+        await recordDelivery(env, notificationId, 'feishu', 'failed', error instanceof Error ? error.message : '飞书通知发送失败')
+      }
+    }
+  }
+
+  if (channels.includes('browser_push')) {
+    const canPush = forcePush || boolValue(settings?.browser_push_enabled)
+    if (!canPush) {
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '用户未启用浏览器 Push')
+      return
+    }
+
+    const subscriptions = await getPushSubscriptions(env, user.id)
+    if (!subscriptions.length) {
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '未注册浏览器 Push 订阅')
+      return
+    }
+
+    let sent = 0
+    const errors: string[] = []
+    for (const subscription of subscriptions) {
+      try {
+        await sendPush(env, subscription)
+        sent += 1
+      }
+      catch (error) {
+        errors.push(error instanceof Error ? error.message : 'Push 发送失败')
+      }
+    }
+    await recordDelivery(env, notificationId, 'browser_push', sent > 0 ? 'sent' : 'failed', errors.join('\n'))
+  }
+}
+
+async function listAdminAnnouncements(env: WorkerEnv): Promise<AdminAnnouncementListResult> {
+  await ensureNotificationSchema(env)
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  assertWelfareState(state)
+  const userMap = new Map(state.users.map(user => [user.id, user]))
+  let rows: NotificationRow[] = []
+
+  if (shouldUseD1(env)) {
+    rows = (await env.LOCAL_DB!
+      .prepare(`
+        select * from notifications
+        where event = ?1
+        order by created_at desc
+        limit ?2
+      `)
+      .bind('admin_announcement', ADMIN_ANNOUNCEMENT_LIMIT)
+      .all<NotificationRow>()).results
+  }
+  else {
+    const result = await getPool(env).query<NotificationRow>(`
+      select * from notifications
+      where event = $1
+      order by created_at desc
+      limit $2
+    `, ['admin_announcement', ADMIN_ANNOUNCEMENT_LIMIT])
+    rows = result.rows
+  }
+
+  const groups = new Map<string, AdminAnnouncementSummary>()
+  for (const row of rows) {
+    const data = safeNotificationData(row)
+    const announcementId = typeof data.announcementId === 'string' ? data.announcementId : ''
+    if (!announcementId)
+      continue
+
+    const user = userMap.get(row.user_id)
+    const channels = Array.isArray(data.channels)
+      ? normalizeNotificationChannels(data.channels as NotificationChannel[], data.forcePush === true)
+      : ['in_app'] as NotificationChannel[]
+    const readAt = toIso(row.read_at)
+    const existing = groups.get(announcementId)
+    const summary = existing ?? {
+      id: announcementId,
+      title: row.title,
+      body: row.body,
+      channels,
+      forcePopup: data.forcePopup === true,
+      forcePush: data.forcePush === true,
+      createdAt: toIso(row.created_at) ?? now(),
+      createdBy: typeof data.createdBy === 'string' ? data.createdBy : '',
+      totalCount: 0,
+      readCount: 0,
+      unreadCount: 0,
+      recipients: [],
+    }
+
+    summary.totalCount += 1
+    summary.readCount += readAt ? 1 : 0
+    summary.unreadCount += readAt ? 0 : 1
+    summary.recipients.push({
+      userId: row.user_id,
+      displayName: user?.profile.displayName || row.user_id,
+      email: user?.profile.email || '',
+      readAt,
+      notificationId: row.id,
+    })
+    groups.set(announcementId, summary)
+  }
+
+  return {
+    announcements: [...groups.values()]
+      .map(item => ({
+        ...item,
+        recipients: item.recipients.sort((left, right) => {
+          if (!!left.readAt !== !!right.readAt)
+            return left.readAt ? 1 : -1
+          return left.displayName.localeCompare(right.displayName, 'zh-CN')
+        }),
+      }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+  }
+}
+
+async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: CreateAdminAnnouncementPayload) {
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  assertWelfareState(state)
+  const title = payload.title?.trim() ?? ''
+  const body = payload.body?.trim() ?? ''
+  if (!title)
+    throw new Error('请填写通告标题')
+  if (!body)
+    throw new Error('请填写通告内容')
+
+  const forcePush = !!payload.forcePush
+  const channels = normalizeNotificationChannels(payload.channels, forcePush)
+  const targetIds = new Set((payload.targetUserIds ?? []).map(id => id.trim()).filter(Boolean))
+  const recipients = state.users.filter(user => !targetIds.size || targetIds.has(user.id))
+  if (!recipients.length)
+    throw new Error('没有可推送的用户')
+
+  const announcementId = createId('ann')
+  for (const recipient of recipients) {
+    const notificationId = await insertNotification(env, {
+      userId: recipient.id,
+      event: 'admin_announcement',
+      title,
+      body,
+      data: {
+        announcementId,
+        channels,
+        forcePopup: !!payload.forcePopup,
+        forcePush,
+        createdBy: admin.id,
+      },
+    })
+    await recordDelivery(env, notificationId, 'in_app', 'sent')
+    await dispatchAdminAnnouncementChannels(
+      env,
+      recipient,
+      await getSettingsRow(env, recipient.id),
+      notificationId,
+      {
+        userId: recipient.id,
+        event: 'admin_announcement',
+        title,
+        body,
+      },
+      channels,
+      forcePush,
+    )
+  }
+
+  return listAdminAnnouncements(env)
+}
+
 export async function createAndDispatchNotification(env: WorkerEnv, input: CreateNotificationInput) {
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
@@ -1288,6 +1511,17 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
       await assertAdminRequest(request, env)
       const payload = await readJson<NotificationProviderConfigPayload>(request)
       return json(serializeNotificationProviderConfig(await saveNotificationProviderConfig(env, payload)))
+    }
+
+    if (path === '/admin-announcements' && request.method === 'GET') {
+      await assertAdminRequest(request, env)
+      return json(await listAdminAnnouncements(env))
+    }
+
+    if (path === '/admin-announcements' && request.method === 'POST') {
+      const { user } = await assertAdminRequest(request, env)
+      const payload = await readJson<CreateAdminAnnouncementPayload>(request)
+      return json(await createAdminAnnouncement(env, user, payload))
     }
 
     const { user } = await getAuthenticatedRequest(request, env)

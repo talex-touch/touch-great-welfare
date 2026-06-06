@@ -6,17 +6,29 @@ import { useWelfareUiState } from '~/composables/welfare-ui'
 
 const route = useRoute()
 const router = useRouter()
-const { currentUser, logout, unreadNotificationCount, refreshNotifications, selectedSection } = useWelfareUiState()
+const {
+  currentUser,
+  logout,
+  activeSiteBanner,
+  notificationList,
+  unreadNotificationCount,
+  refreshNotifications,
+  readNotification,
+  selectedSection,
+} = useWelfareUiState()
 const isUserMenuOpen = ref(false)
-const userMenuNavItems = [
-  { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
-  { key: 'wallet', path: '/dashboard/wallet', icon: 'i-carbon-wallet', label: '钱包充值' },
-  { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
+const dismissedForcedAnnouncementIds = ref<Set<string>>(new Set())
+const topNavItems = [
+  { key: 'home', path: '/', icon: 'i-carbon-home', label: '首页' },
+  { key: 'square', path: '/dashboard/square', icon: 'i-carbon-campsite', label: '广场' },
+  { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人信息' },
 ] as const
 const accountMenuNavItems = [
-  { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人信息' },
+  { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
   { key: 'notifications', path: '/dashboard/notifications', icon: 'i-carbon-notification', label: '消息中心' },
   { key: 'notificationSettings', path: '/dashboard/notification-settings', icon: 'i-carbon-settings', label: '通知设置' },
+  { key: 'wallet', path: '/dashboard/wallet', icon: 'i-carbon-wallet', label: '钱包充值' },
+  { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
 ] as const
 const adminMenuNavItems = [
   { key: 'admin', path: '/dashboard/admin', icon: 'i-carbon-data-center', label: '管理员后台' },
@@ -28,6 +40,19 @@ const userRoleText = computed(() => {
   if (currentUser.value?.role === 'reviewer')
     return '众包审核'
   return '用户'
+})
+const forcedAnnouncement = computed(() => notificationList.value.find((item) => {
+  if (item.event !== 'admin_announcement' || item.readAt || dismissedForcedAnnouncementIds.value.has(item.id))
+    return false
+  return item.data.forcePopup === true
+}))
+
+const bannerToneClass = computed(() => {
+  if (activeSiteBanner.value?.tone === 'success')
+    return 'site-banner--success'
+  if (activeSiteBanner.value?.tone === 'warning')
+    return 'site-banner--warning'
+  return 'site-banner--info'
 })
 
 function toggleUserMenu() {
@@ -43,7 +68,18 @@ function goNotifications() {
   router.push('/dashboard/notifications')
 }
 
-function goUserMenuItem(item: (typeof userMenuNavItems)[number] | (typeof accountMenuNavItems)[number] | (typeof adminMenuNavItems)[number]) {
+function isActivePath(path: string) {
+  if (path === '/')
+    return route.path === '/'
+  return route.path === path || route.path.startsWith(`${path}/`)
+}
+
+function goTopNavItem(item: (typeof topNavItems)[number]) {
+  selectedSection.value = item.key
+  router.push(item.path)
+}
+
+function goUserMenuItem(item: (typeof accountMenuNavItems)[number] | (typeof adminMenuNavItems)[number]) {
   selectedSection.value = item.key
   closeUserMenu()
   router.push(item.path)
@@ -64,6 +100,22 @@ function onLogout() {
   })
 }
 
+function dismissForcedAnnouncement() {
+  if (!forcedAnnouncement.value)
+    return
+
+  const next = new Set(dismissedForcedAnnouncementIds.value)
+  next.add(forcedAnnouncement.value.id)
+  dismissedForcedAnnouncementIds.value = next
+}
+
+function readForcedAnnouncement() {
+  if (!forcedAnnouncement.value)
+    return
+
+  readNotification(forcedAnnouncement.value.id).catch(() => {})
+}
+
 watch(() => route.fullPath, closeUserMenu)
 
 onMounted(() => {
@@ -77,23 +129,41 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header class="border-b border-black/6 bg-[#f7f5ef]/78 top-0 sticky z-40 backdrop-blur-2xl dark:border-white/8 dark:bg-[#06070a]/72">
-    <div class="mx-auto px-5 py-4 flex max-w-7xl items-center justify-between lg:px-8">
-      <RouterLink class="flex gap-3 min-w-0 items-center" to="/">
-        <span class="rounded-2xl bg-[#F2F2F0] flex h-11 w-11 shadow-amber-500/16 shadow-lg items-center justify-center overflow-hidden sm:hidden">
-          <img src="/brand/icon.svg" alt="领益 Link Welfare" class="h-10 w-10">
-        </span>
-        <span class="px-3 py-2 rounded-2xl bg-[#F2F2F0] hidden shadow-amber-500/12 shadow-lg sm:flex">
-          <img src="/brand/lockup.svg" alt="领益 Link Welfare" class="h-10 w-auto">
-        </span>
-        <span class="min-w-0 hidden md:grid">
-          <span class="text-xs text-slate-500 dark:text-slate-400">
-            公益积分申请平台
-          </span>
-        </span>
-      </RouterLink>
+  <div v-if="activeSiteBanner" class="site-banner" :class="bannerToneClass">
+    <div class="site-banner__inner mx-auto px-5 max-w-7xl lg:px-8">
+      <span class="i-carbon-information site-banner__icon" />
+      <div class="min-w-0">
+        <b v-if="activeSiteBanner.title">{{ activeSiteBanner.title }}</b>
+        <span>{{ activeSiteBanner.body }}</span>
+      </div>
+    </div>
+  </div>
 
-      <div class="flex gap-2 items-center">
+  <header class="border-b border-black/6 bg-[#f7f5ef]/78 top-0 sticky z-40 backdrop-blur-2xl dark:border-white/8 dark:bg-[#06070a]/72">
+    <div class="header-shell mx-auto px-5 max-w-7xl items-center lg:px-8">
+      <div class="header-shell__left">
+        <RouterLink class="header-brand" to="/">
+          <img src="/brand/icon.svg" alt="领益 Link Welfare" class="h-10 w-10">
+          <span class="header-brand__name">领益</span>
+        </RouterLink>
+      </div>
+
+      <div class="header-shell__center">
+        <nav v-if="currentUser" class="header-top-nav hidden items-center md:flex">
+          <button
+            v-for="item in topNavItems"
+            :key="item.key"
+            class="header-top-nav__item"
+            :class="isActivePath(item.path) ? 'is-active' : ''"
+            @click="goTopNavItem(item)"
+          >
+            <span :class="item.icon" />
+            {{ item.label }}
+          </button>
+        </nav>
+      </div>
+
+      <div class="header-shell__right flex gap-2 items-center justify-end">
         <button class="icon-btn" title="Toggle dark" @click="toggleDark()">
           <span class="i-carbon-sun dark:i-carbon-moon" />
         </button>
@@ -138,22 +208,10 @@ onUnmounted(() => {
               </div>
               <div class="py-1 border-b border-black/8 dark:border-white/10">
                 <button
-                  v-for="item in userMenuNavItems"
-                  :key="item.key"
-                  class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                  :class="route.path === item.path || route.path.startsWith(`${item.path}/`) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
-                  @click="goUserMenuItem(item)"
-                >
-                  <span :class="item.icon" />
-                  {{ item.label }}
-                </button>
-              </div>
-              <div class="py-1 border-b border-black/8 dark:border-white/10">
-                <button
                   v-for="item in accountMenuNavItems"
                   :key="item.key"
                   class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                  :class="route.path === item.path || route.path.startsWith(`${item.path}/`) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                  :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
                   @click="goUserMenuItem(item)"
                 >
                   <span :class="item.icon" />
@@ -168,7 +226,7 @@ onUnmounted(() => {
                   v-for="item in adminMenuNavItems"
                   :key="item.key"
                   class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                  :class="route.path === item.path || route.path.startsWith(`${item.path}/`) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                  :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
                   @click="goUserMenuItem(item)"
                 >
                   <span :class="item.icon" />
@@ -182,6 +240,10 @@ onUnmounted(() => {
             </div>
           </Transition>
         </div>
+
+        <button v-else class="text-sm fw-800 px-4 py-2 border border-black/8 rounded-2xl transition dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10" @click="router.push('/login')">
+          登录
+        </button>
       </div>
     </div>
   </header>
@@ -189,4 +251,224 @@ onUnmounted(() => {
   <Teleport to="body">
     <button v-if="isUserMenuOpen" class="bg-transparent cursor-default inset-0 fixed z-30" aria-label="关闭用户菜单" @click="closeUserMenu" />
   </Teleport>
+
+  <Teleport to="body">
+    <div v-if="forcedAnnouncement" class="announcement-modal">
+      <div class="announcement-modal__dialog">
+        <div class="flex gap-3 items-start justify-between">
+          <div>
+            <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+              管理员通告
+            </div>
+            <h3 class="text-2xl fw-900 leading-tight">
+              {{ forcedAnnouncement.title }}
+            </h3>
+          </div>
+          <button class="icon-btn" aria-label="关闭通告弹窗" @click="dismissForcedAnnouncement">
+            <span class="i-carbon-close" />
+          </button>
+        </div>
+        <p class="text-sm text-slate-600 leading-7 mt-4 whitespace-pre-wrap dark:text-slate-300">
+          {{ forcedAnnouncement.body }}
+        </p>
+        <div class="mt-5 flex flex-wrap gap-3 justify-end">
+          <button class="text-sm text-white fw-900 px-4 py-2 rounded-2xl bg-slate-950 dark:text-slate-950 dark:bg-white" @click="readForcedAnnouncement">
+            已读
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
+
+<style scoped>
+.site-banner {
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  position: relative;
+  z-index: 45;
+}
+
+.site-banner__inner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 44px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.site-banner__inner b {
+  margin-right: 0.45rem;
+  font-weight: 900;
+}
+
+.site-banner__icon {
+  flex: 0 0 auto;
+}
+
+.site-banner--info {
+  color: #075985;
+  background: #e0f2fe;
+}
+
+.site-banner--success {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.site-banner--warning {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.announcement-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(12px);
+}
+
+.announcement-modal__dialog {
+  width: min(100%, 560px);
+  padding: 1.35rem;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.2);
+}
+
+.header-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 1rem;
+  height: 72px;
+  max-height: 72px;
+}
+
+.header-shell__left {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.header-shell__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-shell__right {
+  min-width: 0;
+}
+
+.header-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+  color: rgb(15 23 42);
+  text-decoration: none;
+}
+
+.header-brand__name {
+  font-family: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Source Han Serif SC', serif;
+  font-size: 1.34rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.header-top-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.header-top-nav__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 800;
+  color: rgb(71 85 105);
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.header-top-nav__item:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.header-top-nav__item.is-active {
+  background: rgb(15 23 42);
+  color: white;
+}
+
+.dark .header-top-nav {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.dark .header-top-nav__item {
+  color: rgb(203 213 225);
+}
+
+.dark .header-top-nav__item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dark .header-top-nav__item.is-active {
+  background: white;
+  color: rgb(15 23 42);
+}
+
+.dark .header-brand {
+  color: white;
+}
+
+.dark .site-banner--info {
+  color: #bae6fd;
+  background: #082f49;
+}
+
+.dark .site-banner--success {
+  color: #a7f3d0;
+  background: #064e3b;
+}
+
+.dark .site-banner--warning {
+  color: #fde68a;
+  background: #78350f;
+}
+
+.dark .announcement-modal__dialog {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #101216;
+}
+
+@media (max-width: 767px) {
+  .header-shell {
+    grid-template-columns: minmax(0, 1fr) auto;
+    height: 64px;
+    max-height: 64px;
+  }
+
+  .header-brand__name {
+    font-size: 1.18rem;
+  }
+}
+</style>
