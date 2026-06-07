@@ -460,7 +460,6 @@ export const ADMIN_TABS = {
   dashboard: '仪表盘数据',
   data: '业务数据管理',
   audit: '审计日志',
-  points: '积分管理',
 } as const
 export const adminTabItems = [
   { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
@@ -474,7 +473,6 @@ export const adminTabItems = [
   { key: 'dashboard', name: ADMIN_TABS.dashboard, icon: 'i-carbon-dashboard' },
   { key: 'data', name: ADMIN_TABS.data, icon: 'i-carbon-data-table' },
   { key: 'audit', name: ADMIN_TABS.audit, icon: 'i-carbon-cloud-auditing' },
-  { key: 'points', name: ADMIN_TABS.points, icon: 'i-carbon-chart-line-data' },
 ] as const
 export const activeAdminTab = ref<(typeof ADMIN_TABS)[keyof typeof ADMIN_TABS]>(ADMIN_TABS.login)
 export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
