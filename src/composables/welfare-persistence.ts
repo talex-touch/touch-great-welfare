@@ -5,6 +5,7 @@ const STATE_ENDPOINT = '/api/welfare-state'
 async function requestState<T>(init?: RequestInit): Promise<T> {
   const response = await fetch(STATE_ENDPOINT, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       'content-type': 'application/json',
       ...init?.headers,
@@ -66,7 +67,7 @@ export async function bootstrapAdmin(payload: CreateAdminPayload) {
 }
 
 export async function loginAdmin(payload: LoginAdminPayload) {
-  return requestState<{ ok: true, userId: string }>({
+  return requestState<{ ok: true, userId: string, state?: Partial<WelfareState> }>({
     method: 'POST',
     body: JSON.stringify(payload),
     headers: {

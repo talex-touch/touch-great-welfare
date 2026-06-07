@@ -27,6 +27,12 @@ function user(overrides: Partial<User> = {}): User {
   }
 }
 
+async function passwordHash(password: string) {
+  const { sha256Hex } = await import('../src/worker/crypto')
+  const salt = 'test-salt'
+  return `v1:${salt}:${await sha256Hex(`${salt}:${password}`)}`
+}
+
 function state(): WelfareState {
   return {
     users: [user()],
@@ -160,6 +166,34 @@ function codeApplication(overrides: Partial<WelfareApplication> = {}): WelfareAp
 }
 
 describe('welfare state security', () => {
+  it('allows admin password login without an existing session', async () => {
+    const admin = user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@welfare.dev',
+        studentVerified: false,
+      },
+      passwordHash: await passwordHash('admin-password'),
+    })
+    const d1 = createMemoryD1({ ...state(), users: [admin] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-welfare-action': 'login-admin',
+      },
+      body: JSON.stringify({ email: 'admin@welfare.dev', password: 'admin-password' }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('set-cookie')).toContain('tg_welfare_session=')
+    await expect(response.json()).resolves.toMatchObject({ ok: true, userId: 'admin_1', state: { currentUserId: 'admin_1' } })
+  })
+
   it('ignores forged client transactions and derives points from trusted new records', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }

@@ -1425,7 +1425,7 @@ async function loginAdmin(request: Request, env: WorkerEnv) {
   admin.lastLoginAt = now()
   delete state.currentUserId
   await writeWelfareState(env, state)
-  return json({ ok: true, userId: admin.id }, 200, {
+  return json({ ok: true, userId: admin.id, state: clientVisibleWelfareState(state, admin.id) }, 200, {
     'set-cookie': await createSessionCookie(request, env, admin.id),
   })
 }

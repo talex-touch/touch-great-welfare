@@ -3276,8 +3276,10 @@ export function useWelfareStore() {
 
   async function loginAsAdmin(payload: LoginAdminPayload) {
     assertPersistenceReady()
-    await requestAdminLogin(payload)
-    await reloadWelfareState()
+    const result = await requestAdminLogin(payload)
+    Object.assign(state, normalizeState({ ...(result.state ?? state), currentUserId: result.userId }))
+    persistenceError.value = ''
+    isHydrated.value = true
   }
 
   async function logout() {
