@@ -512,7 +512,7 @@ async function mergeClientWritableState<T extends Record<string, unknown>>(previ
     squareBoosts: mergeSquareBoostsForNonAdmin(previousRecord.squareBoosts, nextState.squareBoosts, userId),
     squareReports: mergeScopedRecords(previousRecord.squareReports, nextState.squareReports, item => item.reporterId === userId),
     transactions: mergeScopedRecords(previousRecord.transactions, nextState.transactions, item => item.userId === userId),
-  } as T
+  } as unknown as T
 }
 
 async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {

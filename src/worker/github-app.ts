@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
-import { createUserInviteCode } from '~/composables/welfare'
+import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfare'
 import { bytesToHex, decryptSecret, encryptSecret } from './crypto'
 import { authenticatedUserId, createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
@@ -131,6 +131,25 @@ function maskSecret(value?: string) {
   return `${text.slice(0, 4)}••••${text.slice(-4)}`
 }
 
+function encryptionSecret(env: WorkerEnv) {
+  return env.NOTIFY_SECRET_KEY ?? ''
+}
+
+async function decryptOptionalSecret(value: string | null | undefined, env: WorkerEnv) {
+  if (!value)
+    return ''
+  try {
+    return await decryptSecret(value, encryptionSecret(env))
+  }
+  catch {
+    return ''
+  }
+}
+
+async function resolveStoredClientSecret(stored: GitHubAppConfigRecord | null | undefined, env: WorkerEnv) {
+  return await decryptOptionalSecret(stored?.client_secret_encrypted, env) || stored?.client_secret || ''
+}
+
 async function readJson<T>(request: Request): Promise<T> {
   const contentLength = Number(request.headers.get('content-length') ?? 0)
   if (contentLength > MAX_JSON_BYTES)
@@ -245,6 +264,7 @@ async function ensureGitHubAppSchema(env: WorkerEnv) {
           app_slug text not null default '',
           client_id text not null,
           client_secret text not null,
+          client_secret_encrypted text,
           callback_url text not null,
           authorize_url text not null,
           token_url text not null,
@@ -255,6 +275,10 @@ async function ensureGitHubAppSchema(env: WorkerEnv) {
         )
       `)
       .run()
+    await env.LOCAL_DB!
+      .prepare('alter table github_app_config add column client_secret_encrypted text')
+      .run()
+      .catch(() => undefined)
     return
   }
 
@@ -266,6 +290,7 @@ async function ensureGitHubAppSchema(env: WorkerEnv) {
       app_slug text not null default '',
       client_id text not null,
       client_secret text not null,
+      client_secret_encrypted text,
       callback_url text not null,
       authorize_url text not null,
       token_url text not null,
@@ -275,6 +300,7 @@ async function ensureGitHubAppSchema(env: WorkerEnv) {
       updated_at timestamptz not null default now()
     )
   `)
+  await getPool(env).query('alter table github_app_config add column if not exists client_secret_encrypted text')
 }
 
 async function getStoredGitHubAppConfig(env: WorkerEnv) {
@@ -296,21 +322,23 @@ async function getStoredGitHubAppConfig(env: WorkerEnv) {
 
 async function upsertStoredGitHubAppConfig(env: WorkerEnv, payload: Required<GitHubAppConfigPayload>) {
   await ensureGitHubAppSchema(env)
+  const clientSecretEncrypted = await encryptSecret(payload.clientSecret, encryptionSecret(env))
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
         insert into github_app_config (
-          id, enabled, app_name, app_slug, client_id, client_secret, callback_url,
+          id, enabled, app_name, app_slug, client_id, client_secret, client_secret_encrypted, callback_url,
           authorize_url, token_url, api_base_url, scopes, updated_at
-        ) values ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, current_timestamp)
+        ) values ('default', ?1, ?2, ?3, ?4, '', ?5, ?6, ?7, ?8, ?9, ?10, current_timestamp)
         on conflict (id)
         do update set
           enabled = excluded.enabled,
           app_name = excluded.app_name,
           app_slug = excluded.app_slug,
           client_id = excluded.client_id,
-          client_secret = excluded.client_secret,
+          client_secret = '',
+          client_secret_encrypted = excluded.client_secret_encrypted,
           callback_url = excluded.callback_url,
           authorize_url = excluded.authorize_url,
           token_url = excluded.token_url,
@@ -323,7 +351,7 @@ async function upsertStoredGitHubAppConfig(env: WorkerEnv, payload: Required<Git
         payload.appName,
         payload.appSlug,
         payload.clientId,
-        payload.clientSecret,
+        clientSecretEncrypted,
         payload.callbackUrl,
         payload.authorizeUrl,
         payload.tokenUrl,
@@ -336,16 +364,17 @@ async function upsertStoredGitHubAppConfig(env: WorkerEnv, payload: Required<Git
 
   await getPool(env).query(`
     insert into github_app_config (
-      id, enabled, app_name, app_slug, client_id, client_secret, callback_url,
+      id, enabled, app_name, app_slug, client_id, client_secret, client_secret_encrypted, callback_url,
       authorize_url, token_url, api_base_url, scopes, updated_at
-    ) values ('default', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+    ) values ('default', $1, $2, $3, $4, '', $5, $6, $7, $8, $9, $10, now())
     on conflict (id)
     do update set
       enabled = excluded.enabled,
       app_name = excluded.app_name,
       app_slug = excluded.app_slug,
       client_id = excluded.client_id,
-      client_secret = excluded.client_secret,
+      client_secret = '',
+      client_secret_encrypted = excluded.client_secret_encrypted,
       callback_url = excluded.callback_url,
       authorize_url = excluded.authorize_url,
       token_url = excluded.token_url,
@@ -357,7 +386,7 @@ async function upsertStoredGitHubAppConfig(env: WorkerEnv, payload: Required<Git
     payload.appName,
     payload.appSlug,
     payload.clientId,
-    payload.clientSecret,
+    clientSecretEncrypted,
     payload.callbackUrl,
     payload.authorizeUrl,
     payload.tokenUrl,
@@ -368,6 +397,7 @@ async function upsertStoredGitHubAppConfig(env: WorkerEnv, payload: Required<Git
 
 async function getEffectiveGitHubAppSettings(env: WorkerEnv, request: Request) {
   const stored = await getStoredGitHubAppConfig(env)
+  const clientSecret = await resolveStoredClientSecret(stored, env)
 
   return {
     enabled: stored
@@ -376,7 +406,7 @@ async function getEffectiveGitHubAppSettings(env: WorkerEnv, request: Request) {
     appName: stored?.app_name || '',
     appSlug: stored?.app_slug || '',
     clientId: stored?.client_id || '',
-    clientSecret: stored?.client_secret || '',
+    clientSecret,
     callbackUrl: getRuntimeCallbackUrl(request, stored?.callback_url || ''),
     authorizeUrl: stored?.authorize_url || DEFAULT_AUTHORIZE_URL,
     tokenUrl: stored?.token_url || DEFAULT_TOKEN_URL,
@@ -404,6 +434,26 @@ async function assertAdminRequest(request: Request, env: WorkerEnv) {
 async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {
   if (request.method === 'GET') {
     const settings = await getEffectiveGitHubAppSettings(env, request)
+    const state = await readWelfareState(env) as Partial<WelfareState>
+    const userId = await authenticatedUserId(request, env)
+    const user = Array.isArray(state.users) ? state.users.find(item => item.id === userId) : undefined
+    if (user?.role !== 'admin') {
+      return json({
+        enabled: settings.enabled,
+        configured: isConfigured(settings),
+        appName: settings.appName,
+        appSlug: settings.appSlug,
+        clientId: '',
+        clientSecretMasked: '',
+        callbackUrl: settings.callbackUrl,
+        authorizeUrl: '',
+        tokenUrl: '',
+        apiBaseUrl: '',
+        scopes: settings.scopes,
+        source: settings.source,
+      })
+    }
+
     return json({
       enabled: settings.enabled,
       configured: isConfigured(settings),
@@ -424,8 +474,9 @@ async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {
     await assertAdminRequest(request, env)
     const payload = await readJson<GitHubAppConfigPayload>(request)
     const stored = await getStoredGitHubAppConfig(env)
+    const storedClientSecret = await resolveStoredClientSecret(stored, env)
     const clientId = payload.clientId?.trim() || stored?.client_id || ''
-    const clientSecretForStorage = payload.clientSecret?.trim() || stored?.client_secret || ''
+    const clientSecretForStorage = payload.clientSecret?.trim() || storedClientSecret
     const clientSecretForRuntime = clientSecretForStorage
     const config = {
       enabled: payload.enabled !== false,
@@ -475,10 +526,18 @@ async function handleGitHubAuthorize(request: Request, env: WorkerEnv) {
     throw new Error('GitHub App 尚未配置 Client ID / Secret')
 
   const payload = await readJson<GitHubAuthorizePayload>(request)
+  const mode = payload.mode === 'login' ? 'login' : 'connect'
+  const stateSnapshot = await readWelfareState(env) as Partial<WelfareState>
+  const systemConfig = normalizeSystemConfig(stateSnapshot.systemConfig)
+  if (!systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+  if (mode === 'login' && !systemConfig.loginEnabled)
+    throw new Error(systemConfig.loginClosedReason)
+
   const redirect = normalizeRedirect(payload.redirect)
   const state = await createOAuthState(env, settings, {
     redirect,
-    mode: payload.mode === 'login' ? 'login' : 'connect',
+    mode,
     localUserId: await authenticatedUserId(request, env) || undefined,
   })
   const authorizeUrl = new URL(settings.authorizeUrl)
@@ -551,6 +610,12 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
   if (!Array.isArray(state.users) || !Array.isArray(state.transactions))
     throw new Error('用户状态未初始化')
 
+  const systemConfig = normalizeSystemConfig(state.systemConfig)
+  if (!systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+  if (oauthState.mode === 'login' && !systemConfig.loginEnabled)
+    throw new Error(systemConfig.loginClosedReason)
+
   const email = pickEmail(user, emails).toLowerCase()
   const githubId = createUserId(user.id)
   const githubAccountId = String(user.id)
@@ -567,6 +632,9 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
     || state.users.find(item => item.profile.email.toLowerCase() === email)
 
   if (!localUser) {
+    if (!systemConfig.registrationEnabled)
+      throw new Error(systemConfig.registrationClosedReason)
+
     localUser = {
       id: githubId,
       role: 'user',

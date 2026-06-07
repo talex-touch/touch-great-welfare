@@ -2,7 +2,7 @@ import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
 import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfare'
 import { assertAdminRequest, errorResponse, json, maskSecret, now, readJson } from './auth'
-import { bytesToHex, sha256Hex } from './crypto'
+import { bytesToHex, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
@@ -12,7 +12,8 @@ interface OAuthProviderRecord {
   name: string
   logo_url?: string | null
   client_id: string
-  client_secret: string
+  client_secret?: string | null
+  client_secret_encrypted?: string | null
   callback_url: string
   authorize_url: string
   token_url: string
@@ -146,8 +147,27 @@ function base64UrlDecodeText(value: string) {
   return new TextDecoder().decode(bytes)
 }
 
+function encryptionSecret(env: WorkerEnv) {
+  return env.NOTIFY_SECRET_KEY ?? ''
+}
+
+async function decryptOptionalSecret(value: string | null | undefined, env: WorkerEnv) {
+  if (!value)
+    return ''
+  try {
+    return await decryptSecret(value, encryptionSecret(env))
+  }
+  catch {
+    return ''
+  }
+}
+
+async function resolveStoredProviderSecret(stored: OAuthProviderRecord | null | undefined, env: WorkerEnv) {
+  return await decryptOptionalSecret(stored?.client_secret_encrypted, env) || stored?.client_secret || ''
+}
+
 function getStateSecret(env: WorkerEnv, provider: Pick<OAuthProviderRecord, 'client_secret'>) {
-  return env.NOTIFY_SECRET_KEY || provider.client_secret
+  return env.NOTIFY_SECRET_KEY || provider.client_secret || ''
 }
 
 async function getSigningKey(secret: string) {
@@ -224,6 +244,7 @@ async function ensureOAuthSchema(env: WorkerEnv) {
           logo_url text not null default '',
           client_id text not null,
           client_secret text not null,
+          client_secret_encrypted text,
           callback_url text not null,
           authorize_url text not null,
           token_url text not null,
@@ -239,6 +260,10 @@ async function ensureOAuthSchema(env: WorkerEnv) {
       .prepare('alter table oauth_provider_config add column logo_url text not null default ""')
       .run()
       .catch(() => undefined)
+    await env.LOCAL_DB!
+      .prepare('alter table oauth_provider_config add column client_secret_encrypted text')
+      .run()
+      .catch(() => undefined)
     return
   }
 
@@ -249,6 +274,7 @@ async function ensureOAuthSchema(env: WorkerEnv) {
       name text not null,
       client_id text not null,
       client_secret text not null,
+      client_secret_encrypted text,
       callback_url text not null,
       authorize_url text not null,
       token_url text not null,
@@ -261,6 +287,7 @@ async function ensureOAuthSchema(env: WorkerEnv) {
   `)
 
   await getPool(env).query('alter table oauth_provider_config add column if not exists logo_url text not null default \'\'')
+  await getPool(env).query('alter table oauth_provider_config add column if not exists client_secret_encrypted text')
 }
 
 async function listStoredProviders(env: WorkerEnv) {
@@ -300,20 +327,24 @@ async function getStoredProvider(env: WorkerEnv, id: string) {
 
 async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
   await ensureOAuthSchema(env)
+  const clientSecret = provider.client_secret?.trim() || ''
+  const clientSecretEncrypted = clientSecret ? await encryptSecret(clientSecret, encryptionSecret(env)) : null
+
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
         insert into oauth_provider_config (
-          id, enabled, name, logo_url, client_id, client_secret, callback_url,
+          id, enabled, name, logo_url, client_id, client_secret, client_secret_encrypted, callback_url,
           authorize_url, token_url, userinfo_url, issuer_url, scopes, updated_at
-        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, current_timestamp)
+        ) values (?1, ?2, ?3, ?4, ?5, '', ?6, ?7, ?8, ?9, ?10, ?11, ?12, current_timestamp)
         on conflict (id)
         do update set
           enabled = excluded.enabled,
           name = excluded.name,
           logo_url = excluded.logo_url,
           client_id = excluded.client_id,
-          client_secret = excluded.client_secret,
+          client_secret = '',
+          client_secret_encrypted = excluded.client_secret_encrypted,
           callback_url = excluded.callback_url,
           authorize_url = excluded.authorize_url,
           token_url = excluded.token_url,
@@ -328,7 +359,7 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
         provider.name,
         provider.logo_url || '',
         provider.client_id,
-        provider.client_secret,
+        clientSecretEncrypted,
         provider.callback_url,
         provider.authorize_url,
         provider.token_url,
@@ -342,16 +373,17 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
 
   await getPool(env).query(`
     insert into oauth_provider_config (
-      id, enabled, name, logo_url, client_id, client_secret, callback_url,
+      id, enabled, name, logo_url, client_id, client_secret, client_secret_encrypted, callback_url,
       authorize_url, token_url, userinfo_url, issuer_url, scopes, updated_at
-    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+    ) values ($1, $2, $3, $4, $5, '', $6, $7, $8, $9, $10, $11, $12, now())
     on conflict (id)
     do update set
       enabled = excluded.enabled,
       name = excluded.name,
       logo_url = excluded.logo_url,
       client_id = excluded.client_id,
-      client_secret = excluded.client_secret,
+      client_secret = '',
+      client_secret_encrypted = excluded.client_secret_encrypted,
       callback_url = excluded.callback_url,
       authorize_url = excluded.authorize_url,
       token_url = excluded.token_url,
@@ -365,7 +397,7 @@ async function upsertProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
     provider.name,
     provider.logo_url || '',
     provider.client_id,
-    provider.client_secret,
+    clientSecretEncrypted,
     provider.callback_url,
     provider.authorize_url,
     provider.token_url,
@@ -386,7 +418,7 @@ async function deleteProvider(env: WorkerEnv, id: string) {
 function providerConfigured(provider: OAuthProviderRecord) {
   return !!(
     provider.client_id.trim()
-    && provider.client_secret.trim()
+    && provider.client_secret?.trim()
     && provider.callback_url.trim()
     && provider.authorize_url.trim()
     && provider.token_url.trim()
@@ -394,16 +426,18 @@ function providerConfigured(provider: OAuthProviderRecord) {
   )
 }
 
-function configView(provider: OAuthProviderRecord, request: Request) {
+async function configView(provider: OAuthProviderRecord, request: Request, env: WorkerEnv) {
+  const clientSecret = await resolveStoredProviderSecret(provider, env)
+  const runtimeProvider = { ...provider, client_secret: clientSecret }
   return {
     id: provider.id,
     enabled: !!provider.enabled,
-    configured: providerConfigured(provider),
+    configured: providerConfigured(runtimeProvider),
     builtin: BUILTIN_OAUTH_PROVIDERS.some(item => item.id === provider.id),
     name: provider.name,
     logoUrl: provider.logo_url || '',
     clientId: provider.client_id,
-    clientSecretMasked: maskSecret(provider.client_secret),
+    clientSecretMasked: maskSecret(clientSecret),
     callbackUrl: runtimeUrl(request, provider.callback_url),
     authorizeUrl: provider.authorize_url,
     tokenUrl: provider.token_url,
@@ -413,8 +447,15 @@ function configView(provider: OAuthProviderRecord, request: Request) {
   }
 }
 
+async function resolveRuntimeProvider(env: WorkerEnv, provider: OAuthProviderRecord) {
+  return {
+    ...provider,
+    client_secret: await resolveStoredProviderSecret(provider, env),
+  }
+}
+
 async function handlePublicProviders(request: Request, env: WorkerEnv) {
-  const providers = (await listStoredProviders(env))
+  const providers = (await Promise.all((await listStoredProviders(env)).map(provider => resolveRuntimeProvider(env, provider))))
     .filter(provider => !!provider.enabled && providerConfigured(provider))
     .map(provider => ({
       id: provider.id,
@@ -429,7 +470,9 @@ async function handlePublicProviders(request: Request, env: WorkerEnv) {
 async function handleProviderConfigs(request: Request, env: WorkerEnv) {
   if (request.method === 'GET') {
     await assertAdminRequest(request, env)
-    const providers = mergeBuiltinProviders(await listStoredProviders(env)).map(provider => configView(provider, request))
+    const providers = await Promise.all(
+      mergeBuiltinProviders(await listStoredProviders(env)).map(provider => configView(provider, request, env)),
+    )
     return json({ providers })
   }
 
@@ -446,13 +489,14 @@ async function handleProviderConfigs(request: Request, env: WorkerEnv) {
         throw new Error(`登录源 ID 重复：${id}`)
       nextIds.add(id)
       const existing = stored.get(id)
+      const existingClientSecret = await resolveStoredProviderSecret(existing, env)
       const provider: OAuthProviderRecord = {
         id,
         enabled: item.enabled !== false,
         name: item.name?.trim() || existing?.name || id,
         logo_url: item.logoUrl?.trim() || existing?.logo_url || '',
         client_id: item.clientId?.trim() || existing?.client_id || '',
-        client_secret: item.clientSecret?.trim() || existing?.client_secret || '',
+        client_secret: item.clientSecret?.trim() || existingClientSecret,
         callback_url: item.callbackUrl?.trim() || existing?.callback_url || defaultCallbackUrl(request),
         authorize_url: item.authorizeUrl?.trim() || existing?.authorize_url || '',
         token_url: item.tokenUrl?.trim() || existing?.token_url || '',
@@ -478,7 +522,7 @@ async function handleProviderConfigs(request: Request, env: WorkerEnv) {
 
     return json({
       ok: true,
-      providers: (await listStoredProviders(env)).map(provider => configView(provider, request)),
+      providers: await Promise.all((await listStoredProviders(env)).map(provider => configView(provider, request, env))),
     })
   }
 
@@ -498,7 +542,8 @@ async function handleAuthorize(request: Request, env: WorkerEnv) {
 
   const payload = await readJson<AuthorizePayload>(request)
   const providerId = normalizeProviderId(payload.providerId)
-  const provider = providerId ? await getStoredProvider(env, providerId) : null
+  const storedProvider = providerId ? await getStoredProvider(env, providerId) : null
+  const provider = storedProvider ? await resolveRuntimeProvider(env, storedProvider) : null
   if (!provider || !provider.enabled || !providerConfigured(provider))
     throw new Error('登录源未启用或配置不完整')
 
@@ -521,7 +566,7 @@ async function exchangeCodeForToken(request: Request, provider: OAuthProviderRec
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     client_id: provider.client_id,
-    client_secret: provider.client_secret,
+    client_secret: provider.client_secret || '',
     code,
     redirect_uri: runtimeUrl(request, provider.callback_url),
   })
@@ -658,7 +703,8 @@ async function completeOAuthAuthorization(request: Request, env: WorkerEnv, code
   const [payload] = stateText.split('.')
   const rawState = payload ? JSON.parse(base64UrlDecodeText(payload)) as OAuthState : undefined
   const providerId = normalizeProviderId(rawState?.providerId)
-  const provider = providerId ? await getStoredProvider(env, providerId) : null
+  const storedProvider = providerId ? await getStoredProvider(env, providerId) : null
+  const provider = storedProvider ? await resolveRuntimeProvider(env, storedProvider) : null
   if (!provider || !provider.enabled || !providerConfigured(provider))
     throw new Error('登录源未启用或配置不完整')
   const oauthState = await consumeOAuthState(env, provider, stateText)

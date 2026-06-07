@@ -422,6 +422,7 @@ describe('application policy', () => {
       }],
     }
     const fetchMock = vi.mocked(fetch)
+    fetchMock.mockClear()
     fetchMock.mockImplementation(async () =>
       new Response(JSON.stringify({ state: remoteState, currentUserId: 'user_1' }), {
         headers: { 'content-type': 'application/json' },

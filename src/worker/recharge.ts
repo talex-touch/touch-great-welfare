@@ -1,6 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
 import { normalizeSystemConfig } from '~/composables/welfare'
+import { decryptSecret, encryptSecret } from './crypto'
 import {
   buildEpaySubmitUrl,
   createEpayNotifyUrl,
@@ -14,7 +15,6 @@ import {
 } from './ldc-credit'
 import { appendPointTransaction, pointTransactionExistsByRef } from './points'
 import { authenticatedUserId } from './session'
-import { decryptSecret, encryptSecret } from './crypto'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface RechargeOrder {
@@ -467,12 +467,13 @@ async function handleRechargeConfig(request: Request, env: WorkerEnv) {
   if (request.method === 'PUT') {
     await assertAdminRequest(request, env)
     const payload = await readJson<RechargeConfigPayload>(request)
+    const previous = await getEffectiveRechargeSettings(env)
     const config = {
       enabled: payload.enabled !== false,
-      gatewayBaseUrl: payload.gatewayBaseUrl?.trim() || 'https://credit.linux.do/epay',
-      pid: payload.pid?.trim() ?? '',
-      key: payload.key?.trim() ?? '',
-      pointsPerLdc: normalizePointsPerLdc(payload.pointsPerLdc),
+      gatewayBaseUrl: payload.gatewayBaseUrl?.trim() || previous.gatewayBaseUrl || 'https://credit.linux.do/epay',
+      pid: payload.pid?.trim() || previous.pid,
+      key: payload.key?.trim() || previous.key,
+      pointsPerLdc: normalizePointsPerLdc(payload.pointsPerLdc ?? previous.pointsPerLdc),
     }
 
     if (!config.pid)
