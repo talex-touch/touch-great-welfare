@@ -10,6 +10,7 @@ describe('resource application platform rules', async () => {
   const {
     aggregateResourceApplicationStatus,
     canApplyResourceType,
+    RESOURCE_POOL_CATEGORIES,
     RESOURCE_TYPE_CONFIGS,
     termsForResourceTypes,
   } = await import('../src/composables/welfare')
@@ -48,6 +49,25 @@ describe('resource application platform rules', async () => {
       expect(byType[type].availability).toBe('unavailable')
       expect(canApplyResourceType(byType[type], 5)).toBe(false)
     }
+  })
+
+  it('maintains a categorized internal resource pool for the selector', () => {
+    expect(RESOURCE_POOL_CATEGORIES.map(item => item.id)).toEqual([
+      'database_and_cache',
+      'ai_models',
+      'cloud_compute',
+      'devops_delivery',
+      'network_access',
+    ])
+    expect(RESOURCE_POOL_CATEGORIES.find(item => item.id === 'database_and_cache')?.items.map(item => item.id)).toEqual([
+      'database:mysql',
+      'database:postgresql',
+      'database:redis',
+    ])
+    expect(RESOURCE_POOL_CATEGORIES.find(item => item.id === 'ai_models')?.items.map(item => item.resourceSubtype)).toEqual([
+      'codex',
+      'gpt-pro',
+    ])
   })
 
   it('automatically merges common and resource-specific terms', () => {

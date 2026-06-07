@@ -253,7 +253,7 @@ function applicationRowTags(item: WelfareApplication) {
             :class="{ 'is-active': activeSection === 'mine' }"
             @click="setActiveSection('mine')"
           >
-            我的申请
+            资源申请历史
           </button>
           <button
             v-if="showReviewSection"
@@ -284,7 +284,7 @@ function applicationRowTags(item: WelfareApplication) {
       <TxCard v-show="activeSection === 'mine'" class="solid-panel application-list-panel" background="pure" shadow="soft" :padding="0" :radius="22">
         <div class="application-list-panel__header">
           <div class="application-section-title">
-            <h3>我的申请</h3>
+            <h3>资源申请历史</h3>
             <span>共 {{ filteredMineApplications.length }} 条</span>
           </div>
           <div class="application-filter-bar">
@@ -327,9 +327,9 @@ function applicationRowTags(item: WelfareApplication) {
               <input v-model="mineOnlyUnfinished" type="checkbox">
               <span>仅看未完成</span>
             </label>
-            <TxButton variant="primary" @click="goCreateApplication">
+            <TxButton class="application-create-button" variant="primary" @click="goCreateApplication">
               <span class="i-carbon-add" />
-              新的申请
+              新建申请
             </TxButton>
           </div>
         </div>

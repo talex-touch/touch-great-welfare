@@ -25,6 +25,7 @@ export type ResourceProvisionStatus = 'not_required' | 'pending' | 'completed'
 export type ResourceUrgency = 'normal' | 'urgent' | 'emergency'
 export type ResourceTermId = 'general_resource_terms' | 'database_security_terms' | 'llm_api_compliance_terms' | 'infrastructure_resource_terms'
 export type ResourceAvailability = 'available' | 'level_required' | 'unavailable'
+export type ResourcePoolCategoryId = 'database_and_cache' | 'ai_models' | 'cloud_compute' | 'devops_delivery' | 'network_access'
 
 export interface LlmApiModelPricing {
   key: string
@@ -70,6 +71,22 @@ export interface ResourceTermAcceptance {
   version: string
   acceptedBy: string
   acceptedAt: string
+}
+
+export interface ResourcePoolItemConfig {
+  id: string
+  resourceType: ResourceType
+  resourceSubtype: string
+  label: string
+  description: string
+}
+
+export interface ResourcePoolCategoryConfig {
+  id: ResourcePoolCategoryId
+  label: string
+  description: string
+  icon: string
+  items: ResourcePoolItemConfig[]
 }
 
 export interface ApplicationItem {
@@ -606,6 +623,7 @@ export interface SubmitResourceApplicationPayload {
   couponId?: string
   attachments?: FileLike[]
   saveAsDraft?: boolean
+  waiveRejectionReviewFee?: boolean
   powNonce?: string
   turnstileVerified?: boolean
   shareToSquare?: boolean
@@ -980,6 +998,61 @@ export const RESOURCE_TYPE_CONFIGS: ResourceTypeConfig[] = [
   { resourceType: 'k8s_namespace', displayName: 'K8s Namespace', category: 'compute', description: '命名空间、资源配额、环境和访问范围。', icon: 'i-carbon-kubernetes', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['dev', 'test', 'staging', 'prod'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
   { resourceType: 'object_storage', displayName: '对象存储', category: 'compute', description: 'Bucket、容量、权限和生命周期。', icon: 'i-carbon-cloud-storage', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['bucket', 'archive', 'public_assets'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
 ]
+export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
+  {
+    id: 'database_and_cache',
+    label: '数据库与缓存',
+    description: '按实例、库表或缓存访问方式选择所需资源。',
+    icon: 'i-carbon-data-base',
+    items: [
+      { id: 'database:mysql', resourceType: 'database', resourceSubtype: 'mysql', label: 'MySQL', description: 'MySQL 实例、库表访问或只读分析权限。' },
+      { id: 'database:postgresql', resourceType: 'database', resourceSubtype: 'postgresql', label: 'PostgreSQL', description: 'PostgreSQL 业务库、报表库或只读访问。' },
+      { id: 'database:redis', resourceType: 'database', resourceSubtype: 'redis', label: 'Redis', description: '缓存、队列和 KV 访问能力。' },
+    ],
+  },
+  {
+    id: 'ai_models',
+    label: 'AI 模型与生成能力',
+    description: '按模型种类和额度池选择所需 AI 资源。',
+    icon: 'i-carbon-ai-status',
+    items: [
+      { id: 'llm_api_quota:codex', resourceType: 'llm_api_quota', resourceSubtype: 'codex', label: 'Codex', description: '代码生成、重构、Agent 和自动化开发额度。' },
+      { id: 'llm_api_quota:gpt-pro', resourceType: 'llm_api_quota', resourceSubtype: 'gpt-pro', label: 'GPT Pro', description: '高成本推理与深度协作对话轮次资源。' },
+    ],
+  },
+  {
+    id: 'cloud_compute',
+    label: '云资源与算力',
+    description: '按主机、GPU、K8s 与对象存储等基础设施能力选择。',
+    icon: 'i-carbon-cloud-service-management',
+    items: [
+      { id: 'server:ecs', resourceType: 'server', resourceSubtype: 'ecs', label: '云服务器', description: '通用云主机、运行环境和基础算力。' },
+      { id: 'gpu:nvidia_t4', resourceType: 'gpu', resourceSubtype: 'nvidia_t4', label: 'GPU 实例', description: 'GPU 卡型、数量、时长与推理/训练用途。' },
+      { id: 'k8s_namespace:dev', resourceType: 'k8s_namespace', resourceSubtype: 'dev', label: 'K8s Namespace', description: '命名空间、资源配额和环境隔离。' },
+      { id: 'object_storage:bucket', resourceType: 'object_storage', resourceSubtype: 'bucket', label: '对象存储', description: 'Bucket、容量、权限与生命周期策略。' },
+    ],
+  },
+  {
+    id: 'devops_delivery',
+    label: 'DevOps 与交付',
+    description: '按仓库、流水线与交付能力选择协作资源。',
+    icon: 'i-carbon-continuous-deployment',
+    items: [
+      { id: 'git_repository:github', resourceType: 'git_repository', resourceSubtype: 'github', label: 'Git 仓库权限', description: '仓库只读、开发者或维护者权限。' },
+      { id: 'cicd:pipeline', resourceType: 'cicd', resourceSubtype: 'pipeline', label: 'CI/CD 权限', description: '流水线执行、部署和交付权限。' },
+    ],
+  },
+  {
+    id: 'network_access',
+    label: '域名与网络',
+    description: '按网络访问、白名单与安全边界选择权限。',
+    icon: 'i-carbon-network-4',
+    items: [
+      { id: 'vpn:personal', resourceType: 'vpn', resourceSubtype: 'personal', label: 'VPN', description: '个人或项目内网访问能力。' },
+      { id: 'ip_allowlist:office_ip', resourceType: 'ip_allowlist', resourceSubtype: 'office_ip', label: 'IP 白名单', description: '办公、服务器或第三方来源 IP 放行。' },
+    ],
+  },
+]
 export const CODEX_DEFAULT_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].defaultBudgetUsd
 export const CODEX_MIN_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].minBudgetUsd
 export const CODEX_MAX_BUDGET_USD = DEFAULT_LLM_API_MODELS[0].maxBudgetUsd
@@ -994,8 +1067,8 @@ export const STUDENT_REVIEW_FEE = 800
 export const STORAGE_EXTENSION_DAYS = 7
 export const STORAGE_EXTENSION_COST = 300
 export const REJECTION_REVIEW_FEE_RATE = 0.3
-export const REJECTION_REVIEW_FEE_MIN = 300
-export const REJECTION_REVIEW_FEE_MAX = 800
+export const REJECTION_REVIEW_FEE_MIN = 1
+export const REJECTION_REVIEW_FEE_MAX = 300
 export const REJECTION_FEE_WAIVER_BLOCK_DAYS = 3
 export const REJECTION_FRAUD_COOLDOWN_DAYS = 7
 export const MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
@@ -3510,6 +3583,10 @@ export function useWelfareStore() {
     const termsAcceptances = isDraft
       ? []
       : buildResourceTermsAcceptances(actualResourceTypes, payload.acceptedTermIds, currentUser.value.id, createdAt)
+    const rejectionReviewFeeWaived = !!payload.waiveRejectionReviewFee
+    const waiveBlockedUntil = rejectionReviewFeeWaived ? rejectionFeeWaiverBlockedUntil(currentUser.value.id) : ''
+    if (rejectionReviewFeeWaived && waiveBlockedUntil)
+      throw new Error(`认真填写承诺暂不可用，请在 ${formatDate(waiveBlockedUntil)} 后再勾选`)
 
     const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
     const application: WelfareApplication = {
@@ -3538,7 +3615,7 @@ export function useWelfareStore() {
       pricingAppliedAt: createdAt,
       aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
       rejectionReviewFee: 0,
-      rejectionReviewFeeWaived: true,
+      rejectionReviewFeeWaived,
       rejectionFraudulent: false,
       storageExtended: false,
       storageExtensionCost: 0,
@@ -3630,6 +3707,10 @@ export function useWelfareStore() {
     const promotionName = checkout && checkout.activityDiscountAmount > 0 ? resourceActivityPromotionName(payload.resourceItems, updatedAt) : undefined
     if (checkout && currentUser.value.points < checkout.cost)
       throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
+    const rejectionReviewFeeWaived = !!payload.waiveRejectionReviewFee
+    const waiveBlockedUntil = rejectionReviewFeeWaived ? rejectionFeeWaiverBlockedUntil(currentUser.value.id) : ''
+    if (rejectionReviewFeeWaived && waiveBlockedUntil)
+      throw new Error(`认真填写承诺暂不可用，请在 ${formatDate(waiveBlockedUntil)} 后再勾选`)
     const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
     application.title = title
     application.description = buildResourceDescription(payload)
@@ -3642,6 +3723,7 @@ export function useWelfareStore() {
     application.expectedEffectiveAt = payload.expectedEffectiveAt
     application.costCenter = payload.costCenter?.trim() || undefined
     application.ownerId = payload.ownerId?.trim() || currentUser.value.id
+    application.rejectionReviewFeeWaived = rejectionReviewFeeWaived
     application.selectedResourceTypes = actualResourceTypes
     application.resourceItems = resourceItems
     if (!isDraft) {

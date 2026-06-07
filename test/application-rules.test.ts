@@ -38,9 +38,11 @@ describe('application billing rules', async () => {
   } = await import('../src/composables/welfare')
 
   it('charges rejected applications with a bounded 30% AI review fee', () => {
-    expect(calculateRejectionReviewFee(800)).toBe(300)
-    expect(calculateRejectionReviewFee(1200)).toBe(360)
-    expect(calculateRejectionReviewFee(3200)).toBe(800)
+    expect(calculateRejectionReviewFee(0)).toBe(1)
+    expect(calculateRejectionReviewFee(3)).toBe(1)
+    expect(calculateRejectionReviewFee(800)).toBe(240)
+    expect(calculateRejectionReviewFee(1200)).toBe(300)
+    expect(calculateRejectionReviewFee(3200)).toBe(300)
   })
 
   it('applies the 7-day 0.1 discount activity to application prices', () => {

@@ -460,6 +460,7 @@ export const resourceApplicationForm = reactive({
   duration: RESOURCE_DEFAULT_DURATION,
   selectedResourceTypes: ['database'] as ResourceType[],
   acceptedTermIds: [] as ResourceTermId[],
+  waiveRejectionReviewFee: false,
   selectedCouponId: '',
   shareToSquare: false,
   squarePostContent: '',
@@ -790,6 +791,9 @@ export function useWelfareUiState() {
     title: applicationForm.title,
     description: applicationForm.description,
   }))
+  const currentUserRejectionFeeWaiverBlockedUntil = computed(() =>
+    welfare.currentUser.value ? welfare.rejectionFeeWaiverBlockedUntil(welfare.currentUser.value.id) : '',
+  )
   const resourceApplicationPolicyStatus = computed(() => welfare.applicationPolicyStatus('resource', {
     userId: welfare.currentUser.value?.id,
     title: resourceApplicationForm.title,
@@ -1035,8 +1039,8 @@ export function useWelfareUiState() {
     return proof
   }
 
-  function defaultLlmApiPayload() {
-    const model = resolveSelectableLlmApiModel(LLM_API_DEFAULT_MODEL_KEY, aiConfigForm.llmApiModels)
+  function defaultLlmApiPayload(modelKey?: string) {
+    const model = resolveSelectableLlmApiModel(modelKey ?? LLM_API_DEFAULT_MODEL_KEY, aiConfigForm.llmApiModels)
     return {
       model: model.key,
       modelName: model.name,
@@ -1056,7 +1060,7 @@ export function useWelfareUiState() {
     }
   }
 
-  function defaultResourcePayload(resourceType: ResourceType): Record<string, any> {
+  function defaultResourcePayload(resourceType: ResourceType, resourceSubtype?: string): Record<string, any> {
     if (resourceType === 'database') {
       return {
         name: '',
@@ -1069,7 +1073,7 @@ export function useWelfareUiState() {
       }
     }
     if (resourceType === 'llm_api_quota')
-      return defaultLlmApiPayload()
+      return defaultLlmApiPayload(resourceSubtype)
     return {
       specification: '',
       quantity: 1,
@@ -1083,18 +1087,25 @@ export function useWelfareUiState() {
     }
   }
 
-  function addResourceApplicationItem(resourceType: ResourceType) {
+  function syncSelectedResourceTypesFromItems() {
+    resourceApplicationForm.selectedResourceTypes = Array.from(new Set(resourceApplicationItems.value.map(item => item.resourceType)))
+  }
+
+  function addResourceApplicationItem(resourceType: ResourceType, options: { resourceSubtype?: string } = {}) {
     const config = RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === resourceType)
     if (!config)
       throw new Error('资源类型不存在')
     if (!resourceApplicationForm.selectedResourceTypes.includes(resourceType))
       resourceApplicationForm.selectedResourceTypes.push(resourceType)
 
-    const payload: Record<string, any> = defaultResourcePayload(resourceType)
+    const resourceSubtype = options.resourceSubtype && config.subtypes.includes(options.resourceSubtype)
+      ? options.resourceSubtype
+      : config.subtypes[0]
+    const payload: Record<string, any> = defaultResourcePayload(resourceType, resourceSubtype)
     resourceApplicationItems.value.push({
       id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       resourceType,
-      resourceSubtype: config.subtypes[0],
+      resourceSubtype,
       payload,
       requestedPermission: typeof payload.permission === 'string' ? payload.permission : undefined,
       requestedQuota: resourceType === 'llm_api_quota' ? `$${payload.budgetLimit}` : undefined,
@@ -1104,6 +1115,7 @@ export function useWelfareUiState() {
 
   function removeResourceApplicationItem(id: string) {
     resourceApplicationItems.value = resourceApplicationItems.value.filter(item => item.id !== id)
+    syncSelectedResourceTypesFromItems()
   }
 
   function ensureSelectedResourceItems() {
@@ -1132,6 +1144,7 @@ export function useWelfareUiState() {
     resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
     resourceApplicationForm.selectedResourceTypes = ['database']
     resourceApplicationForm.acceptedTermIds = []
+    resourceApplicationForm.waiveRejectionReviewFee = false
     resourceApplicationForm.selectedCouponId = ''
     resourceApplicationForm.shareToSquare = false
     resourceApplicationForm.squarePostContent = ''
@@ -1155,6 +1168,7 @@ export function useWelfareUiState() {
     resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
     resourceApplicationForm.selectedResourceTypes = [...(application.selectedResourceTypes?.length ? application.selectedResourceTypes : ['database' as ResourceType])]
     resourceApplicationForm.acceptedTermIds = application.termsAcceptances?.map(item => item.termId) ?? []
+    resourceApplicationForm.waiveRejectionReviewFee = !!application.rejectionReviewFeeWaived
     resourceApplicationForm.selectedCouponId = ''
     resourceApplicationForm.shareToSquare = false
     resourceApplicationForm.squarePostContent = ''
@@ -1189,6 +1203,7 @@ export function useWelfareUiState() {
       selectedResourceTypes: resourceApplicationForm.selectedResourceTypes,
       resourceItems: resourceApplicationItems.value,
       acceptedTermIds: resourceApplicationForm.acceptedTermIds,
+      waiveRejectionReviewFee: resourceApplicationForm.waiveRejectionReviewFee,
       couponId: saveAsDraft ? undefined : resourceApplicationForm.selectedCouponId || undefined,
       attachments: applicationFiles.value,
       saveAsDraft,
@@ -1462,11 +1477,10 @@ export function useWelfareUiState() {
 
   async function submitCrowdReviewDraft(applicationId: string) {
     const draft = crowdReviewDraftFor(applicationId)
-    const review = welfare.submitCrowdReview('pro_application', applicationId, draft.decision, draft.note)
+    welfare.submitCrowdReview('pro_application', applicationId, draft.decision, draft.note)
     delete crowdReviewDrafts[applicationId]
     await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
     await welfare.reloadWelfareState()
-    return review
   }
 
   function collaborationReviewDraftFor(applicationId: string) {
@@ -2888,6 +2902,7 @@ export function useWelfareUiState() {
     couponTemplates,
     couponCodes,
     couponRedemptions,
+    currentUserRejectionFeeWaiverBlockedUntil,
     currentUserDailyCheckIns,
     currentUserInviteCode,
     currentUserInvitationBinding,

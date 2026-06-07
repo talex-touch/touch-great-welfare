@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { RequestKind, ResourceTermId, ResourceType } from '~/composables/welfare'
+import type { RequestKind, ResourcePoolCategoryId, ResourcePoolItemConfig, ResourceTermId, ResourceType } from '~/composables/welfare'
 import { TxButton, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, canApplyResourceType, defaultLlmApiDuration, formatBytes, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
+import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, calculateRejectionReviewFee, canApplyResourceType, defaultLlmApiDuration, formatBytes, formatDate, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, REJECTION_FEE_WAIVER_BLOCK_DAYS, REJECTION_FRAUD_COOLDOWN_DAYS, REJECTION_REVIEW_FEE_MAX, REJECTION_REVIEW_FEE_MIN, REJECTION_REVIEW_FEE_RATE, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, RESOURCE_POOL_CATEGORIES, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
@@ -30,6 +30,7 @@ const {
   activeRequestCount,
   canCreateRequest,
   selectableLlmApiModels,
+  currentUserRejectionFeeWaiverBlockedUntil,
   userLevelCard,
   submitResourceApplication,
   addResourceApplicationItem,
@@ -51,8 +52,11 @@ type ApplicationCreateMode = Extract<RequestKind, 'image' | 'pro' | 'resource'>
 const applicationMode = ref<ApplicationCreateMode>('resource')
 const expectedDatePickerVisible = ref(false)
 const isTermsDialogOpen = ref(false)
+const isRejectionFeeDetailsOpen = ref(false)
 const activeResourceTermTab = ref<ResourceTermId | ''>('')
 const submitReadyMessage = ref('')
+const resourcePoolSearch = ref('')
+const expandedResourcePoolCategoryIds = ref<ResourcePoolCategoryId[]>(RESOURCE_POOL_CATEGORIES.map(category => category.id))
 const expectedEffectivePreset = ref('after_approval')
 const applicationDraftKey = 'welfare:resource-application-draft'
 let previousBodyOverflow = ''
@@ -75,7 +79,6 @@ const editingDraftApplication = computed(() => {
 })
 const isEditingDraft = computed(() => !!editingDraftApplication.value)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
-const visibleResourceTypeConfigs = computed(() => resourceTypeConfigs.value.filter(config => isResourceTypeAvailable(config.resourceType)))
 const applicationModeItems: Array<{ type: ApplicationCreateMode, label: string, title: string, description: string, icon: string }> = [
   { type: 'image', label: 'Image', title: 'Image 图片资源', description: '用于素材图、海报生成', icon: 'i-carbon-image' },
   { type: 'pro', label: 'Pro', title: 'Pro 高级权益', description: '用于高级协作与高级能力', icon: 'i-carbon-star' },
@@ -100,6 +103,13 @@ const activeResourceTerm = computed(() =>
   selectedResourceTerms.value.find(term => term.id === activeResourceTermTab.value)
   ?? selectedResourceTerms.value[0],
 )
+const rejectionFeeWaiverBlockedUntil = computed(() => currentUserRejectionFeeWaiverBlockedUntil.value)
+const isRejectionFeeWaiverBlocked = computed(() => !!rejectionFeeWaiverBlockedUntil.value)
+const rejectionFeeWaiverBlockedUntilText = computed(() => rejectionFeeWaiverBlockedUntil.value ? formatDate(rejectionFeeWaiverBlockedUntil.value) : '')
+const rejectionFeeRateText = computed(() => `${Math.round(REJECTION_REVIEW_FEE_RATE * 100)}%`)
+const currentRejectionFeeBaseCost = computed(() => isClassicApplication.value ? selectedPrepaidCost.value : checkoutPayableEstimate.value)
+const currentEstimatedRejectionReviewFee = computed(() => calculateRejectionReviewFee(currentRejectionFeeBaseCost.value))
+const currentRejectionFeeScenario = computed(() => applicationMode.value === 'resource' ? '本单资源申请' : `${currentModeTitle.value} 申请`)
 const resourceTermDetailMap: Record<ResourceTermId, string[]> = {
   general_resource_terms: [
     '适用范围：本条款适用于平台向申请人临时或定向提供的数据库、模型额度、网络访问、计算、存储、仓库、流水线等全部资源。申请人提交申请即视为确认资源仅用于申请单中写明的公益、研发、学习、开源或经审批认可的相关场景。',
@@ -167,6 +177,33 @@ const groupedResourceItems = computed(() => resourceApplicationForm.selectedReso
   config: resourceTypeConfigs.value.find(item => item.resourceType === resourceType),
   items: resourceApplicationItems.value.filter(item => item.resourceType === resourceType),
 })).filter(group => group.config))
+const normalizedResourcePoolSearch = computed(() => resourcePoolSearch.value.trim().toLowerCase())
+const selectedResourcePoolItemIds = computed(() => new Set(resourceApplicationItems.value.map(item => `${item.resourceType}:${item.resourceSubtype}`)))
+const resourcePoolCategories = computed(() => RESOURCE_POOL_CATEGORIES.map((category) => {
+  const items = category.items
+    .map((item) => {
+      const config = resourceTypeConfigs.value.find(candidate => candidate.resourceType === item.resourceType)
+      const matchesSearch = !normalizedResourcePoolSearch.value
+        || item.label.toLowerCase().includes(normalizedResourcePoolSearch.value)
+        || item.description.toLowerCase().includes(normalizedResourcePoolSearch.value)
+        || category.label.toLowerCase().includes(normalizedResourcePoolSearch.value)
+      return {
+        ...item,
+        config,
+        matchesSearch,
+        selected: selectedResourcePoolItemIds.value.has(item.id),
+        available: !!config && canApplyResourceType(config, currentUserLevelPriority.value),
+      }
+    })
+    .filter(item => item.matchesSearch)
+
+  return {
+    ...category,
+    items,
+    selectedCount: items.filter(item => item.selected).length,
+    totalCount: category.items.length,
+  }
+}).filter(category => category.items.length))
 
 const databasePermissionOptions = [
   { value: 'readonly', label: '只读' },
@@ -525,7 +562,11 @@ watch(selectedResourceTerms, (terms) => {
 })
 
 watch(selectableLlmApiModels, sanitizeLlmItems)
-watch(isTermsDialogOpen, setTermsDialogScrollLock)
+watch(normalizedResourcePoolSearch, (value) => {
+  if (value)
+    expandedResourcePoolCategoryIds.value = resourcePoolCategories.value.map(category => category.id)
+})
+watch(() => isTermsDialogOpen.value || isRejectionFeeDetailsOpen.value, setTermsDialogScrollLock)
 
 function applyExpectedEffectivePreset(value: string | number) {
   const preset = String(value)
@@ -630,8 +671,8 @@ function resourceConfig(resourceType: ResourceType) {
   return resourceTypeConfigs.value.find(item => item.resourceType === resourceType)
 }
 
-function isSelectedResourceType(resourceType: ResourceType) {
-  return resourceApplicationForm.selectedResourceTypes.includes(resourceType)
+function isSelectedResourcePoolItem(item: ResourcePoolItemConfig) {
+  return selectedResourcePoolItemIds.value.has(item.id)
 }
 
 function isResourceTypeAvailable(resourceType: ResourceType) {
@@ -641,22 +682,47 @@ function isResourceTypeAvailable(resourceType: ResourceType) {
 
 function sanitizeSelectedResourceTypes() {
   const allowed = resourceApplicationForm.selectedResourceTypes.filter(isResourceTypeAvailable)
-  resourceApplicationForm.selectedResourceTypes = allowed.length ? allowed : ['database']
+  resourceApplicationForm.selectedResourceTypes = allowed
   resourceApplicationItems.value = resourceApplicationItems.value.filter(item => isResourceTypeAvailable(item.resourceType))
   ensureSelectedResourceItems()
 }
 
-function toggleResourceType(resourceType: ResourceType) {
-  if (!isResourceTypeAvailable(resourceType))
+function isResourcePoolCategoryExpanded(categoryId: ResourcePoolCategoryId) {
+  return expandedResourcePoolCategoryIds.value.includes(categoryId)
+}
+
+function toggleResourcePoolCategory(categoryId: ResourcePoolCategoryId) {
+  expandedResourcePoolCategoryIds.value = isResourcePoolCategoryExpanded(categoryId)
+    ? expandedResourcePoolCategoryIds.value.filter(item => item !== categoryId)
+    : [...expandedResourcePoolCategoryIds.value, categoryId]
+}
+
+function resourcePoolItemDisabledReason(item: ResourcePoolItemConfig) {
+  const config = resourceConfig(item.resourceType)
+  if (!config)
+    return '资源类型未配置'
+  if (config.availability === 'unavailable')
+    return config.unavailableReason || '暂时不提供申请'
+  if (config.availability === 'level_required' && currentUserLevelPriority.value < (config.minUserLevelPriority ?? 0))
+    return config.unavailableReason || `平台等级 Lv${config.minUserLevelPriority} 开放`
+  return ''
+}
+
+function removeResourcePoolItem(item: ResourcePoolItemConfig) {
+  resourceApplicationItems.value = resourceApplicationItems.value.filter(candidate =>
+    !(candidate.resourceType === item.resourceType && candidate.resourceSubtype === item.resourceSubtype),
+  )
+  resourceApplicationForm.selectedResourceTypes = Array.from(new Set(resourceApplicationItems.value.map(candidate => candidate.resourceType)))
+}
+
+function toggleResourcePoolItem(item: ResourcePoolItemConfig) {
+  if (!isResourceTypeAvailable(item.resourceType))
     return
   const shouldKeepTermsAccepted = hasAcceptedAllResourceTerms.value
-  const exists = isSelectedResourceType(resourceType)
-  if (exists && resourceApplicationForm.selectedResourceTypes.length === 1)
-    return
-  resourceApplicationForm.selectedResourceTypes = exists
-    ? resourceApplicationForm.selectedResourceTypes.filter(item => item !== resourceType)
-    : [...resourceApplicationForm.selectedResourceTypes, resourceType]
-  ensureSelectedResourceItems()
+  if (isSelectedResourcePoolItem(item))
+    removeResourcePoolItem(item)
+  else
+    addResourceApplicationItem(item.resourceType, { resourceSubtype: item.resourceSubtype })
   setRequiredResourceTermsAccepted(shouldKeepTermsAccepted)
 }
 
@@ -679,6 +745,14 @@ function openTermsDialog() {
 
 function closeTermsDialog() {
   isTermsDialogOpen.value = false
+}
+
+function openRejectionFeeDetails() {
+  isRejectionFeeDetailsOpen.value = true
+}
+
+function closeRejectionFeeDetails() {
+  isRejectionFeeDetailsOpen.value = false
 }
 
 function selectResourceTermTab(termId: ResourceTermId) {
@@ -733,6 +807,8 @@ function classicSubmissionBlockReason() {
     return selectedApplicationPolicyStatus.value.reason || '当前暂不满足提交条件'
   if (selectedApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
     return '请先完成提交安全校验'
+  if (applicationForm.waiveRejectionReviewFee && isRejectionFeeWaiverBlocked.value)
+    return `认真填写承诺暂不可用，请在 ${rejectionFeeWaiverBlockedUntilText.value} 后再勾选`
   if (!hasCurrentUserPointBalance(selectedPrepaidCost.value))
     return `积分不足，本次申请需要预扣 ${formatPoints(selectedPrepaidCost.value)}`
 
@@ -762,6 +838,8 @@ function resourceSubmissionBlockReason() {
     return resourceApplicationPolicyStatus.value.reason || '当前暂不满足提交条件'
   if (resourceApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
     return '请先完成提交安全校验'
+  if (resourceApplicationForm.waiveRejectionReviewFee && isRejectionFeeWaiverBlocked.value)
+    return `认真填写承诺暂不可用，请在 ${rejectionFeeWaiverBlockedUntilText.value} 后再勾选`
   if (!hasCurrentUserPointBalance(checkoutPayableEstimate.value))
     return `积分不足，本单需要预扣 ${formatPoints(checkoutPayableEstimate.value)}`
 
@@ -933,6 +1011,25 @@ onBeforeUnmount(() => {
           </span>
         </label>
 
+        <div class="option-check" :class="{ 'is-disabled': isRejectionFeeWaiverBlocked }">
+          <TxCheckbox v-model="applicationForm.waiveRejectionReviewFee" variant="checkmark" :disabled="isRejectionFeeWaiverBlocked" aria-label="认真填写承诺" />
+          <span>
+            <b>认真填写承诺</b>
+            <small v-if="isRejectionFeeWaiverBlocked">
+              当前不可勾选，请在 {{ rejectionFeeWaiverBlockedUntilText }} 后再使用。
+              <button type="button" class="waiver-detail-button" @click.prevent.stop="openRejectionFeeDetails">
+                详细信息
+              </button>
+            </small>
+            <small v-else>
+              若普通退回，可免除本次 AI 审核手续费；若被判定造假或不实包装，仍会扣费并触发限制。
+              <button type="button" class="waiver-detail-button" @click.prevent.stop="openRejectionFeeDetails">
+                详细信息
+              </button>
+            </small>
+          </span>
+        </div>
+
         <div v-if="(selectedApplicationPolicyStatus.turnstileEnabled && selectedApplicationPolicyStatus.turnstileSiteKey) || applicationSecurityForm.message" class="resource-confirm-card resource-security-card">
           <TurnstileChallenge
             v-if="selectedApplicationPolicyStatus.turnstileEnabled && selectedApplicationPolicyStatus.turnstileSiteKey"
@@ -987,25 +1084,60 @@ onBeforeUnmount(() => {
             </span>
           </div>
 
-          <div class="resource-type-grid">
-            <button
-              v-for="config in visibleResourceTypeConfigs"
-              :key="config.resourceType"
-              type="button"
-              class="resource-type-card"
-              :class="{ 'is-selected': isSelectedResourceType(config.resourceType) }"
-              @click="toggleResourceType(config.resourceType)"
-            >
-              <div class="resource-type-card__top">
-                <span class="resource-type-icon" :class="config.icon" />
-                <span class="resource-type-approver">{{ config.approverGroup }}</span>
+          <div class="resource-pool-card">
+            <div class="resource-pool-card__head">
+              <div>
+                <h3>资源选择</h3>
+                <p>按分类展开并勾选所需资源，内部资源池统一维护。</p>
               </div>
-              <div class="resource-type-title">
-                {{ config.displayName }}
+            </div>
+            <label class="resource-pool-search">
+              <span class="i-carbon-search" />
+              <TxInput v-model="resourcePoolSearch" placeholder="搜索资源" />
+            </label>
+
+            <div class="resource-pool-groups">
+              <section v-for="category in resourcePoolCategories" :key="category.id" class="resource-pool-group">
+                <button type="button" class="resource-pool-group__header" @click="toggleResourcePoolCategory(category.id)">
+                  <span class="resource-pool-group__title">
+                    <i class="resource-pool-group__arrow" :class="isResourcePoolCategoryExpanded(category.id) ? 'i-carbon-chevron-down' : 'i-carbon-chevron-right'" />
+                    <span class="resource-pool-group__icon" :class="category.icon" />
+                    <span>
+                      <b>{{ category.label }}</b>
+                      <small>{{ category.description }}</small>
+                    </span>
+                  </span>
+                  <span class="resource-pool-group__count">{{ category.selectedCount }}/{{ category.totalCount }}</span>
+                </button>
+
+                <div v-if="isResourcePoolCategoryExpanded(category.id)" class="resource-pool-items">
+                  <button
+                    v-for="item in category.items"
+                    :key="item.id"
+                    type="button"
+                    class="resource-pool-item"
+                    :class="{ 'is-selected': item.selected, 'is-disabled': !item.available }"
+                    :disabled="!item.available"
+                    @click="toggleResourcePoolItem(item)"
+                  >
+                    <TxCheckbox :model-value="item.selected" variant="checkmark" :disabled="!item.available" />
+                    <span class="resource-pool-item__content">
+                      <b>{{ item.label }}</b>
+                      <small>{{ item.description }}</small>
+                      <small class="resource-pool-item__meta">
+                        {{ item.config?.approverGroup || '管理员' }}
+                        <template v-if="resourcePoolItemDisabledReason(item)">
+                          · {{ resourcePoolItemDisabledReason(item) }}
+                        </template>
+                      </small>
+                    </span>
+                  </button>
+                </div>
+              </section>
+              <div v-if="!resourcePoolCategories.length" class="resource-pool-empty">
+                没有匹配的资源，请换个关键词继续检索。
               </div>
-              <p>{{ config.description }}</p>
-              <span class="resource-type-check" :class="isSelectedResourceType(config.resourceType) ? 'i-carbon-checkmark-filled' : ''" />
-            </button>
+            </div>
           </div>
         </aside>
 
@@ -1295,6 +1427,24 @@ onBeforeUnmount(() => {
                     placeholder="说明为什么这个领域值得支持，或补充项目背景。留空时使用申请说明。"
                   />
                 </label>
+                <div class="option-check mt-3" :class="{ 'is-disabled': isRejectionFeeWaiverBlocked }">
+                  <TxCheckbox v-model="resourceApplicationForm.waiveRejectionReviewFee" variant="checkmark" :disabled="isRejectionFeeWaiverBlocked" aria-label="认真填写承诺" />
+                  <span>
+                    <b>认真填写承诺</b>
+                    <small v-if="isRejectionFeeWaiverBlocked">
+                      当前不可勾选，请在 {{ rejectionFeeWaiverBlockedUntilText }} 后再使用。
+                      <button type="button" class="waiver-detail-button" @click.prevent.stop="openRejectionFeeDetails">
+                        详细信息
+                      </button>
+                    </small>
+                    <small v-else>
+                      若普通退回，可免除本次 AI 审核手续费；若管理员判定存在造假或不实包装，仍会扣费并触发限制。
+                      <button type="button" class="waiver-detail-button" @click.prevent.stop="openRejectionFeeDetails">
+                        详细信息
+                      </button>
+                    </small>
+                  </span>
+                </div>
                 <div class="order-total-table mt-3">
                   <div>
                     <span>原价合计</span>
@@ -1401,6 +1551,91 @@ onBeforeUnmount(() => {
               </li>
             </ol>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isRejectionFeeDetailsOpen" class="px-4 py-6 bg-slate-950/46 flex items-center inset-0 justify-center fixed z-50 backdrop-blur-sm" @click.self="closeRejectionFeeDetails">
+      <div class="dialog-surface waiver-detail-dialog solid-panel p-6 rounded-3xl max-h-[calc(100vh-3rem)] max-w-3xl w-full overflow-auto">
+        <div class="flex gap-4 items-start justify-between">
+          <div>
+            <h3 class="text-2xl fw-900 tracking-tight">
+              认真填写承诺说明
+            </h3>
+            <p class="field-hint mt-2">
+              这项承诺只影响退回时的 AI 审核手续费，不影响管理员是否通过申请。
+            </p>
+          </div>
+          <button class="icon-btn shrink-0" title="关闭" @click="closeRejectionFeeDetails">
+            <span class="i-carbon-close" />
+          </button>
+        </div>
+
+        <div class="waiver-fee-summary mt-5">
+          <div>
+            <span>当前申请</span>
+            <b>{{ currentRejectionFeeScenario }}</b>
+          </div>
+          <div>
+            <span>计费基数</span>
+            <b>{{ formatPoints(currentRejectionFeeBaseCost) }}</b>
+          </div>
+          <div>
+            <span>普通退回手续费</span>
+            <b>{{ formatPoints(currentEstimatedRejectionReviewFee) }}</b>
+          </div>
+        </div>
+
+        <div class="waiver-detail-grid mt-5">
+          <section class="waiver-detail-section">
+            <h4>具体怎么收</h4>
+            <p>
+              未勾选承诺时，申请被普通退回会先返还申请预扣，再扣除 AI 审核手续费。手续费按最终预扣金额的 {{ rejectionFeeRateText }} 计算，最低 {{ formatPoints(REJECTION_REVIEW_FEE_MIN) }}，最高 {{ formatPoints(REJECTION_REVIEW_FEE_MAX) }}。
+            </p>
+            <p>
+              按当前 {{ currentRejectionFeeScenario }} 的计费基数 {{ formatPoints(currentRejectionFeeBaseCost) }} 估算，若普通退回，手续费为 {{ formatPoints(currentEstimatedRejectionReviewFee) }}。
+            </p>
+          </section>
+
+          <section class="waiver-detail-section">
+            <h4>勾选后免什么</h4>
+            <p>
+              勾选并提交后，如果管理员只是认为材料不足、表达不清、必要性不够或资源暂不适配，本次普通退回免除 AI 审核手续费。
+            </p>
+            <p>
+              免除后会进入 {{ REJECTION_FEE_WAIVER_BLOCK_DAYS }} 天冷却期，这段时间不能再次勾选认真填写承诺，但仍可按平台规则提交申请。
+            </p>
+          </section>
+
+          <section class="waiver-detail-section">
+            <h4>为什么要收</h4>
+            <p>
+              每次申请都会消耗 AI 初审、附件处理、人工复核和资源排队成本。手续费用于覆盖明显无效申请造成的审核成本，避免重复灌水、空泛描述、批量试探和低质量申请占用公益资源。
+            </p>
+          </section>
+
+          <section class="waiver-detail-section">
+            <h4>什么情况仍会限制</h4>
+            <p>
+              如果管理员判定存在造假、不实包装、冒用材料、虚构项目、隐瞒关键事实或把 AI 包装内容冒充本人经历，即使已勾选承诺，仍会扣除 {{ rejectionFeeRateText }} AI 审核手续费。
+            </p>
+            <p>
+              造假或不实包装会触发 {{ REJECTION_FRAUD_COOLDOWN_DAYS }} 天同类申请限制，同时 {{ REJECTION_FEE_WAIVER_BLOCK_DAYS }} 天内不能再次勾选认真填写承诺。
+            </p>
+          </section>
+        </div>
+
+        <div class="waiver-detail-notice mt-5">
+          <b>使用建议</b>
+          <p>
+            只有在你已经认真说明项目背景、用途、必要性、资源范围、风险边界和附件材料时再勾选。它保护认真申请被普通退回时不额外扣费，不是通过保证。
+          </p>
+        </div>
+
+        <div class="mt-5 flex justify-end">
+          <TxButton variant="primary" @click="closeRejectionFeeDetails">
+            我知道了
+          </TxButton>
         </div>
       </div>
     </div>
