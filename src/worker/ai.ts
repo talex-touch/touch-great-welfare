@@ -111,6 +111,23 @@ interface ProvisionApplicationPayload {
   itemId?: string
 }
 
+type ResourceProvisionResultItem
+  = | {
+    itemId: string
+    provider: 'sub2api'
+    key: Awaited<ReturnType<typeof createSub2ApiKeyForUser>>
+  }
+  | {
+    itemId: string
+    provider: 'database'
+    database: Awaited<ReturnType<typeof createDatabaseForResourceItem>>
+  }
+
+interface ResourceProvisionFailure {
+  itemId: string
+  error: string
+}
+
 interface OpenAiImageResponse {
   data?: Array<{
     b64_json?: string
@@ -1025,43 +1042,35 @@ async function provisionResourceApplication(
   if (!items.length)
     return { status: 'skipped' as const, provider: 'resource' as const, applicationId: application.id, items: [] }
 
-  const results = []
-  const failures: Array<{ itemId: string, error: string }> = []
+  const results: ResourceProvisionResultItem[] = []
+  const failures: ResourceProvisionFailure[] = []
   for (const item of items) {
     try {
       if (item.resourceType === 'llm_api_quota') {
         const key = await createSub2ApiKeyForUser(env, user, sub2ApiPayloadFromResourceItem(item))
-        item.provisionStatus = 'completed'
-        item.provisionCompletedAt = now()
-        item.provisionNote = `Sub2API 自动发放：${key.keyMasked}，额度 $${key.quotaUsd}，有效期 ${key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`
-        item.updatedAt = item.provisionCompletedAt
-        results.push({ itemId: item.id, provider: 'sub2api' as const, key })
+        const result = { itemId: item.id, provider: 'sub2api' as const, key }
+        applyResourceProvisionResult(item, result)
+        results.push(result)
         continue
       }
 
       const database = await createDatabaseForResourceItem(env, { applicationId: application.id, item, user })
-      item.provisionStatus = 'completed'
-      item.provisionCompletedAt = now()
-      const secretNotice = database.password ? '明文密码仅在本次发放响应中返回。' : '已复用现有活跃绑定，明文密码不再返回。'
-      item.provisionNote = `数据库自动发放：${database.databaseName} / ${database.username} / ${database.connectionUrlMasked}，权限 ${database.permission}，有效期 ${database.expiresAt || '按默认配置'}。${secretNotice}`
-      item.updatedAt = item.provisionCompletedAt
-      results.push({ itemId: item.id, provider: 'database' as const, database })
+      const result = { itemId: item.id, provider: 'database' as const, database }
+      applyResourceProvisionResult(item, result)
+      results.push(result)
     }
     catch (error) {
       const message = error instanceof Error ? error.message : '自动发放失败'
-      item.provisionStatus = 'pending'
-      item.provisionNote = `自动发放失败，待人工处理：${message}`
-      item.updatedAt = now()
-      failures.push({ itemId: item.id, error: message })
+      const failure = { itemId: item.id, error: message }
+      applyResourceProvisionFailure(item, failure)
+      failures.push(failure)
     }
   }
 
   if (!results.length) {
-    const errorText = failures.length === 1
-      ? failures[0].error
-      : failures.map(item => `${item.itemId}: ${item.error}`).join('；') || '自动发放失败'
-    appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(errorText)}</p>`)
-    await writeWelfareState(env, state, { expectedVersion })
+    const errorText = resourceProvisionFailureText(failures)
+    appendResourceProvisionMessage(application, adminUserId, results, failures)
+    await writeResourceProvisionState(env, state, application.id, adminUserId, expectedVersion, results, failures)
     return {
       status: 'pending_manual' as const,
       applicationId: application.id,
@@ -1069,9 +1078,8 @@ async function provisionResourceApplication(
     }
   }
 
-  const failureText = failures.length ? `，${failures.length} 个资源明细待人工处理` : ''
-  appendProvisionMessage(application, adminUserId, `<p><strong>资源自动发放：</strong>已完成 ${results.length} 个资源明细${failureText}。</p>`)
-  await writeWelfareState(env, state, { expectedVersion })
+  appendResourceProvisionMessage(application, adminUserId, results, failures)
+  await writeResourceProvisionState(env, state, application.id, adminUserId, expectedVersion, results, failures)
   return {
     status: 'provisioned' as const,
     provider: 'resource' as const,
@@ -1079,6 +1087,88 @@ async function provisionResourceApplication(
     items: results,
     failures,
   }
+}
+
+function resourceProvisionFailureText(failures: ResourceProvisionFailure[]) {
+  return failures.length === 1
+    ? failures[0].error
+    : failures.map(item => `${item.itemId}: ${item.error}`).join('；') || '自动发放失败'
+}
+
+function appendResourceProvisionMessage(
+  application: WelfareApplication,
+  adminUserId: string,
+  results: ResourceProvisionResultItem[],
+  failures: ResourceProvisionFailure[],
+) {
+  if (!results.length) {
+    appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(resourceProvisionFailureText(failures))}</p>`)
+    return
+  }
+
+  const failureText = failures.length ? `，${failures.length} 个资源明细待人工处理` : ''
+  appendProvisionMessage(application, adminUserId, `<p><strong>资源自动发放：</strong>已完成 ${results.length} 个资源明细${failureText}。</p>`)
+}
+
+function applyResourceProvisionResult(item: NonNullable<WelfareApplication['resourceItems']>[number], result: ResourceProvisionResultItem) {
+  item.provisionStatus = 'completed'
+  item.provisionCompletedAt = now()
+  item.updatedAt = item.provisionCompletedAt
+
+  if (result.provider === 'sub2api') {
+    item.provisionNote = `Sub2API 自动发放：${result.key.keyMasked}，额度 $${result.key.quotaUsd}，有效期 ${result.key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`
+    return
+  }
+
+  const secretNotice = result.database.password ? '明文密码仅在本次发放响应中返回。' : '已复用现有活跃绑定，明文密码不再返回。'
+  item.provisionNote = `数据库自动发放：${result.database.databaseName} / ${result.database.username} / ${result.database.connectionUrlMasked}，权限 ${result.database.permission}，有效期 ${result.database.expiresAt || '按默认配置'}。${secretNotice}`
+}
+
+function applyResourceProvisionFailure(item: NonNullable<WelfareApplication['resourceItems']>[number], failure: ResourceProvisionFailure) {
+  item.provisionStatus = 'pending'
+  item.provisionNote = `自动发放失败，待人工处理：${failure.error}`
+  item.updatedAt = now()
+}
+
+async function writeResourceProvisionState(
+  env: WorkerEnv,
+  state: WelfareState,
+  applicationId: string,
+  adminUserId: string,
+  expectedVersion: number,
+  results: ResourceProvisionResultItem[],
+  failures: ResourceProvisionFailure[],
+) {
+  try {
+    await writeWelfareState(env, state, { expectedVersion })
+    return
+  }
+  catch (error) {
+    if (!isStateVersionConflict(error))
+      throw error
+  }
+
+  const latestRecord = await readWelfareStateRecord(env)
+  const latestState = latestRecord.state as Partial<WelfareState>
+  assertWelfareState(latestState)
+  const latestApplication = latestState.applications.find(item => item.id === applicationId)
+  if (!latestApplication)
+    throw new Error('申请不存在')
+
+  for (const result of results) {
+    const item = latestApplication.resourceItems?.find(candidate => candidate.id === result.itemId)
+    if (item && item.provisionStatus !== 'completed')
+      applyResourceProvisionResult(item, result)
+  }
+
+  for (const failure of failures) {
+    const item = latestApplication.resourceItems?.find(candidate => candidate.id === failure.itemId)
+    if (item && item.provisionStatus !== 'completed')
+      applyResourceProvisionFailure(item, failure)
+  }
+
+  appendResourceProvisionMessage(latestApplication, adminUserId, results, failures)
+  await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
 }
 
 async function markProvisionPending(

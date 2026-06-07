@@ -37,17 +37,19 @@ function createMemoryD1(state: WelfareState) {
   let appVersion = 1
   let databaseConfig: Record<string, unknown> | null = null
   const bindings: Record<string, unknown>[] = []
+  const data = {
+    get state() {
+      return appState
+    },
+    set state(value: WelfareState) {
+      appState = value
+    },
+    bindings,
+    conflictAfterNextBindingInsert: false,
+  }
 
   return {
-    data: {
-      get state() {
-        return appState
-      },
-      set state(value: WelfareState) {
-        appState = value
-      },
-      bindings,
-    },
+    data,
     prepare(query: string) {
       return {
         values: [] as unknown[],
@@ -83,6 +85,10 @@ function createMemoryD1(state: WelfareState) {
               expires_at: this.values[11],
               status: 'active',
             })
+            if (data.conflictAfterNextBindingInsert) {
+              data.conflictAfterNextBindingInsert = false
+              appVersion += 1
+            }
           }
           if (query.includes('update welfare_app_state')) {
             if (appVersion !== Number(this.values[3]))
@@ -563,5 +569,50 @@ describe('database resource provisioning', () => {
     expect(result.databaseName).toBe('existing_orders')
     expect(poolQueries.some(item => item.sql.includes('create database'))).toBe(false)
     expect(poolQueries.some(item => item.sql.includes('create role'))).toBe(false)
+  })
+
+  it('keeps first-use database secrets when state write conflicts after binding creation', async () => {
+    const d1 = createMemoryD1(createState())
+    d1.data.conflictAfterNextBindingInsert = true
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+      }),
+    }), env)
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    const result = await response.json() as {
+      status: string
+      items: Array<{ provider: string, database: { password?: string, connectionUrl?: string } }>
+    }
+    expect(result.status).toBe('provisioned')
+    expect(result.items[0].database.password).toBeTruthy()
+    expect(result.items[0].database.connectionUrl).toContain(result.items[0].database.password!)
+    expect(d1.data.bindings).toHaveLength(1)
+    expect(poolQueries.filter(item => item.sql.includes('create role "approved_reader"'))).toHaveLength(1)
+
+    const updatedState = await readWelfareState(env)
+    const resourceItem = updatedState.applications[0].resourceItems?.[0]
+    expect(resourceItem?.provisionStatus).toBe('completed')
+    expect(resourceItem?.provisionNote).toContain('明文密码仅在本次发放响应中返回')
+    expect(resourceItem?.provisionNote).not.toContain(result.items[0].database.password)
   })
 })
