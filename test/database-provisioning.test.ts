@@ -2,12 +2,15 @@ import type { WelfareState } from '../src/composables/welfare'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const poolQueries: Array<{ sql: string, values?: unknown[] }> = []
+let onAdvisoryLock: (() => void) | undefined
 
 vi.mock('pg', () => {
   return {
     Pool: class MockPool {
       async query(sql: string, values?: unknown[]) {
         poolQueries.push({ sql, values })
+        if (sql.includes('pg_advisory_lock'))
+          onAdvisoryLock?.()
         if (sql.includes('from pg_database'))
           return { rowCount: 0, rows: [] }
         if (sql.includes('from pg_roles'))
@@ -25,7 +28,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 ))
 
 const { handleAiRequest } = await import('../src/worker/ai')
-const { handleDatabaseProvisionRequest } = await import('../src/worker/database-provisioning')
+const { createDatabaseForResourceItem, handleDatabaseProvisionRequest } = await import('../src/worker/database-provisioning')
 const { createSessionCookie } = await import('../src/worker/session')
 const { readWelfareState } = await import('../src/worker/welfare-state')
 
@@ -243,6 +246,7 @@ function createState(): WelfareState {
 describe('database resource provisioning', () => {
   beforeEach(() => {
     poolQueries.length = 0
+    onAdvisoryLock = undefined
   })
 
   it('creates a PostgreSQL database binding for approved database resource items', async () => {
@@ -395,5 +399,59 @@ describe('database resource provisioning', () => {
     expect(new Set(usernames).size).toBe(2)
     expect(databaseNames.every(name => name.length <= 63)).toBe(true)
     expect(usernames.every(name => name.length <= 63)).toBe(true)
+  })
+
+  it('reuses a binding created while waiting for the database provision lock', async () => {
+    const state = createState()
+    const d1 = createMemoryD1(state)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+      }),
+    }), env)
+
+    onAdvisoryLock = () => {
+      if (d1.data.bindings.length)
+        return
+      d1.data.bindings.push({
+        id: 'dbp_existing',
+        user_id: 'user_1',
+        application_id: 'app_1',
+        item_id: 'item_1',
+        database_type: 'postgresql',
+        database_name: 'existing_orders',
+        username: 'existing_reader',
+        password_hash: 'hash',
+        connection_url_encrypted: 'encrypted',
+        connection_url_masked: 'postgresql://existing_reader:****@db.example.com:5432/existing_orders',
+        permission: 'readonly',
+        expires_at: '2026-06-22T00:00:00.000Z',
+        status: 'active',
+      })
+    }
+
+    const result = await createDatabaseForResourceItem(env, {
+      applicationId: 'app_1',
+      item: state.applications[0].resourceItems![0],
+      user: state.users[1],
+    })
+
+    expect(result.reused).toBe(true)
+    expect(result.password).toBeUndefined()
+    expect(result.databaseName).toBe('existing_orders')
+    expect(poolQueries.some(item => item.sql.includes('create database'))).toBe(false)
+    expect(poolQueries.some(item => item.sql.includes('create role'))).toBe(false)
   })
 })

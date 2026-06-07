@@ -100,14 +100,18 @@ function normalizeNamePart(value: unknown, fallback: string, maxLength = 32) {
   return normalized || fallback
 }
 
-function stableIdentifierHash(parts: unknown[]) {
+function stableHashInt(parts: unknown[]) {
   const text = parts.map(part => String(part ?? '')).join('|')
   let hash = 2166136261
   for (let index = 0; index < text.length; index++) {
     hash ^= text.charCodeAt(index)
     hash = Math.imul(hash, 16777619)
   }
-  return (hash >>> 0).toString(36).padStart(7, '0').slice(0, 7)
+  return hash | 0
+}
+
+function stableIdentifierHash(parts: unknown[]) {
+  return (stableHashInt(parts) >>> 0).toString(36).padStart(7, '0').slice(0, 7)
 }
 
 function composedIdentifier(parts: unknown[], fallback: string) {
@@ -291,6 +295,26 @@ async function withRootPool<T>(rootUrl: string, run: (pool: Pool) => Promise<T>)
   finally {
     await pool.end().catch(() => undefined)
   }
+}
+
+function advisoryLockKeys(applicationId: string, itemId: string) {
+  return [
+    stableHashInt(['database-provision', applicationId]),
+    stableHashInt(['database-provision', applicationId, itemId]),
+  ]
+}
+
+async function withDatabaseProvisionLock<T>(rootUrl: string, applicationId: string, itemId: string, run: () => Promise<T>) {
+  return withRootPool(rootUrl, async (pool) => {
+    const keys = advisoryLockKeys(applicationId, itemId)
+    await pool.query('select pg_advisory_lock($1, $2)', keys)
+    try {
+      return await run()
+    }
+    finally {
+      await pool.query('select pg_advisory_unlock($1, $2)', keys).catch(() => undefined)
+    }
+  })
 }
 
 function rootUrlForDatabase(rootUrl: string, databaseName: string) {
@@ -535,25 +559,31 @@ export async function createDatabaseForResourceItem(env: WorkerEnv, payload: Dat
   if (!SUPPORTED_DATABASE_SUBTYPES.has(payload.item.resourceSubtype))
     throw new Error(`数据库自动发放当前仅支持 PostgreSQL，${payload.item.resourceSubtype} 需人工处理`)
 
-  const databaseName = databaseNameForItem(config, payload.user, payload.item)
-  const username = usernameForItem(config, payload.user, payload.item)
-  const permission = permissionForItem(payload.item)
-  const expiresAt = expiresAtForItem(config, payload.item)
-  const password = randomPassword()
-  const connectionUrl = buildUserConnectionUrl(config.rootUrl, databaseName, username, password)
+  return withDatabaseProvisionLock(config.rootUrl, payload.applicationId, payload.item.id, async () => {
+    const existingAfterLock = await findActiveDatabaseResourceBinding(env, payload.applicationId, payload.item.id)
+    if (existingAfterLock)
+      return existingDatabaseProvisionResult(existingAfterLock)
 
-  await ensureDatabaseAndRole(config.rootUrl, databaseName, username, password, permission, expiresAt)
-  return insertDatabaseResourceBinding(env, {
-    userId: payload.user.id,
-    applicationId: payload.applicationId,
-    itemId: payload.item.id,
-    databaseType: 'postgresql',
-    databaseName,
-    username,
-    password,
-    connectionUrl,
-    permission,
-    expiresAt,
+    const databaseName = databaseNameForItem(config, payload.user, payload.item)
+    const username = usernameForItem(config, payload.user, payload.item)
+    const permission = permissionForItem(payload.item)
+    const expiresAt = expiresAtForItem(config, payload.item)
+    const password = randomPassword()
+    const connectionUrl = buildUserConnectionUrl(config.rootUrl, databaseName, username, password)
+
+    await ensureDatabaseAndRole(config.rootUrl, databaseName, username, password, permission, expiresAt)
+    return insertDatabaseResourceBinding(env, {
+      userId: payload.user.id,
+      applicationId: payload.applicationId,
+      itemId: payload.item.id,
+      databaseType: 'postgresql',
+      databaseName,
+      username,
+      password,
+      connectionUrl,
+      permission,
+      expiresAt,
+    })
   })
 }
 
