@@ -10,7 +10,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 const { createEpaySign } = await import('../src/worker/ldc-credit')
 const { createSessionCookie } = await import('../src/worker/session')
 const { handleRechargeRequest } = await import('../src/worker/recharge')
-const { handleApplicationSubmitRequest, handleWelfareStateRequest } = await import('../src/worker/welfare-state')
+const { handleApplicationSubmitRequest, handleWelfareStateRequest, writeWelfareState } = await import('../src/worker/welfare-state')
 
 function user(overrides: Partial<User> = {}): User {
   return {
@@ -100,6 +100,7 @@ function dateKeyOffset(days: number) {
 function createMemoryD1(initialState: WelfareState) {
   let storedState: unknown = initialState
   let storedVersion = 1
+  let bumpVersionAfterNextVersionRead = false
   const pointTransactions: Record<string, unknown>[] = []
   const queries: Array<{ method: 'all' | 'first' | 'run', query: string, values: unknown[] }> = []
   const rechargeOrders: Record<string, unknown>[] = []
@@ -122,6 +123,9 @@ function createMemoryD1(initialState: WelfareState) {
     get rechargeOrders() {
       return rechargeOrders
     },
+    bumpVersionAfterNextVersionRead() {
+      bumpVersionAfterNextVersionRead = true
+    },
     prepare(query: string) {
       return {
         values: [] as unknown[],
@@ -133,8 +137,14 @@ function createMemoryD1(initialState: WelfareState) {
           queries.push({ method: 'first', query, values: [...this.values] })
           if (query.includes('select state') && query.includes('welfare_app_state'))
             return { state: JSON.stringify(storedState), version: storedVersion }
-          if (query.includes('select version from welfare_app_state'))
-            return { version: storedVersion }
+          if (query.includes('select version from welfare_app_state')) {
+            const version = storedVersion
+            if (bumpVersionAfterNextVersionRead) {
+              storedVersion += 1
+              bumpVersionAfterNextVersionRead = false
+            }
+            return { version }
+          }
           if (query.includes('select * from recharge_merchant_config'))
             return rechargeConfig
           if (query.includes('select * from recharge_orders where out_trade_no'))
@@ -151,9 +161,18 @@ function createMemoryD1(initialState: WelfareState) {
         },
         async run() {
           queries.push({ method: 'run', query, values: [...this.values] })
+          if (query.includes('update welfare_app_state')) {
+            if (storedVersion !== Number(this.values[3]))
+              return { meta: { changes: 0 } }
+
+            storedState = JSON.parse(String(this.values[1])) as unknown
+            storedVersion = Number(this.values[2] || storedVersion + 1)
+            return { meta: { changes: 1 } }
+          }
           if (query.includes('insert into welfare_app_state')) {
             storedState = JSON.parse(String(this.values[1])) as unknown
             storedVersion = Number(this.values[2] || storedVersion + 1)
+            return { meta: { changes: 1 } }
           }
           if (query.includes('insert into recharge_orders')) {
             rechargeOrders.push({
@@ -165,6 +184,7 @@ function createMemoryD1(initialState: WelfareState) {
               payment_type: this.values[5],
               order_name: this.values[6],
             })
+            return { meta: { changes: 1 } }
           }
           if (query.includes('update recharge_orders')) {
             const order = rechargeOrders.find(item => item.out_trade_no === this.values[0])
@@ -172,11 +192,13 @@ function createMemoryD1(initialState: WelfareState) {
               order.status = 'succeeded'
               order.ldc_trade_no = this.values[1]
               order.notify_payload = this.values[2]
+              return { meta: { changes: 1 } }
             }
+            return { meta: { changes: 0 } }
           }
           if (query.includes('insert into point_transactions')) {
             if (pointTransactions.some(item => item.id === this.values[0]))
-              return
+              return { meta: { changes: 0 } }
             pointTransactions.push({
               id: this.values[0],
               user_id: this.values[1],
@@ -187,7 +209,9 @@ function createMemoryD1(initialState: WelfareState) {
               balance_after: this.values[6],
               created_at: this.values[7],
             })
+            return { meta: { changes: 1 } }
           }
+          return { meta: { changes: 0 } }
         },
         async all() {
           queries.push({ method: 'all', query, values: [...this.values] })
@@ -491,6 +515,23 @@ describe('welfare state security', () => {
     }), env)
     expect(second.status).toBe(409)
     await expect(second.json()).resolves.toMatchObject({ code: 'STATE_VERSION_CONFLICT' })
+  })
+
+  it('rejects D1 conditional writes when state changes between version check and update', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    d1.bumpVersionAfterNextVersionRead()
+
+    await expect(writeWelfareState(env, {
+      ...state(),
+      siteBanner: { enabled: true, title: '并发公告', body: '不应覆盖较新状态' },
+    }, { expectedVersion: 1 })).rejects.toThrow('业务状态已被其他请求更新')
+
+    expect(d1.queries.some(item =>
+      item.query.includes('update welfare_app_state')
+      && item.values[3] === 1,
+    )).toBe(true)
   })
 
   it('submits applications through command API and ignores forged client fields', async () => {

@@ -1372,15 +1372,29 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
     : (await currentStateVersion(env) ?? 0) + 1
 
   if (shouldUseD1(env)) {
-    await env.LOCAL_DB!
-      .prepare(`
-        insert into welfare_app_state (id, state, updated_at, version)
-        values (?1, ?2, current_timestamp, ?3)
-        on conflict (id)
-        do update set state = excluded.state, updated_at = current_timestamp, version = excluded.version
-      `)
-      .bind(STATE_KEY, JSON.stringify(storedState), nextVersion)
-      .run()
+    if (options.expectedVersion !== undefined) {
+      const result = await env.LOCAL_DB!
+        .prepare(`
+          update welfare_app_state
+          set state = ?2, updated_at = current_timestamp, version = ?3
+          where id = ?1 and version = ?4
+        `)
+        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, options.expectedVersion)
+        .run() as { meta?: { changes?: number } }
+      if (!result.meta?.changes)
+        throw new StateVersionConflictError()
+    }
+    else {
+      await env.LOCAL_DB!
+        .prepare(`
+          insert into welfare_app_state (id, state, updated_at, version)
+          values (?1, ?2, current_timestamp, ?3)
+          on conflict (id)
+          do update set state = excluded.state, updated_at = current_timestamp, version = excluded.version
+        `)
+        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion)
+        .run()
+    }
     await syncStateSnapshots(env, state)
     return nextVersion
   }
@@ -2971,7 +2985,8 @@ async function loginAdmin(request: Request, env: WorkerEnv) {
 }
 
 async function submitCollaborationApplication(request: Request, env: WorkerEnv) {
-  const previousState = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
   const user = await authenticatedUser(request, env, previousState)
   if (user.role === 'admin' || user.role === 'reviewer')
@@ -2994,12 +3009,13 @@ async function submitCollaborationApplication(request: Request, env: WorkerEnv) 
     createdAt: now(),
   }
   applications.unshift(application)
-  await commitActionState(env, originalState, previousState)
+  await commitActionState(env, originalState, previousState, record.version)
   return json({ ok: true, application })
 }
 
 async function reviewCollaborationApplication(request: Request, env: WorkerEnv) {
-  const previousState = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
   const user = await authenticatedUser(request, env, previousState)
   assertAdminUser(user)
@@ -3028,12 +3044,13 @@ async function reviewCollaborationApplication(request: Request, env: WorkerEnv) 
       targetUser.role = 'reviewer'
   }
 
-  await commitActionState(env, originalState, previousState)
+  await commitActionState(env, originalState, previousState, record.version)
   return json({ ok: true, application })
 }
 
 async function claimDeliveryApplication(request: Request, env: WorkerEnv) {
-  const previousState = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
   const user = await authenticatedUser(request, env, previousState)
   assertReviewerUser(user)
@@ -3051,12 +3068,13 @@ async function claimDeliveryApplication(request: Request, env: WorkerEnv) {
   application.deliveryClaimedAt = now()
   application.deliveryReviewStatus = undefined
 
-  await commitActionState(env, originalState, previousState)
+  await commitActionState(env, originalState, previousState, record.version)
   return json({ ok: true, applicationId: application.id })
 }
 
 async function cancelDeliveryClaim(request: Request, env: WorkerEnv) {
-  const previousState = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
   const user = await authenticatedUser(request, env, previousState)
   assertReviewerUser(user)
@@ -3077,12 +3095,13 @@ async function cancelDeliveryClaim(request: Request, env: WorkerEnv) {
   application.deliverySubmittedAt = undefined
   application.deliveryReviewStatus = undefined
 
-  await commitActionState(env, originalState, previousState)
+  await commitActionState(env, originalState, previousState, record.version)
   return json({ ok: true, applicationId: application.id })
 }
 
 async function submitDeliveryResult(request: Request, env: WorkerEnv) {
-  const previousState = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
   const user = await authenticatedUser(request, env, previousState)
   assertReviewerUser(user)
@@ -3111,12 +3130,13 @@ async function submitDeliveryResult(request: Request, env: WorkerEnv) {
   application.deliverySubmittedAt = now()
   application.deliveryReviewStatus = 'pending_review'
 
-  await commitActionState(env, originalState, previousState)
+  await commitActionState(env, originalState, previousState, record.version)
   return json({ ok: true, applicationId: application.id })
 }
 
 async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
-  const previousState = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
   const user = await authenticatedUser(request, env, previousState)
   assertAdminUser(user)
@@ -3139,7 +3159,7 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
     application.deliverySubmittedAt = undefined
     application.deliveryReviewStatus = 'rejected'
     pushApplicationMessage(application, user.id, 'system', note || '<p>管理员复核未通过，任务已重新开放认领。</p>')
-    await commitActionState(env, originalState, previousState)
+    await commitActionState(env, originalState, previousState, record.version)
     return json({ ok: true, applicationId: application.id })
   }
 
@@ -3164,7 +3184,7 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
     refId: application.id,
     createdAt: reviewedAt,
   }, previousState)
-  await commitActionState(env, originalState, previousState)
+  await commitActionState(env, originalState, previousState, record.version)
   return json({ ok: true, applicationId: application.id })
 }
 
