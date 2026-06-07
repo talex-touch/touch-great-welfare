@@ -1,0 +1,3 @@
+-- No-op migration.
+-- Feishu mail notification columns are added idempotently by ensureNotificationSchema
+-- because D1 column migrations cannot safely express IF NOT EXISTS.

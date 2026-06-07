@@ -119,9 +119,7 @@ function handleComplete() {
   if (!application.value || !isAdmin.value)
     return
 
-  runSafely(() => {
-    completeApplication(applicationId.value)
-  }, '申请已标记为完成')
+  runSafely(() => completeApplication(applicationId.value), '申请已标记为完成')
 }
 </script>
 

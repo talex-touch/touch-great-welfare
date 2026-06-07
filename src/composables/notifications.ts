@@ -11,12 +11,23 @@ export interface NotificationProviderConfigView {
   configured: {
     email: boolean
     push: boolean
+    feishuMail: boolean
   }
   resendApiKeyMasked: string
   resendFromEmail: string
   vapidPublicKey: string
   vapidPrivateKeyMasked: string
   vapidSubject: string
+  feishuMailEnabled: boolean
+  feishuAppId: string
+  feishuAppSecretMasked: string
+  feishuUserAccessTokenMasked: string
+  feishuRefreshTokenMasked: string
+  feishuAccessTokenExpiresAt: string
+  feishuRefreshTokenExpiresAt: string
+  feishuUserMailboxId: string
+  feishuSiteBaseUrl: string
+  feishuDailyLimit: number
   source: 'env' | 'admin' | 'empty'
 }
 
@@ -26,8 +37,21 @@ export interface SaveNotificationProviderConfigPayload {
   vapidPublicKey: string
   vapidPrivateKey?: string
   vapidSubject: string
+  feishuMailEnabled: boolean
+  feishuAppId: string
+  feishuAppSecret?: string
+  feishuUserAccessToken?: string
+  feishuRefreshToken?: string
+  feishuAccessTokenExpiresAt?: string
+  feishuRefreshTokenExpiresAt?: string
+  feishuUserMailboxId: string
+  feishuSiteBaseUrl: string
+  feishuDailyLimit: number
   clearResendApiKey?: boolean
   clearVapidPrivateKey?: boolean
+  clearFeishuAppSecret?: boolean
+  clearFeishuUserAccessToken?: boolean
+  clearFeishuRefreshToken?: boolean
 }
 
 async function readErrorMessage(response: Response) {

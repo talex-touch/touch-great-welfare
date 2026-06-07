@@ -7,7 +7,9 @@ vi.stubGlobal('fetch', vi.fn(async () =>
   }),
 ))
 
-const { dispatchWelfareStateChangeNotifications } = await import('../src/worker/notifications')
+const notifications = await import('../src/worker/notifications')
+const { createSessionCookie } = await import('../src/worker/session')
+const { readWelfareState } = await import('../src/worker/welfare-state')
 
 function user(points = 120, id = 'user_1', role: User['role'] = 'user'): User {
   return {
@@ -74,6 +76,8 @@ function createMemoryD1() {
   const notifications: Record<string, unknown>[] = []
   const deliveries: Record<string, unknown>[] = []
   const settings: Record<string, unknown>[] = []
+  const pointTransactions: Record<string, unknown>[] = []
+  let providerConfig: Record<string, unknown> | null = null
   let appState: WelfareState | undefined
 
   return {
@@ -81,9 +85,22 @@ function createMemoryD1() {
       notifications,
       deliveries,
       settings,
+      pointTransactions,
+      get providerConfig() {
+        return providerConfig
+      },
+      get state() {
+        return appState
+      },
     },
     setState(value: WelfareState) {
       appState = value
+    },
+    addNotificationSetting(value: Record<string, unknown>) {
+      settings.push(value)
+    },
+    setProviderConfig(value: Record<string, unknown>) {
+      providerConfig = value
     },
     prepare(query: string) {
       return {
@@ -113,22 +130,116 @@ function createMemoryD1() {
               status: this.values[3],
               error: this.values[4],
               charged_points: this.values[5],
+              provider_message_id: this.values[6],
+              provider: this.values[7] ?? '',
+              created_at: '2026-06-01T00:00:00.000Z',
             })
+          }
+          if (query.includes('insert into notification_provider_config')) {
+            providerConfig = {
+              id: this.values[0],
+              resend_api_key_encrypted: this.values[1],
+              resend_from_email: this.values[2],
+              vapid_public_key: this.values[3],
+              vapid_private_key_encrypted: this.values[4],
+              vapid_subject: this.values[5],
+              feishu_mail_enabled: this.values[6],
+              feishu_app_id: this.values[7],
+              feishu_app_secret_encrypted: this.values[8],
+              feishu_user_access_token_encrypted: this.values[9],
+              feishu_refresh_token_encrypted: this.values[10],
+              feishu_access_token_expires_at: this.values[11],
+              feishu_refresh_token_expires_at: this.values[12],
+              feishu_user_mailbox_id: this.values[13],
+              feishu_site_base_url: this.values[14],
+              feishu_daily_limit: this.values[15],
+            }
+          }
+          if (query.includes('update notification_provider_config') && providerConfig) {
+            providerConfig.feishu_user_access_token_encrypted = this.values[0]
+            providerConfig.feishu_refresh_token_encrypted = this.values[1]
+            providerConfig.feishu_access_token_expires_at = this.values[2]
+            providerConfig.feishu_refresh_token_expires_at = this.values[3]
+          }
+          if (query.includes('insert into point_transactions')) {
+            pointTransactions.push({
+              id: this.values[0],
+              user_id: this.values[1],
+              delta: this.values[2],
+              type: this.values[3],
+              reason: this.values[4],
+              ref_id: this.values[5],
+              balance_after: this.values[6],
+              created_at: this.values[7],
+            })
+          }
+          if (query.includes('insert into welfare_app_state')) {
+            appState = JSON.parse(String(this.values[1])) as WelfareState
           }
         },
         async first() {
-          if (query.includes('select state from welfare_app_state'))
-            return appState ? { state: JSON.stringify(appState) } : null
+          if (query.includes('select state') && query.includes('welfare_app_state'))
+            return appState ? { state: JSON.stringify(appState), version: 1 } : null
+          if (query.includes('select version') && query.includes('welfare_app_state'))
+            return appState ? { version: 1 } : null
+          if (query.includes('select * from notification_provider_config'))
+            return providerConfig
           if (query.includes('select * from notification_settings'))
             return settings.find(item => item.user_id === this.values[0]) ?? null
+          if (query.includes('select count(*) as count') && query.includes('notification_deliveries')) {
+            return {
+              count: deliveries.filter(item => item.provider === this.values[0] && item.status === 'sent').length,
+            }
+          }
+          if (query.includes('select id from point_transactions'))
+            return pointTransactions.find(item => item.id === this.values[0]) ?? null
           return null
         },
         async all() {
+          if (query.includes('pragma table_info'))
+            return { results: [] }
+          if (query.includes('from point_transactions'))
+            return { results: [] }
           return { results: [] }
         },
       }
     },
   }
+}
+
+async function saveNotificationProvider(d1: ReturnType<typeof createMemoryD1>, adminId = 'admin_1', overrides: Record<string, unknown> = {}) {
+  const env = {
+    LOCAL_DB: d1 as unknown as D1Database,
+    NOTIFY_SECRET_KEY: 'test-secret',
+  }
+  const cookie = await createSessionCookie(new Request('https://example.com/'), env, adminId)
+  const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config', {
+    method: 'PUT',
+    headers: {
+      cookie,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      resendApiKey: 're_test',
+      resendFromEmail: 'Touch Great Welfare <notice@example.com>',
+      vapidPublicKey: '',
+      vapidPrivateKey: '',
+      vapidSubject: 'mailto:admin@example.com',
+      feishuMailEnabled: true,
+      feishuAppId: 'cli_test',
+      feishuAppSecret: 'app_secret',
+      feishuUserAccessToken: '',
+      feishuRefreshToken: 'refresh_old',
+      feishuAccessTokenExpiresAt: '',
+      feishuRefreshTokenExpiresAt: '2026-06-15T00:00:00.000Z',
+      feishuUserMailboxId: 'me',
+      feishuSiteBaseUrl: 'https://welfare.example.com',
+      feishuDailyLimit: 400,
+      ...overrides,
+    }),
+  }), env)
+  expect(response.ok).toBe(true)
+  return response.json() as Promise<Record<string, any>>
 }
 
 describe('notification dispatch', () => {
@@ -163,7 +274,7 @@ describe('notification dispatch', () => {
     }
 
     vi.stubGlobal('crypto', globalThis.crypto)
-    await dispatchWelfareStateChangeNotifications({
+    await notifications.dispatchWelfareStateChangeNotifications({
       LOCAL_DB: d1 as unknown as D1Database,
     }, previous, next)
 
@@ -211,7 +322,7 @@ describe('notification dispatch', () => {
     d1.setState(next)
 
     vi.stubGlobal('crypto', globalThis.crypto)
-    await dispatchWelfareStateChangeNotifications({
+    await notifications.dispatchWelfareStateChangeNotifications({
       LOCAL_DB: d1 as unknown as D1Database,
     }, previous, next)
 
@@ -261,12 +372,267 @@ describe('notification dispatch', () => {
     d1.setState(next)
 
     vi.stubGlobal('crypto', globalThis.crypto)
-    await dispatchWelfareStateChangeNotifications({
+    await notifications.dispatchWelfareStateChangeNotifications({
       LOCAL_DB: d1 as unknown as D1Database,
     }, previous, next)
 
     expect(d1.data.notifications).toHaveLength(1)
     expect(d1.data.notifications[0].user_id).toBe('admin_1')
     expect(d1.data.notifications[0].event).toBe('application_supplement_submitted')
+  })
+
+  it('saves, masks, and clears Feishu mail provider secrets', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+
+    const saved = await saveNotificationProvider(d1)
+
+    expect(saved.configured.feishuMail).toBe(true)
+    expect(saved.feishuAppId).toBe('cli_test')
+    expect(saved.feishuAppSecretMasked).not.toBe('app_secret')
+    expect(saved.feishuRefreshTokenMasked).not.toBe('refresh_old')
+
+    const cleared = await saveNotificationProvider(d1, 'admin_1', {
+      feishuMailEnabled: false,
+      feishuAppSecret: '',
+      feishuRefreshToken: '',
+      clearFeishuAppSecret: true,
+      clearFeishuRefreshToken: true,
+    })
+
+    expect(cleared.configured.feishuMail).toBe(false)
+    expect(cleared.feishuAppSecretMasked).toBe('')
+    expect(cleared.feishuRefreshTokenMasked).toBe('')
+  })
+
+  it('uses Feishu mail before Resend and charges email points once', async () => {
+    const stored = {
+      ...state(),
+      users: [user(120), user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    d1.addNotificationSetting({
+      user_id: 'user_1',
+      email_enabled: 1,
+      email_address: 'notify@example.com',
+      feishu_enabled: 0,
+      browser_push_enabled: 0,
+    })
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/authen/v2/oauth/token')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          access_token: 'access_new',
+          expires_in: 7200,
+          refresh_token: 'refresh_new',
+          refresh_token_expires_in: 604800,
+        }))
+      }
+      if (url.includes('/mail/v1/user_mailboxes/')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          msg: 'success',
+          data: { message_id: 'msg_feishu' },
+        }))
+      }
+      return new Response(JSON.stringify({ id: 'resend_should_not_run' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await saveNotificationProvider(d1)
+
+    const previous = {
+      ...stored,
+      applications: [{
+        id: 'app_1',
+        userId: 'user_1',
+        type: 'pro' as const,
+        title: 'Pro 支持',
+        description: '请支持',
+        hasOpenSourceBadge: false,
+        attachments: [],
+        status: 'pending_review' as const,
+        cost: 100,
+        costCharged: false,
+        createdAt: '2026-06-01T00:00:00.000Z',
+      }],
+    }
+    const next = {
+      ...stored,
+      applications: [{
+        ...previous.applications[0],
+        status: 'answered' as const,
+        answer: '<p>已通过。</p>',
+        reviewedAt: '2026-06-01T01:00:00.000Z',
+      }],
+    }
+    d1.setState(next)
+
+    await notifications.dispatchWelfareStateChangeNotifications({
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }, previous, next)
+
+    const emailDeliveries = d1.data.deliveries.filter(item => item.channel === 'email')
+    expect(emailDeliveries).toHaveLength(1)
+    expect(emailDeliveries[0].provider).toBe('feishu_mail')
+    expect(emailDeliveries[0].charged_points).toBe(5)
+    expect(d1.data.pointTransactions).toHaveLength(1)
+    const decodedState = await readWelfareState({
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }) as WelfareState
+    expect(decodedState.users.find(item => item.id === 'user_1')?.points).toBe(115)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('api.resend.com'))).toBe(false)
+    expect(d1.data.providerConfig?.feishu_refresh_token_expires_at).toBeTruthy()
+  })
+
+  it('falls back to Resend when Feishu mail reaches the daily limit', async () => {
+    const stored = {
+      ...state(),
+      users: [user(120), user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    d1.addNotificationSetting({
+      user_id: 'user_1',
+      email_enabled: 1,
+      email_address: 'notify@example.com',
+      feishu_enabled: 0,
+      browser_push_enabled: 0,
+    })
+    for (let index = 0; index < 400; index += 1) {
+      d1.data.deliveries.push({
+        id: `old_${index}`,
+        channel: 'email',
+        status: 'sent',
+        provider: 'feishu_mail',
+        created_at: '2026-06-01T00:00:00.000Z',
+      })
+    }
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('api.resend.com'))
+        return new Response(JSON.stringify({ id: 'resend_msg' }))
+      return new Response(JSON.stringify({ code: 0, data: { message_id: 'unexpected_feishu' } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await saveNotificationProvider(d1)
+
+    const previous = {
+      ...stored,
+      applications: [{
+        id: 'app_1',
+        userId: 'user_1',
+        type: 'pro' as const,
+        title: 'Pro 支持',
+        description: '请支持',
+        hasOpenSourceBadge: false,
+        attachments: [],
+        status: 'pending_review' as const,
+        cost: 100,
+        costCharged: false,
+        createdAt: '2026-06-01T00:00:00.000Z',
+      }],
+    }
+    const next = {
+      ...stored,
+      applications: [{
+        ...previous.applications[0],
+        status: 'answered' as const,
+        answer: '<p>已通过。</p>',
+        reviewedAt: '2026-06-01T01:00:00.000Z',
+      }],
+    }
+    d1.setState(next)
+
+    await notifications.dispatchWelfareStateChangeNotifications({
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }, previous, next)
+
+    const latestEmailDeliveries = d1.data.deliveries.filter(item => item.notification_id)
+    expect(latestEmailDeliveries.some(item => item.provider === 'feishu_mail' && item.status === 'skipped')).toBe(true)
+    expect(latestEmailDeliveries.some(item => item.provider === 'resend' && item.status === 'sent')).toBe(true)
+    expect(d1.data.pointTransactions).toHaveLength(1)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/mail/v1/user_mailboxes/'))).toBe(false)
+  })
+
+  it('sends admin announcements through Feishu mail without charging users', async () => {
+    const stored = {
+      ...state(),
+      users: [user(120), user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/authen/v2/oauth/token')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          access_token: 'access_new',
+          expires_in: 7200,
+          refresh_token: 'refresh_new',
+          refresh_token_expires_in: 604800,
+        }))
+      }
+      return new Response(JSON.stringify({
+        code: 0,
+        msg: 'success',
+        data: { message_id: 'msg_feishu' },
+      }))
+    }))
+    await saveNotificationProvider(d1)
+
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/admin-announcements', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: '维护通知',
+        body: '<p>今晚维护。</p>',
+        channels: ['in_app', 'email'],
+        forcePopup: false,
+        forcePush: false,
+      }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    const emailDeliveries = d1.data.deliveries.filter(item => item.channel === 'email')
+    expect(emailDeliveries.length).toBeGreaterThan(0)
+    expect(emailDeliveries.every(item => item.provider === 'feishu_mail')).toBe(true)
+    expect(emailDeliveries.every(item => item.charged_points === 0)).toBe(true)
+    expect(d1.data.pointTransactions).toHaveLength(0)
+  })
+
+  it('truncates email body and renders attachment download links', () => {
+    const longBody = `<p>${'这是一段很长的回复内容'.repeat(220)}</p>`
+    const content = notifications.renderNotificationEmailContent('申请回复', longBody, {
+      attachments: [{
+        id: 'att_1',
+        name: 'xxx.pdf',
+        url: '/api/uploads/att_1/file',
+      }],
+    }, 'https://welfare.example.com')
+
+    expect(content.text).toContain('内容已截断')
+    expect(content.text).toContain('1. xxx.pdf - 点击下载：https://welfare.example.com/api/uploads/att_1/file')
+    expect(content.html).toContain('<a href="https://welfare.example.com/api/uploads/att_1/file">点击下载</a>')
   })
 })

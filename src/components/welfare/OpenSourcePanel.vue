@@ -54,10 +54,10 @@ function authorizeGitHub() {
 }
 
 function saveDefaultRepo() {
-  runSafely(() => {
+  runSafely(async () => {
     if (!isGithubAuthorized.value)
       throw new Error('请先完成 GitHub App 授权')
-    updateCurrentProfile({
+    await updateCurrentProfile({
       selectedRepo: profileForm.selectedRepo,
     })
   }, '默认仓库已更新')

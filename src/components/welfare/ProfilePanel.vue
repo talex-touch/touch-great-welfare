@@ -261,8 +261,8 @@ function showNextMemberCard() {
 }
 
 function saveProfile() {
-  runSafely(() => {
-    updateCurrentProfile({
+  runSafely(async () => {
+    await updateCurrentProfile({
       displayName: profileForm.displayName,
       email: profileForm.email,
       bio: profileForm.bio,

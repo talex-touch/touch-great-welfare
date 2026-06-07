@@ -69,13 +69,24 @@ import {
   useWelfareStore,
 } from './welfare'
 import {
+  bindInvitationCodeAction,
+  boostSquarePostAction,
   cancelDeliveryClaimAction,
+  checkInTodayAction,
   claimDeliveryApplicationAction,
+  redeemCouponCodeAction,
+  reportSquareBoostAction,
   reviewCollaborationApplicationAction,
   reviewDeliveryResultAction,
   saveWelfareState,
+  submitApplicationCommand,
+  submitApplicationSupplementAction,
   submitCollaborationApplicationAction,
   submitDeliveryResultAction,
+  submitStudentVerificationAction,
+  supplementStudentVerificationAction,
+  updateCurrentProfileAction,
+  vouchInvitationAction,
 } from './welfare-persistence'
 
 export interface UploadLikeFile {
@@ -366,8 +377,22 @@ export const notificationProviderConfigForm = reactive({
   vapidPrivateKey: '',
   vapidPrivateKeyMasked: '',
   vapidSubject: 'mailto:admin@example.com',
+  feishuMailEnabled: false,
+  feishuAppId: '',
+  feishuAppSecret: '',
+  feishuAppSecretMasked: '',
+  feishuUserAccessToken: '',
+  feishuUserAccessTokenMasked: '',
+  feishuRefreshToken: '',
+  feishuRefreshTokenMasked: '',
+  feishuAccessTokenExpiresAt: '',
+  feishuRefreshTokenExpiresAt: '',
+  feishuUserMailboxId: 'me',
+  feishuSiteBaseUrl: '',
+  feishuDailyLimit: 400,
   emailConfigured: false,
   pushConfigured: false,
+  feishuMailConfigured: false,
   loading: false,
   message: '',
 })
@@ -1230,8 +1255,10 @@ export function useWelfareUiState() {
           description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
         })
 
-    welfare.submitResourceApplication(await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)))
-    await saveWelfareState(welfare.state)
+    await submitApplicationCommand({
+      type: 'resource',
+      ...await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)),
+    })
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
@@ -1253,8 +1280,11 @@ export function useWelfareUiState() {
           description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
         })
 
-    welfare.updateResourceDraft(applicationId, await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)))
-    await saveWelfareState(welfare.state)
+    await submitApplicationCommand({
+      type: 'resource',
+      applicationId,
+      ...await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)),
+    })
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
@@ -1589,8 +1619,7 @@ export function useWelfareUiState() {
   }
 
   async function submitApplicationSupplement(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
-    welfare.submitApplicationSupplement(applicationId, content, await uploadAttachmentImages(attachments))
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await submitApplicationSupplementAction(applicationId, content, await uploadAttachmentImages(attachments))
     await welfare.reloadWelfareState()
   }
 
@@ -2192,8 +2221,22 @@ export function useWelfareUiState() {
     notificationProviderConfigForm.vapidPrivateKey = ''
     notificationProviderConfigForm.vapidPrivateKeyMasked = config.vapidPrivateKeyMasked
     notificationProviderConfigForm.vapidSubject = config.vapidSubject
+    notificationProviderConfigForm.feishuMailEnabled = config.feishuMailEnabled
+    notificationProviderConfigForm.feishuAppId = config.feishuAppId
+    notificationProviderConfigForm.feishuAppSecret = ''
+    notificationProviderConfigForm.feishuAppSecretMasked = config.feishuAppSecretMasked
+    notificationProviderConfigForm.feishuUserAccessToken = ''
+    notificationProviderConfigForm.feishuUserAccessTokenMasked = config.feishuUserAccessTokenMasked
+    notificationProviderConfigForm.feishuRefreshToken = ''
+    notificationProviderConfigForm.feishuRefreshTokenMasked = config.feishuRefreshTokenMasked
+    notificationProviderConfigForm.feishuAccessTokenExpiresAt = config.feishuAccessTokenExpiresAt || ''
+    notificationProviderConfigForm.feishuRefreshTokenExpiresAt = config.feishuRefreshTokenExpiresAt || ''
+    notificationProviderConfigForm.feishuUserMailboxId = config.feishuUserMailboxId
+    notificationProviderConfigForm.feishuSiteBaseUrl = config.feishuSiteBaseUrl
+    notificationProviderConfigForm.feishuDailyLimit = config.feishuDailyLimit
     notificationProviderConfigForm.emailConfigured = config.configured.email
     notificationProviderConfigForm.pushConfigured = config.configured.push
+    notificationProviderConfigForm.feishuMailConfigured = config.configured.feishuMail
   }
 
   async function refreshNotificationProviderConfig() {
@@ -2224,6 +2267,16 @@ export function useWelfareUiState() {
         vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
         vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
         vapidSubject: notificationProviderConfigForm.vapidSubject,
+        feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
+        feishuAppId: notificationProviderConfigForm.feishuAppId,
+        feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
+        feishuUserAccessToken: notificationProviderConfigForm.feishuUserAccessToken,
+        feishuRefreshToken: notificationProviderConfigForm.feishuRefreshToken,
+        feishuAccessTokenExpiresAt: notificationProviderConfigForm.feishuAccessTokenExpiresAt,
+        feishuRefreshTokenExpiresAt: notificationProviderConfigForm.feishuRefreshTokenExpiresAt,
+        feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
+        feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
+        feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
       })
       applyNotificationProviderConfig(result)
       notificationProviderConfigForm.message = '通知供应商配置已保存'
@@ -2338,13 +2391,19 @@ export function useWelfareUiState() {
     }
     const application = applicationId
       ? welfare.state.applications.find(item => item.id === applicationId)
-      : welfare.submitApplication(await withUploadedImages(payload))
-    if (!application || application.type !== 'image')
+      : undefined
+    const commandResult = applicationId
+      ? undefined
+      : await submitApplicationCommand(await withUploadedImages(payload))
+    const targetApplicationId = application?.id ?? commandResult?.applicationId
+    if (!targetApplicationId)
       throw new Error('图片申请不存在')
-
-    await saveWelfareState(welfare.state)
+    if (application && application.type !== 'image')
+      throw new Error('图片申请不存在')
+    if (applicationId)
+      await saveWelfareState(welfare.state)
     try {
-      await createImageJob(welfare.currentUser.value.id, application.description, application.id)
+      await createImageJob(welfare.currentUser.value.id, application?.description ?? payload.description, targetApplicationId)
       resetApplicationFiles()
     }
     finally {
@@ -2379,10 +2438,9 @@ export function useWelfareUiState() {
       llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
       ...security,
     }
-    const application = welfare.submitApplication(await withUploadedImages(payload))
-    await saveWelfareState(welfare.state)
+    const application = await submitApplicationCommand(await withUploadedImages(payload))
     try {
-      await createApplicationReview(welfare.currentUser.value.id, application.id)
+      await createApplicationReview(welfare.currentUser.value.id, application.applicationId)
       resetApplicationFiles()
     }
     finally {
@@ -2594,37 +2652,37 @@ export function useWelfareUiState() {
   }
 
   async function checkInToday() {
-    const result = welfare.checkInToday()
-    await saveWelfareState(welfare.state)
+    const result = await checkInTodayAction()
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
-    return result
+    if (!result.checkIn)
+      throw new Error('签到结果为空')
+    return result.checkIn
   }
 
   async function bindInvitationCode() {
-    const result = welfare.bindInvitationCode(invitationForm.code)
+    const result = await bindInvitationCodeAction(invitationForm.code)
     invitationForm.code = ''
     invitationForm.message = '邀请关系已绑定'
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     return result
   }
 
   async function vouchInvitation(bindingId: string) {
-    const result = welfare.vouchInvitation(bindingId)
+    const result = await vouchInvitationAction(bindingId)
     invitationForm.message = '担保状态已更新'
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     return result
   }
 
   async function redeemCouponCodeFromForm() {
-    const result = welfare.redeemCouponCode(couponRedeemForm.code)
+    const result = await redeemCouponCodeAction(couponRedeemForm.code)
     couponRedeemForm.code = ''
-    couponRedeemForm.message = `已兑换：${result.name}`
-    await saveWelfareState(welfare.state)
+    couponRedeemForm.message = result.coupon?.name ? `已兑换：${result.coupon.name}` : '兑换成功'
     await welfare.reloadWelfareState()
-    return result
+    if (!result.coupon)
+      throw new Error('优惠券兑换结果为空')
+    return result.coupon
   }
 
   async function createCouponTemplateFromForm() {
@@ -2693,18 +2751,16 @@ export function useWelfareUiState() {
   }
 
   async function boostSquarePost(postId: string) {
-    const result = welfare.boostSquarePost(postId, squareBoostDrafts[postId] || '')
+    const result = await boostSquarePostAction(postId, squareBoostDrafts[postId] || '')
     delete squareBoostDrafts[postId]
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
     return result
   }
 
   async function reportSquareBoost(boostId: string) {
-    const result = welfare.reportSquareBoost(boostId, squareReportDrafts[boostId] || '')
+    const result = await reportSquareBoostAction(boostId, squareReportDrafts[boostId] || '')
     delete squareReportDrafts[boostId]
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
     return result
@@ -2712,16 +2768,14 @@ export function useWelfareUiState() {
 
   async function submitStudentVerification(payload: Parameters<typeof welfare.submitStudentVerification>[0]) {
     await welfare.reloadWelfareState()
-    welfare.submitStudentVerification(await withUploadedImages(payload))
-    await saveWelfareState(welfare.state)
+    await submitStudentVerificationAction(await withUploadedImages(payload))
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
 
   async function supplementStudentVerification(payload: Parameters<typeof welfare.supplementStudentVerification>[0]) {
     await welfare.reloadWelfareState()
-    welfare.supplementStudentVerification(await withUploadedImages(payload))
-    await saveWelfareState(welfare.state)
+    await supplementStudentVerificationAction(await withUploadedImages(payload))
     await welfare.reloadWelfareState()
   }
 
@@ -2751,8 +2805,8 @@ export function useWelfareUiState() {
   }
 
   async function updateCurrentProfile(profile: Partial<UserProfile>) {
-    welfare.updateCurrentProfile(profile)
-    await persistStateAndReload()
+    await updateCurrentProfileAction(profile)
+    await welfare.reloadWelfareState()
   }
 
   async function setUserCrowdReviewer(userId: string, enabled: boolean) {

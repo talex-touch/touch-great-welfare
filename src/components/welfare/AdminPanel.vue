@@ -1057,7 +1057,7 @@ const dashboardConfigRows = computed(() => [
   {
     name: '通知供应商',
     status: notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置',
-    detail: `邮件 ${notificationProviderConfigForm.emailConfigured ? '可用' : '未配置'} · 推送 ${notificationProviderConfigForm.pushConfigured ? '可用' : '未配置'}`,
+    detail: `邮件 ${notificationProviderConfigForm.emailConfigured ? '可用' : '未配置'} · 飞书邮件 ${notificationProviderConfigForm.feishuMailConfigured ? '可用' : '未配置'} · 推送 ${notificationProviderConfigForm.pushConfigured ? '可用' : '未配置'}`,
     tone: notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? 'success' : 'warning',
   },
   {
@@ -1240,17 +1240,19 @@ const filteredAuditEvents = computed(() => auditEvents.value
 const auditPagination = computed(() => paginateRows(filteredAuditEvents.value, auditFilters))
 
 function saveOauthConfig() {
-  runSafely(() => {
+  runSafely(async () => {
     if (!isAdmin.value)
       throw new Error('需要管理员权限')
     if (!state.oauth.clientId.trim())
       throw new Error('请填写 OAuth Client ID')
     state.oauth.enabled = true
+    await saveWelfareState(state, state.currentUserId)
+    await reloadWelfareState()
   }, 'OAuth 配置已启用')
 }
 
 function fillOauthFromGitHubApp() {
-  runSafely(() => {
+  runSafely(async () => {
     if (!isAdmin.value)
       throw new Error('需要管理员权限')
     if (!githubAppConfigForm.clientId.trim())
@@ -1263,6 +1265,8 @@ function fillOauthFromGitHubApp() {
     state.oauth.callbackUrl = githubAppConfigForm.callbackUrl
     state.oauth.scopes = githubAppConfigForm.scopes
     state.oauth.enabled = true
+    await saveWelfareState(state, state.currentUserId)
+    await reloadWelfareState()
   }, '已同步 GitHub App 登录配置')
 }
 
@@ -1458,8 +1462,8 @@ function onToggleStudentVerified(userId: string, verified: boolean) {
   if (!confirmUserAction(userId, action))
     return
 
-  runSafely(() => {
-    setUserStudentVerified(userId, verified)
+  runSafely(async () => {
+    await setUserStudentVerified(userId, verified)
     pendingAdminUserAction.value = ''
   }, verified ? '已标记学生认证' : '已解绑学生认证')
 }
@@ -1473,8 +1477,8 @@ function onRevokeStudentVerification(userId: string) {
   if (!confirmUserAction(userId, 'revoke-student'))
     return
 
-  runSafely(() => {
-    revokeUserStudentVerification(userId, revokeStudentReason.value)
+  runSafely(async () => {
+    await revokeUserStudentVerification(userId, revokeStudentReason.value)
     pendingAdminUserAction.value = ''
     revokeStudentReason.value = ''
   }, '学生认证已撤销')
@@ -1484,8 +1488,8 @@ function onUnbindGitHub(userId: string) {
   if (!confirmUserAction(userId, 'unbind-github'))
     return
 
-  runSafely(() => {
-    unbindUserGitHub(userId)
+  runSafely(async () => {
+    await unbindUserGitHub(userId)
     pendingAdminUserAction.value = ''
   }, 'GitHub 认证已解绑')
 }
@@ -1495,8 +1499,8 @@ function onToggleUserSuspended(userId: string, suspended: boolean) {
   if (!confirmUserAction(userId, action))
     return
 
-  runSafely(() => {
-    setUserSuspended(userId, suspended, '违反平台使用政策或资源使用协议')
+  runSafely(async () => {
+    await setUserSuspended(userId, suspended, '违反平台使用政策或资源使用协议')
     pendingAdminUserAction.value = ''
   }, suspended ? '用户已封禁' : '用户已解封')
 }
@@ -2430,7 +2434,7 @@ onMounted(() => {
               通知供应商
             </div>
             <div class="text-sm mb-5 p-3 rounded-2xl" :class="notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-              邮件：{{ notificationProviderConfigForm.emailConfigured ? '已配置' : '未配置' }}；浏览器推送：{{ notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置' }}。
+              邮件：{{ notificationProviderConfigForm.emailConfigured ? '已配置' : '未配置' }}；飞书邮件：{{ notificationProviderConfigForm.feishuMailConfigured ? '已配置' : '未配置' }}；浏览器推送：{{ notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置' }}。
             </div>
             <div class="gap-5 grid lg:grid-cols-2">
               <label class="gap-2 grid">
@@ -2453,6 +2457,46 @@ onMounted(() => {
                 <span class="field-label">VAPID Subject</span>
                 <TxInput v-model="notificationProviderConfigForm.vapidSubject" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="mailto:admin@example.com" />
               </label>
+              <label class="text-sm flex gap-2 items-center lg:col-span-2">
+                <TxCheckbox v-model="notificationProviderConfigForm.feishuMailEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用飞书邮件通知" />
+                启用飞书邮件通知
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">飞书 App ID</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuAppId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="cli_xxxxxx" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">飞书 App Secret</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuAppSecret" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuAppSecretMasked || '保存到服务端加密配置'" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">飞书 user_access_token</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuUserAccessToken" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuUserAccessTokenMasked || '可留空，由 refresh token 自动刷新'" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">飞书 refresh_token</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuRefreshToken" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuRefreshTokenMasked || '需要 offline_access 权限'" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">access token 过期时间</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuAccessTokenExpiresAt" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="2026-06-08T10:00:00.000Z" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">refresh token 过期时间</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuRefreshTokenExpiresAt" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="2026-06-15T10:00:00.000Z" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">飞书发信邮箱</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">站点根地址</span>
+                <TxInput v-model="notificationProviderConfigForm.feishuSiteBaseUrl" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="https://example.com" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">飞书每日限额</span>
+                <TxNumberInput v-model="notificationProviderConfigForm.feishuDailyLimit" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="400" />
+              </label>
             </div>
             <div class="mt-5 flex flex-wrap gap-3 items-center">
               <TxButton variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.loading" @click="saveNotificationProviderConfig">
@@ -2463,7 +2507,7 @@ onMounted(() => {
               {{ notificationProviderConfigForm.message }}
             </div>
             <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-              飞书 Webhook 仍由用户通知设置保存；这里仅配置全局邮件和浏览器推送供应商。
+              用户启用邮箱通知后优先通过飞书邮件投递，每日最多 400 封；飞书 Webhook 仍由用户通知设置保存。
             </div>
           </div>
 

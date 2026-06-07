@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { StudentVerification, User, WelfareApplication, WelfareState } from '~/composables/welfare'
+import type { AttachmentMeta, StudentVerification, User, WelfareApplication, WelfareState } from '~/composables/welfare'
 import type {
   AdminAnnouncementListResult,
   AdminAnnouncementSummary,
@@ -13,6 +13,7 @@ import type {
   SaveNotificationSettingsPayload,
 } from '~/shared/notifications'
 import { EMAIL_NOTIFICATION_COST } from '~/shared/notifications'
+import { richTextToPlainText } from '~/utils/rich-text'
 import {
   assertAdminRequest,
   assertWelfareState,
@@ -69,6 +70,16 @@ interface NotificationProviderConfigRow {
   vapid_public_key?: string | null
   vapid_private_key_encrypted?: string | null
   vapid_subject?: string | null
+  feishu_mail_enabled?: number | boolean | null
+  feishu_app_id?: string | null
+  feishu_app_secret_encrypted?: string | null
+  feishu_user_access_token_encrypted?: string | null
+  feishu_refresh_token_encrypted?: string | null
+  feishu_access_token_expires_at?: string | Date | null
+  feishu_refresh_token_expires_at?: string | Date | null
+  feishu_user_mailbox_id?: string | null
+  feishu_site_base_url?: string | null
+  feishu_daily_limit?: number | null
 }
 
 interface NotificationProviderConfigPayload {
@@ -77,8 +88,21 @@ interface NotificationProviderConfigPayload {
   vapidPublicKey?: string
   vapidPrivateKey?: string
   vapidSubject?: string
+  feishuMailEnabled?: boolean
+  feishuAppId?: string
+  feishuAppSecret?: string
+  feishuUserAccessToken?: string
+  feishuRefreshToken?: string
+  feishuAccessTokenExpiresAt?: string
+  feishuRefreshTokenExpiresAt?: string
+  feishuUserMailboxId?: string
+  feishuSiteBaseUrl?: string
+  feishuDailyLimit?: number
   clearResendApiKey?: boolean
   clearVapidPrivateKey?: boolean
+  clearFeishuAppSecret?: boolean
+  clearFeishuUserAccessToken?: boolean
+  clearFeishuRefreshToken?: boolean
 }
 
 export interface CreateNotificationInput {
@@ -93,7 +117,13 @@ const NOTIFICATION_LIMIT = 80
 const ADMIN_ANNOUNCEMENT_LIMIT = 1200
 const NOTIFICATION_PROVIDER_CONFIG_ID = 'default'
 const DEFAULT_VAPID_SUBJECT = 'mailto:admin@welfare.dev'
+const DEFAULT_FEISHU_USER_MAILBOX_ID = 'me'
+const DEFAULT_FEISHU_DAILY_LIMIT = 400
+const MAX_FEISHU_DAILY_LIMIT = 400
+const FEISHU_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000
+const EMAIL_BODY_TEXT_LIMIT = 1800
 const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
+type NotificationDeliveryProvider = '' | 'resend' | 'feishu_mail' | 'feishu_webhook' | 'web_push'
 
 function encryptionSecret(env: WorkerEnv) {
   return env.NOTIFY_SECRET_KEY ?? ''
@@ -162,8 +192,125 @@ function notificationText(title: string, body: string) {
   return `${title}\n\n${body}\n\nTouch Great Welfare`
 }
 
-function notificationHtml(title: string, body: string) {
-  return `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(body).replace(/\n/g, '<br>')}</p><p style="color:#64748b">Touch Great Welfare</p>`
+function normalizeSiteBaseUrl(value?: string | null) {
+  const text = value?.trim().replace(/\/+$/, '') ?? ''
+  if (!text)
+    return ''
+
+  let url: URL
+  try {
+    url = new URL(text)
+  }
+  catch {
+    throw new Error('站点根地址格式无效')
+  }
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('站点根地址必须使用 HTTP 或 HTTPS')
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  url.search = ''
+  url.hash = ''
+  return url.toString().replace(/\/+$/, '')
+}
+
+function normalizeFeishuDailyLimit(value: unknown) {
+  const number = Number(value ?? DEFAULT_FEISHU_DAILY_LIMIT)
+  if (!Number.isFinite(number))
+    return DEFAULT_FEISHU_DAILY_LIMIT
+  return Math.min(MAX_FEISHU_DAILY_LIMIT, Math.max(1, Math.floor(number)))
+}
+
+function shanghaiDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map(part => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function expiresAtFromNow(seconds?: number) {
+  if (!Number.isFinite(seconds))
+    return ''
+  return new Date(Date.now() + Math.max(0, Number(seconds)) * 1000).toISOString()
+}
+
+function shouldRefreshFeishuAccessToken(accessToken: string, expiresAt?: string) {
+  if (!accessToken)
+    return true
+  if (!expiresAt)
+    return true
+  const time = Date.parse(expiresAt)
+  return !Number.isFinite(time) || time <= Date.now() + FEISHU_TOKEN_REFRESH_SKEW_MS
+}
+
+function truncateEmailBody(value: string) {
+  const text = value.trim()
+  if (text.length <= EMAIL_BODY_TEXT_LIMIT)
+    return text
+  return `${text.slice(0, EMAIL_BODY_TEXT_LIMIT).trimEnd()}\n\n（内容已截断，请进入站内查看完整内容。）`
+}
+
+function notificationPlainBody(body: string) {
+  return truncateEmailBody(richTextToPlainText(body) || body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim())
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function absoluteNotificationUrl(value: string, siteBaseUrl: string) {
+  const text = value.trim()
+  if (!text)
+    return ''
+  if (/^https?:\/\//i.test(text))
+    return text
+  if (!siteBaseUrl)
+    return text
+  return new URL(text.startsWith('/') ? text : `/${text}`, siteBaseUrl).toString()
+}
+
+function notificationAttachments(data: Record<string, unknown> | undefined, siteBaseUrl: string) {
+  const rawAttachments = Array.isArray(data?.attachments) ? data.attachments : []
+  return rawAttachments
+    .filter(isRecord)
+    .map((item) => {
+      const id = typeof item.id === 'string' ? item.id : ''
+      const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : '附件'
+      const rawUrl = typeof item.url === 'string' && item.url.trim()
+        ? item.url
+        : id
+          ? `/api/uploads/${encodeURIComponent(id)}/file`
+          : ''
+      return {
+        name,
+        url: absoluteNotificationUrl(rawUrl, siteBaseUrl),
+      }
+    })
+    .filter(item => item.url)
+}
+
+export function renderNotificationEmailContent(title: string, body: string, data: Record<string, unknown> | undefined, siteBaseUrl: string) {
+  const plainBody = notificationPlainBody(body)
+  const attachments = notificationAttachments(data, siteBaseUrl)
+  const attachmentText = attachments.length
+    ? `\n\n附件：\n${attachments.map((item, index) => `${index + 1}. ${item.name} - 点击下载：${item.url}`).join('\n')}`
+    : ''
+  const text = `${title}\n\n${plainBody}${attachmentText}\n\nTouch Great Welfare`
+  const attachmentHtml = attachments.length
+    ? `<p><strong>附件：</strong></p><ol>${attachments.map(item => `<li>${escapeHtml(item.name)} - <a href="${escapeHtml(item.url)}">点击下载</a></li>`).join('')}</ol>`
+    : ''
+  const html = `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(plainBody).replace(/\n/g, '<br>')}</p>${attachmentHtml}<p style="color:#64748b">Touch Great Welfare</p>`
+  return { text, html }
+}
+
+function attachmentData(attachments?: AttachmentMeta[]) {
+  return attachments?.map(file => ({
+    id: file.id,
+    name: file.name,
+    url: file.url,
+  })) ?? []
 }
 
 export async function ensureNotificationSchema(env: WorkerEnv) {
@@ -262,6 +409,7 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           error text,
           charged_points integer not null default 0,
           provider_message_id text,
+          provider text not null default '',
           created_at text not null default current_timestamp,
           updated_at text not null default current_timestamp
         )
@@ -288,6 +436,16 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           vapid_public_key text not null default '',
           vapid_private_key_encrypted text,
           vapid_subject text not null default '',
+          feishu_mail_enabled integer not null default 0,
+          feishu_app_id text not null default '',
+          feishu_app_secret_encrypted text,
+          feishu_user_access_token_encrypted text,
+          feishu_refresh_token_encrypted text,
+          feishu_access_token_expires_at text,
+          feishu_refresh_token_expires_at text,
+          feishu_user_mailbox_id text not null default 'me',
+          feishu_site_base_url text not null default '',
+          feishu_daily_limit integer not null default 400,
           created_at text not null default current_timestamp,
           updated_at text not null default current_timestamp
         )
@@ -340,6 +498,17 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'status', 'text not null default \'active\'')
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'provider', 'text not null default \'newapi\'')
     await addD1ColumnIfMissing(env, 'sub2api_config', 'database_url_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'notification_deliveries', 'provider', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_mail_enabled', 'integer not null default 0')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_app_id', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_app_secret_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_user_access_token_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_refresh_token_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_access_token_expires_at', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_refresh_token_expires_at', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_user_mailbox_id', 'text not null default \'me\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_site_base_url', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_daily_limit', 'integer not null default 400')
     return
   }
 
@@ -485,10 +654,12 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       error text,
       charged_points integer not null default 0,
       provider_message_id text,
+      provider text not null default '',
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
   `)
+  await pool.query('alter table notification_deliveries add column if not exists provider text not null default $1', [''])
   await pool.query(`
     create table if not exists push_subscriptions (
       id text primary key,
@@ -511,10 +682,30 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       vapid_public_key text not null default '',
       vapid_private_key_encrypted text,
       vapid_subject text not null default '',
+      feishu_mail_enabled boolean not null default false,
+      feishu_app_id text not null default '',
+      feishu_app_secret_encrypted text,
+      feishu_user_access_token_encrypted text,
+      feishu_refresh_token_encrypted text,
+      feishu_access_token_expires_at timestamptz,
+      feishu_refresh_token_expires_at timestamptz,
+      feishu_user_mailbox_id text not null default 'me',
+      feishu_site_base_url text not null default '',
+      feishu_daily_limit integer not null default 400,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
   `)
+  await pool.query('alter table notification_provider_config add column if not exists feishu_mail_enabled boolean not null default false')
+  await pool.query('alter table notification_provider_config add column if not exists feishu_app_id text not null default $1', [''])
+  await pool.query('alter table notification_provider_config add column if not exists feishu_app_secret_encrypted text')
+  await pool.query('alter table notification_provider_config add column if not exists feishu_user_access_token_encrypted text')
+  await pool.query('alter table notification_provider_config add column if not exists feishu_refresh_token_encrypted text')
+  await pool.query('alter table notification_provider_config add column if not exists feishu_access_token_expires_at timestamptz')
+  await pool.query('alter table notification_provider_config add column if not exists feishu_refresh_token_expires_at timestamptz')
+  await pool.query('alter table notification_provider_config add column if not exists feishu_user_mailbox_id text not null default $1', [DEFAULT_FEISHU_USER_MAILBOX_ID])
+  await pool.query('alter table notification_provider_config add column if not exists feishu_site_base_url text not null default $1', [''])
+  await pool.query('alter table notification_provider_config add column if not exists feishu_daily_limit integer not null default $1', [DEFAULT_FEISHU_DAILY_LIMIT])
 }
 
 async function insertNotification(env: WorkerEnv, input: CreateNotificationInput) {
@@ -549,6 +740,7 @@ async function recordDelivery(
   error = '',
   chargedPoints = 0,
   providerMessageId = '',
+  provider: NotificationDeliveryProvider = '',
 ) {
   await ensureNotificationSchema(env)
   const id = createId('dlv')
@@ -556,18 +748,18 @@ async function recordDelivery(
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
-        insert into notification_deliveries (id, notification_id, channel, status, error, charged_points, provider_message_id, created_at, updated_at)
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, current_timestamp, current_timestamp)
+        insert into notification_deliveries (id, notification_id, channel, status, error, charged_points, provider_message_id, provider, created_at, updated_at)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, current_timestamp, current_timestamp)
       `)
-      .bind(id, notificationId, channel, status, error || null, chargedPoints, providerMessageId || null)
+      .bind(id, notificationId, channel, status, error || null, chargedPoints, providerMessageId || null, provider)
       .run()
     return
   }
 
   await getPool(env).query(`
-    insert into notification_deliveries (id, notification_id, channel, status, error, charged_points, provider_message_id, created_at, updated_at)
-    values ($1, $2, $3, $4, $5, $6, $7, now(), now())
-  `, [id, notificationId, channel, status, error || null, chargedPoints, providerMessageId || null])
+    insert into notification_deliveries (id, notification_id, channel, status, error, charged_points, provider_message_id, provider, created_at, updated_at)
+    values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+  `, [id, notificationId, channel, status, error || null, chargedPoints, providerMessageId || null, provider])
 }
 
 async function getSettingsRow(env: WorkerEnv, userId: string) {
@@ -889,31 +1081,66 @@ async function decryptProviderSecret(value: string | null | undefined, env: Work
   }
 }
 
+function isFeishuMailConfigured(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  return !!(
+    config.feishuMailEnabled
+    && config.feishuAppId
+    && config.feishuAppSecret
+    && config.feishuRefreshToken
+    && config.feishuUserMailboxId
+  )
+}
+
 async function getEffectiveNotificationProviderConfig(env: WorkerEnv) {
   const stored = await getNotificationProviderConfig(env)
   const resendApiKey = await decryptProviderSecret(stored?.resend_api_key_encrypted, env)
   const vapidPrivateKey = await decryptProviderSecret(stored?.vapid_private_key_encrypted, env)
+  const feishuAppSecret = await decryptProviderSecret(stored?.feishu_app_secret_encrypted, env)
+  const feishuUserAccessToken = await decryptProviderSecret(stored?.feishu_user_access_token_encrypted, env)
+  const feishuRefreshToken = await decryptProviderSecret(stored?.feishu_refresh_token_encrypted, env)
   return {
     resendApiKey,
     resendFromEmail: stored?.resend_from_email || '',
     vapidPublicKey: stored?.vapid_public_key || '',
     vapidPrivateKey,
     vapidSubject: stored?.vapid_subject || DEFAULT_VAPID_SUBJECT,
+    feishuMailEnabled: boolValue(stored?.feishu_mail_enabled),
+    feishuAppId: stored?.feishu_app_id || '',
+    feishuAppSecret,
+    feishuUserAccessToken,
+    feishuRefreshToken,
+    feishuAccessTokenExpiresAt: toIso(stored?.feishu_access_token_expires_at),
+    feishuRefreshTokenExpiresAt: toIso(stored?.feishu_refresh_token_expires_at),
+    feishuUserMailboxId: stored?.feishu_user_mailbox_id || DEFAULT_FEISHU_USER_MAILBOX_ID,
+    feishuSiteBaseUrl: stored?.feishu_site_base_url || '',
+    feishuDailyLimit: normalizeFeishuDailyLimit(stored?.feishu_daily_limit),
     source: stored ? 'admin' as const : 'empty' as const,
   }
 }
 
 function serializeNotificationProviderConfig(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  const feishuMailConfigured = isFeishuMailConfigured(config)
   return {
     configured: {
-      email: !!(config.resendApiKey && config.resendFromEmail),
+      email: !!(config.resendApiKey && config.resendFromEmail) || feishuMailConfigured,
       push: !!(config.vapidPublicKey && config.vapidPrivateKey),
+      feishuMail: feishuMailConfigured,
     },
     resendApiKeyMasked: maskSecret(config.resendApiKey),
     resendFromEmail: config.resendFromEmail,
     vapidPublicKey: config.vapidPublicKey,
     vapidPrivateKeyMasked: maskSecret(config.vapidPrivateKey),
     vapidSubject: config.vapidSubject,
+    feishuMailEnabled: config.feishuMailEnabled,
+    feishuAppId: config.feishuAppId,
+    feishuAppSecretMasked: maskSecret(config.feishuAppSecret),
+    feishuUserAccessTokenMasked: maskSecret(config.feishuUserAccessToken),
+    feishuRefreshTokenMasked: maskSecret(config.feishuRefreshToken),
+    feishuAccessTokenExpiresAt: config.feishuAccessTokenExpiresAt,
+    feishuRefreshTokenExpiresAt: config.feishuRefreshTokenExpiresAt,
+    feishuUserMailboxId: config.feishuUserMailboxId,
+    feishuSiteBaseUrl: config.feishuSiteBaseUrl,
+    feishuDailyLimit: config.feishuDailyLimit,
     source: config.source,
   }
 }
@@ -923,14 +1150,45 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
   const stored = await getNotificationProviderConfig(env)
   let resendApiKeyEncrypted = stored?.resend_api_key_encrypted || null
   let vapidPrivateKeyEncrypted = stored?.vapid_private_key_encrypted || null
+  let feishuAppSecretEncrypted = stored?.feishu_app_secret_encrypted || null
+  let feishuUserAccessTokenEncrypted = stored?.feishu_user_access_token_encrypted || null
+  let feishuRefreshTokenEncrypted = stored?.feishu_refresh_token_encrypted || null
   if (payload.clearResendApiKey)
     resendApiKeyEncrypted = null
   if (payload.clearVapidPrivateKey)
     vapidPrivateKeyEncrypted = null
+  if (payload.clearFeishuAppSecret)
+    feishuAppSecretEncrypted = null
+  if (payload.clearFeishuUserAccessToken)
+    feishuUserAccessTokenEncrypted = null
+  if (payload.clearFeishuRefreshToken)
+    feishuRefreshTokenEncrypted = null
   if (payload.resendApiKey?.trim())
     resendApiKeyEncrypted = await encryptSecret(payload.resendApiKey.trim(), encryptionSecret(env))
   if (payload.vapidPrivateKey?.trim())
     vapidPrivateKeyEncrypted = await encryptSecret(payload.vapidPrivateKey.trim(), encryptionSecret(env))
+  if (payload.feishuAppSecret?.trim())
+    feishuAppSecretEncrypted = await encryptSecret(payload.feishuAppSecret.trim(), encryptionSecret(env))
+  if (payload.feishuUserAccessToken?.trim())
+    feishuUserAccessTokenEncrypted = await encryptSecret(payload.feishuUserAccessToken.trim(), encryptionSecret(env))
+  if (payload.feishuRefreshToken?.trim())
+    feishuRefreshTokenEncrypted = await encryptSecret(payload.feishuRefreshToken.trim(), encryptionSecret(env))
+
+  const feishuMailEnabled = !!payload.feishuMailEnabled
+  const feishuAppId = payload.feishuAppId?.trim() || ''
+  const feishuUserMailboxId = payload.feishuUserMailboxId?.trim() || DEFAULT_FEISHU_USER_MAILBOX_ID
+  const feishuSiteBaseUrl = normalizeSiteBaseUrl(payload.feishuSiteBaseUrl)
+  const feishuDailyLimit = normalizeFeishuDailyLimit(payload.feishuDailyLimit)
+  if (feishuMailEnabled) {
+    if (!feishuAppId)
+      throw new Error('启用飞书邮件前请填写 App ID')
+    if (!feishuAppSecretEncrypted)
+      throw new Error('启用飞书邮件前请填写 App Secret')
+    if (!feishuRefreshTokenEncrypted)
+      throw new Error('启用飞书邮件前请填写 refresh token')
+    if (!feishuUserMailboxId)
+      throw new Error('启用飞书邮件前请填写发信邮箱')
+  }
 
   const config = {
     resendApiKeyEncrypted,
@@ -938,15 +1196,28 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
     vapidPublicKey: payload.vapidPublicKey?.trim() || '',
     vapidPrivateKeyEncrypted,
     vapidSubject: payload.vapidSubject?.trim() || DEFAULT_VAPID_SUBJECT,
+    feishuMailEnabled,
+    feishuAppId,
+    feishuAppSecretEncrypted,
+    feishuUserAccessTokenEncrypted,
+    feishuRefreshTokenEncrypted,
+    feishuAccessTokenExpiresAt: payload.clearFeishuUserAccessToken ? '' : payload.feishuAccessTokenExpiresAt?.trim() || toIso(stored?.feishu_access_token_expires_at) || '',
+    feishuRefreshTokenExpiresAt: payload.clearFeishuRefreshToken ? '' : payload.feishuRefreshTokenExpiresAt?.trim() || toIso(stored?.feishu_refresh_token_expires_at) || '',
+    feishuUserMailboxId,
+    feishuSiteBaseUrl,
+    feishuDailyLimit,
   }
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
         insert into notification_provider_config (
-          id, resend_api_key_encrypted, resend_from_email, vapid_public_key, vapid_private_key_encrypted, vapid_subject, updated_at
+          id, resend_api_key_encrypted, resend_from_email, vapid_public_key, vapid_private_key_encrypted, vapid_subject,
+          feishu_mail_enabled, feishu_app_id, feishu_app_secret_encrypted, feishu_user_access_token_encrypted,
+          feishu_refresh_token_encrypted, feishu_access_token_expires_at, feishu_refresh_token_expires_at,
+          feishu_user_mailbox_id, feishu_site_base_url, feishu_daily_limit, updated_at
         )
-        values (?1, ?2, ?3, ?4, ?5, ?6, current_timestamp)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, current_timestamp)
         on conflict (id)
         do update set
           resend_api_key_encrypted = excluded.resend_api_key_encrypted,
@@ -954,6 +1225,16 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
           vapid_public_key = excluded.vapid_public_key,
           vapid_private_key_encrypted = excluded.vapid_private_key_encrypted,
           vapid_subject = excluded.vapid_subject,
+          feishu_mail_enabled = excluded.feishu_mail_enabled,
+          feishu_app_id = excluded.feishu_app_id,
+          feishu_app_secret_encrypted = excluded.feishu_app_secret_encrypted,
+          feishu_user_access_token_encrypted = excluded.feishu_user_access_token_encrypted,
+          feishu_refresh_token_encrypted = excluded.feishu_refresh_token_encrypted,
+          feishu_access_token_expires_at = excluded.feishu_access_token_expires_at,
+          feishu_refresh_token_expires_at = excluded.feishu_refresh_token_expires_at,
+          feishu_user_mailbox_id = excluded.feishu_user_mailbox_id,
+          feishu_site_base_url = excluded.feishu_site_base_url,
+          feishu_daily_limit = excluded.feishu_daily_limit,
           updated_at = current_timestamp
       `)
       .bind(
@@ -963,15 +1244,28 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
         config.vapidPublicKey,
         config.vapidPrivateKeyEncrypted,
         config.vapidSubject,
+        config.feishuMailEnabled ? 1 : 0,
+        config.feishuAppId,
+        config.feishuAppSecretEncrypted,
+        config.feishuUserAccessTokenEncrypted,
+        config.feishuRefreshTokenEncrypted,
+        config.feishuAccessTokenExpiresAt || null,
+        config.feishuRefreshTokenExpiresAt || null,
+        config.feishuUserMailboxId,
+        config.feishuSiteBaseUrl,
+        config.feishuDailyLimit,
       )
       .run()
   }
   else {
     await getPool(env).query(`
       insert into notification_provider_config (
-        id, resend_api_key_encrypted, resend_from_email, vapid_public_key, vapid_private_key_encrypted, vapid_subject, updated_at
+        id, resend_api_key_encrypted, resend_from_email, vapid_public_key, vapid_private_key_encrypted, vapid_subject,
+        feishu_mail_enabled, feishu_app_id, feishu_app_secret_encrypted, feishu_user_access_token_encrypted,
+        feishu_refresh_token_encrypted, feishu_access_token_expires_at, feishu_refresh_token_expires_at,
+        feishu_user_mailbox_id, feishu_site_base_url, feishu_daily_limit, updated_at
       )
-      values ($1, $2, $3, $4, $5, $6, now())
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
       on conflict (id)
       do update set
         resend_api_key_encrypted = excluded.resend_api_key_encrypted,
@@ -979,6 +1273,16 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
         vapid_public_key = excluded.vapid_public_key,
         vapid_private_key_encrypted = excluded.vapid_private_key_encrypted,
         vapid_subject = excluded.vapid_subject,
+        feishu_mail_enabled = excluded.feishu_mail_enabled,
+        feishu_app_id = excluded.feishu_app_id,
+        feishu_app_secret_encrypted = excluded.feishu_app_secret_encrypted,
+        feishu_user_access_token_encrypted = excluded.feishu_user_access_token_encrypted,
+        feishu_refresh_token_encrypted = excluded.feishu_refresh_token_encrypted,
+        feishu_access_token_expires_at = excluded.feishu_access_token_expires_at,
+        feishu_refresh_token_expires_at = excluded.feishu_refresh_token_expires_at,
+        feishu_user_mailbox_id = excluded.feishu_user_mailbox_id,
+        feishu_site_base_url = excluded.feishu_site_base_url,
+        feishu_daily_limit = excluded.feishu_daily_limit,
         updated_at = now()
     `, [
       NOTIFICATION_PROVIDER_CONFIG_ID,
@@ -987,16 +1291,140 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
       config.vapidPublicKey,
       config.vapidPrivateKeyEncrypted,
       config.vapidSubject,
+      config.feishuMailEnabled,
+      config.feishuAppId,
+      config.feishuAppSecretEncrypted,
+      config.feishuUserAccessTokenEncrypted,
+      config.feishuRefreshTokenEncrypted,
+      config.feishuAccessTokenExpiresAt || null,
+      config.feishuRefreshTokenExpiresAt || null,
+      config.feishuUserMailboxId,
+      config.feishuSiteBaseUrl,
+      config.feishuDailyLimit,
     ])
   }
 
   return getEffectiveNotificationProviderConfig(env)
 }
 
-async function sendEmail(env: WorkerEnv, to: string, title: string, body: string) {
-  const config = await getEffectiveNotificationProviderConfig(env)
+async function countSentFeishuMailToday(env: WorkerEnv) {
+  await ensureNotificationSchema(env)
+  const dateKey = shanghaiDateKey()
+  if (shouldUseD1(env)) {
+    const row = await env.LOCAL_DB!
+      .prepare(`
+        select count(*) as count
+        from notification_deliveries
+        where provider = ?1
+          and status = 'sent'
+          and date(created_at, '+8 hours') = ?2
+      `)
+      .bind('feishu_mail', dateKey)
+      .first<{ count: number }>()
+    return Number(row?.count ?? 0)
+  }
+
+  const result = await getPool(env).query<{ count: string }>(`
+    select count(*) as count
+    from notification_deliveries
+    where provider = $1
+      and status = 'sent'
+      and (created_at at time zone 'Asia/Shanghai')::date = $2::date
+  `, ['feishu_mail', dateKey])
+  return Number(result.rows[0]?.count ?? 0)
+}
+
+async function updateFeishuTokens(
+  env: WorkerEnv,
+  accessToken: string,
+  refreshToken: string,
+  accessTokenExpiresAt: string,
+  refreshTokenExpiresAt: string,
+) {
+  const accessTokenEncrypted = await encryptSecret(accessToken, encryptionSecret(env))
+  const refreshTokenEncrypted = await encryptSecret(refreshToken, encryptionSecret(env))
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare(`
+        update notification_provider_config
+        set feishu_user_access_token_encrypted = ?1,
+            feishu_refresh_token_encrypted = ?2,
+            feishu_access_token_expires_at = ?3,
+            feishu_refresh_token_expires_at = ?4,
+            updated_at = current_timestamp
+        where id = ?5
+      `)
+      .bind(accessTokenEncrypted, refreshTokenEncrypted, accessTokenExpiresAt, refreshTokenExpiresAt, NOTIFICATION_PROVIDER_CONFIG_ID)
+      .run()
+    return
+  }
+
+  await getPool(env).query(`
+    update notification_provider_config
+    set feishu_user_access_token_encrypted = $1,
+        feishu_refresh_token_encrypted = $2,
+        feishu_access_token_expires_at = $3,
+        feishu_refresh_token_expires_at = $4,
+        updated_at = now()
+    where id = $5
+  `, [accessTokenEncrypted, refreshTokenEncrypted, accessTokenExpiresAt, refreshTokenExpiresAt, NOTIFICATION_PROVIDER_CONFIG_ID])
+}
+
+async function refreshFeishuUserAccessToken(env: WorkerEnv, config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  if (!config.feishuAppId || !config.feishuAppSecret || !config.feishuRefreshToken)
+    throw new Error('飞书邮件刷新凭证未配置')
+
+  const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      client_id: config.feishuAppId,
+      client_secret: config.feishuAppSecret,
+      refresh_token: config.feishuRefreshToken,
+    }),
+  })
+  const text = await response.text()
+  const result = text
+    ? JSON.parse(text) as {
+      code?: number
+      access_token?: string
+      expires_in?: number
+      refresh_token?: string
+      refresh_token_expires_in?: number
+      error?: string
+      error_description?: string
+    }
+    : {}
+  if (!response.ok || result.code !== 0)
+    throw new Error(result.error_description || result.error || `飞书 token 刷新失败：${response.status}`)
+  if (!result.access_token || !result.refresh_token)
+    throw new Error('飞书 token 刷新响应缺少 access_token 或 refresh_token')
+
+  const accessTokenExpiresAt = expiresAtFromNow(result.expires_in)
+  const refreshTokenExpiresAt = expiresAtFromNow(result.refresh_token_expires_in)
+  await updateFeishuTokens(env, result.access_token, result.refresh_token, accessTokenExpiresAt, refreshTokenExpiresAt)
+  return result.access_token
+}
+
+async function feishuAccessTokenForSend(env: WorkerEnv, config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  if (shouldRefreshFeishuAccessToken(config.feishuUserAccessToken, config.feishuAccessTokenExpiresAt))
+    return refreshFeishuUserAccessToken(env, config)
+  return config.feishuUserAccessToken
+}
+
+async function sendResendEmail(
+  config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>,
+  to: string,
+  title: string,
+  body: string,
+  data?: Record<string, unknown>,
+) {
   if (!config.resendApiKey || !config.resendFromEmail)
     throw new Error('Resend 邮箱通知未配置')
+  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
 
   const response = await fetchWithTimeout('https://api.resend.com/emails', {
     method: 'POST',
@@ -1008,8 +1436,8 @@ async function sendEmail(env: WorkerEnv, to: string, title: string, body: string
       from: config.resendFromEmail,
       to: [to],
       subject: title,
-      text: notificationText(title, body),
-      html: notificationHtml(title, body),
+      text: content.text,
+      html: content.html,
     }),
   })
   const result = await response.json().catch(() => ({})) as { id?: string, message?: string }
@@ -1017,6 +1445,86 @@ async function sendEmail(env: WorkerEnv, to: string, title: string, body: string
     throw new Error(result.message || `Resend 请求失败：${response.status}`)
 
   return result.id ?? ''
+}
+
+async function sendFeishuMail(
+  env: WorkerEnv,
+  config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>,
+  to: string,
+  title: string,
+  body: string,
+  notificationId: string,
+  data?: Record<string, unknown>,
+) {
+  if (!isFeishuMailConfigured(config))
+    throw new Error('飞书邮件通知未配置')
+
+  const accessToken = await feishuAccessTokenForSend(env, config)
+  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
+  const response = await fetchWithTimeout(`https://open.feishu.cn/open-apis/mail/v1/user_mailboxes/${encodeURIComponent(config.feishuUserMailboxId)}/messages/send`, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${accessToken}`,
+      'content-type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      subject: title,
+      to: [{ mail_address: to }],
+      body_plain_text: content.text,
+      body_html: content.html,
+      dedupe_key: notificationId,
+    }),
+  })
+  const text = await response.text()
+  const result = text ? JSON.parse(text) as { code?: number, msg?: string, data?: { message_id?: string } } : {}
+  if (!response.ok || result.code !== 0)
+    throw new Error(result.msg || `飞书邮件请求失败：${response.status}`)
+
+  return result.data?.message_id ?? ''
+}
+
+async function dispatchEmailChannel(
+  env: WorkerEnv,
+  userId: string,
+  address: string,
+  notificationId: string,
+  input: CreateNotificationInput,
+  chargedPoints = 0,
+) {
+  const config = await getEffectiveNotificationProviderConfig(env)
+
+  if (config.feishuMailEnabled) {
+    if (!isFeishuMailConfigured(config)) {
+      await recordDelivery(env, notificationId, 'email', 'skipped', '飞书邮件通知未配置完整', 0, '', 'feishu_mail')
+    }
+    else if (await countSentFeishuMailToday(env) >= config.feishuDailyLimit) {
+      await recordDelivery(env, notificationId, 'email', 'skipped', `飞书邮件已达到每日 ${config.feishuDailyLimit} 封限额`, 0, '', 'feishu_mail')
+    }
+    else {
+      try {
+        const providerId = await sendFeishuMail(env, config, address, input.title, input.body, notificationId, input.data)
+        if (chargedPoints)
+          await chargeEmailNotification(env, userId, notificationId)
+        await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'feishu_mail')
+        return true
+      }
+      catch (error) {
+        await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '飞书邮件发送失败', 0, '', 'feishu_mail')
+      }
+    }
+  }
+
+  try {
+    const providerId = await sendResendEmail(config, address, input.title, input.body, input.data)
+    if (chargedPoints)
+      await chargeEmailNotification(env, userId, notificationId)
+    await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'resend')
+    return true
+  }
+  catch (error) {
+    await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '邮箱发送失败', 0, '', 'resend')
+    return false
+  }
 }
 
 async function sendFeishu(env: WorkerEnv, encryptedWebhook: string, title: string, body: string) {
@@ -1100,28 +1608,21 @@ async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: No
       await recordDelivery(env, notificationId, 'email', 'skipped', '邮箱通知余额不足')
     }
     else {
-      try {
-        const providerId = await sendEmail(env, address, input.title, input.body)
-        await chargeEmailNotification(env, user.id, notificationId)
-        await recordDelivery(env, notificationId, 'email', 'sent', '', EMAIL_NOTIFICATION_COST, providerId)
-      }
-      catch (error) {
-        await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '邮箱发送失败')
-      }
+      await dispatchEmailChannel(env, user.id, address, notificationId, input, EMAIL_NOTIFICATION_COST)
     }
   }
 
   if (boolValue(settings?.feishu_enabled)) {
     if (!settings?.feishu_webhook_encrypted) {
-      await recordDelivery(env, notificationId, 'feishu', 'skipped', '飞书 Webhook 未配置')
+      await recordDelivery(env, notificationId, 'feishu', 'skipped', '飞书 Webhook 未配置', 0, '', 'feishu_webhook')
     }
     else {
       try {
         await sendFeishu(env, settings.feishu_webhook_encrypted, input.title, input.body)
-        await recordDelivery(env, notificationId, 'feishu', 'sent')
+        await recordDelivery(env, notificationId, 'feishu', 'sent', '', 0, '', 'feishu_webhook')
       }
       catch (error) {
-        await recordDelivery(env, notificationId, 'feishu', 'failed', error instanceof Error ? error.message : '飞书通知发送失败')
+        await recordDelivery(env, notificationId, 'feishu', 'failed', error instanceof Error ? error.message : '飞书通知发送失败', 0, '', 'feishu_webhook')
       }
     }
   }
@@ -1129,7 +1630,7 @@ async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: No
   if (boolValue(settings?.browser_push_enabled)) {
     const subscriptions = await getPushSubscriptions(env, user.id)
     if (!subscriptions.length) {
-      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '未注册浏览器 Push 订阅')
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '未注册浏览器 Push 订阅', 0, '', 'web_push')
       return
     }
 
@@ -1144,7 +1645,7 @@ async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: No
         errors.push(error instanceof Error ? error.message : 'Push 发送失败')
       }
     }
-    await recordDelivery(env, notificationId, 'browser_push', sent > 0 ? 'sent' : 'failed', errors.join('\n'))
+    await recordDelivery(env, notificationId, 'browser_push', sent > 0 ? 'sent' : 'failed', errors.join('\n'), 0, '', 'web_push')
   }
 }
 
@@ -1159,26 +1660,20 @@ async function dispatchAdminAnnouncementChannels(
 ) {
   if (channels.includes('email')) {
     const address = settings?.email_address || user.profile.email
-    try {
-      const providerId = await sendEmail(env, address, input.title, input.body)
-      await recordDelivery(env, notificationId, 'email', 'sent', '', 0, providerId)
-    }
-    catch (error) {
-      await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '邮箱发送失败')
-    }
+    await dispatchEmailChannel(env, user.id, address, notificationId, input)
   }
 
   if (channels.includes('feishu')) {
     if (!settings?.feishu_webhook_encrypted) {
-      await recordDelivery(env, notificationId, 'feishu', 'skipped', '飞书 Webhook 未配置')
+      await recordDelivery(env, notificationId, 'feishu', 'skipped', '飞书 Webhook 未配置', 0, '', 'feishu_webhook')
     }
     else {
       try {
         await sendFeishu(env, settings.feishu_webhook_encrypted, input.title, input.body)
-        await recordDelivery(env, notificationId, 'feishu', 'sent')
+        await recordDelivery(env, notificationId, 'feishu', 'sent', '', 0, '', 'feishu_webhook')
       }
       catch (error) {
-        await recordDelivery(env, notificationId, 'feishu', 'failed', error instanceof Error ? error.message : '飞书通知发送失败')
+        await recordDelivery(env, notificationId, 'feishu', 'failed', error instanceof Error ? error.message : '飞书通知发送失败', 0, '', 'feishu_webhook')
       }
     }
   }
@@ -1186,13 +1681,13 @@ async function dispatchAdminAnnouncementChannels(
   if (channels.includes('browser_push')) {
     const canPush = forcePush || boolValue(settings?.browser_push_enabled)
     if (!canPush) {
-      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '用户未启用浏览器 Push')
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '用户未启用浏览器 Push', 0, '', 'web_push')
       return
     }
 
     const subscriptions = await getPushSubscriptions(env, user.id)
     if (!subscriptions.length) {
-      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '未注册浏览器 Push 订阅')
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '未注册浏览器 Push 订阅', 0, '', 'web_push')
       return
     }
 
@@ -1207,7 +1702,7 @@ async function dispatchAdminAnnouncementChannels(
         errors.push(error instanceof Error ? error.message : 'Push 发送失败')
       }
     }
-    await recordDelivery(env, notificationId, 'browser_push', sent > 0 ? 'sent' : 'failed', errors.join('\n'))
+    await recordDelivery(env, notificationId, 'browser_push', sent > 0 ? 'sent' : 'failed', errors.join('\n'), 0, '', 'web_push')
   }
 }
 
@@ -1363,12 +1858,14 @@ export async function createAndDispatchNotification(env: WorkerEnv, input: Creat
 function applicationNotification(application: WelfareApplication, event: NotificationEvent) {
   const isRejected = event === 'application_rejected'
   const typeName = application.type.toUpperCase()
+  const message = latestApplicationMessage(application, 'result_submission')
   return {
     title: isRejected ? `${typeName} 申请已退回` : `${typeName} 申请已答复`,
     body: application.answer || (isRejected ? `你的 ${typeName} 申请已退回，已按退回规则处理积分。` : `你的 ${typeName} 申请已通过并完成答复。`),
     data: {
       applicationId: application.id,
       type: application.type,
+      attachments: attachmentData(message?.attachments),
     },
   }
 }
@@ -1403,6 +1900,7 @@ function supplementSubmittedNotification(application: WelfareApplication, user?:
       applicationId: application.id,
       type: application.type,
       userId: application.userId,
+      attachments: attachmentData(message?.attachments),
     },
   }
 }
@@ -1426,6 +1924,7 @@ function verificationSubmittedNotification(verification: StudentVerification, us
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
       userId: verification.userId,
+      attachments: attachmentData(verification.attachments),
     },
   }
 }
@@ -1450,6 +1949,7 @@ function verificationSupplementSubmittedNotification(verification: StudentVerifi
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
       userId: verification.userId,
+      attachments: attachmentData(verification.attachments),
     },
   }
 }

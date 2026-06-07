@@ -93,15 +93,15 @@ function onApproveApplication(id: string, type: string) {
 
 function onRejectApplication(id: string) {
   const fraudulent = !!rejectFraudulentDrafts[id]
-  runSafely(() => {
-    rejectApplicationWithOptions(id, reviewDrafts[id] ?? '材料不足或不符合公益支持范围。', { fraudulent })
+  runSafely(async () => {
+    await rejectApplicationWithOptions(id, reviewDrafts[id] ?? '材料不足或不符合公益支持范围。', { fraudulent })
     delete reviewDrafts[id]
   }, fraudulent ? '已退回申请并记录造假限制' : '已退回申请并按规则处理')
 }
 
 function onRequestSupplement(id: string) {
-  runSafely(() => {
-    requestApplicationSupplement(id, reviewDrafts[id] ?? '请补充项目背景、当前进展、希望支持的具体问题和必要链接。')
+  runSafely(async () => {
+    await requestApplicationSupplement(id, reviewDrafts[id] ?? '请补充项目背景、当前进展、希望支持的具体问题和必要链接。')
     delete reviewDrafts[id]
     delete rejectFraudulentDrafts[id]
   }, '已请求用户补充材料')
@@ -114,9 +114,7 @@ function onReviewResourceItem(applicationId: string, itemId: string) {
 }
 
 function onCompleteProvision(applicationId: string, itemId: string) {
-  runSafely(() => {
-    completeResourceProvision(applicationId, itemId)
-  }, '人工开通结果已记录')
+  runSafely(() => completeResourceProvision(applicationId, itemId), '人工开通结果已记录')
 }
 
 function llmBudgetText(item: { llmApiModelKey?: string, llmApiBudgetUsd?: number }) {
@@ -160,14 +158,12 @@ function crowdDecisionTone(decision: string) {
 }
 
 function onSubmitCrowdReview(id: string) {
-  runSafely(() => {
-    submitCrowdReviewDraft(id)
-  }, '协作建议已提交')
+  runSafely(() => submitCrowdReviewDraft(id), '协作建议已提交')
 }
 
 function onApproveStudent(id: string) {
-  runSafely(() => {
-    approveStudentVerification(id, reviewDrafts[id] ?? '认证通过，欢迎加入公益计划。')
+  runSafely(async () => {
+    await approveStudentVerification(id, reviewDrafts[id] ?? '认证通过，欢迎加入公益计划。')
     delete reviewDrafts[id]
   }, '认证申请已通过，审核积分已返还')
 }
@@ -180,15 +176,15 @@ function studentSupplementDefaultReply(id: string) {
 }
 
 function onRequestStudentSupplement(id: string) {
-  runSafely(() => {
-    requestStudentSupplement(id, reviewDrafts[id] ?? studentSupplementDefaultReply(id))
+  runSafely(async () => {
+    await requestStudentSupplement(id, reviewDrafts[id] ?? studentSupplementDefaultReply(id))
     delete reviewDrafts[id]
   }, '已要求用户补充资料')
 }
 
 function onRejectStudent(id: string) {
-  runSafely(() => {
-    rejectStudentVerification(id, reviewDrafts[id] ?? '材料不足，请补充有效证明后再次申请。')
+  runSafely(async () => {
+    await rejectStudentVerification(id, reviewDrafts[id] ?? '材料不足，请补充有效证明后再次申请。')
     delete reviewDrafts[id]
   }, '认证申请已退回，审核费不返还')
 }
