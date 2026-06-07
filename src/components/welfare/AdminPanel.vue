@@ -28,6 +28,7 @@ const {
   educationMailConfigForm,
   notificationProviderConfigForm,
   siteBannerConfigForm,
+  systemConfigForm,
   adminAnnouncementForm,
   adminAnnouncements,
   pointTransactions,
@@ -54,6 +55,8 @@ const {
   persistNotificationProviderConfig,
   refreshSiteBannerConfig,
   persistSiteBannerConfig,
+  refreshSystemConfigForm,
+  persistSystemConfig,
   refreshAdminAnnouncements,
   refreshPointTransactions,
   sendAdminAnnouncement,
@@ -1456,6 +1459,14 @@ function saveSiteBannerConfig() {
   }, '顶部 Banner 已保存')
 }
 
+function saveSystemConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistSystemConfig()
+  }, '系统开关已保存')
+}
+
 function publishAdminAnnouncement() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -1474,6 +1485,7 @@ function notificationChannelLabel(channel: string) {
 
 onMounted(() => {
   refreshSiteBannerConfig()
+  refreshSystemConfigForm()
   refreshRechargeConfig().catch(() => {})
   refreshGitHubAppConfig().catch(() => {})
   refreshOAuthProviderConfigs().catch(() => {})
@@ -1736,6 +1748,78 @@ onMounted(() => {
           </template>
 
           <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <div class="text-lg fw-900 mb-1 flex gap-2 items-center">
+                  <span class="i-carbon-settings-adjust" />
+                  系统开关
+                </div>
+                <p class="text-sm text-slate-500 leading-6 dark:text-slate-400">
+                  快速开启或关闭站点、登录、注册、充值和认证入口；关闭后服务端也会拦截对应提交。
+                </p>
+              </div>
+              <TxButton variant="primary" :disabled="!isAdmin || systemConfigForm.loading" @click="saveSystemConfig">
+                {{ systemConfigForm.loading ? '保存中...' : '保存系统开关' }}
+              </TxButton>
+            </div>
+            <div class="mt-5 gap-4 grid lg:grid-cols-2">
+              <label class="option-check">
+                <TxCheckbox v-model="systemConfigForm.siteEnabled" variant="checkmark" :disabled="!isAdmin || systemConfigForm.loading" />
+                <span><b>开启站点</b><small>关闭后普通页面和业务入口暂停，仅管理员可登录后台恢复。</small></span>
+              </label>
+              <label class="option-check">
+                <TxCheckbox v-model="systemConfigForm.loginEnabled" variant="checkmark" :disabled="!isAdmin || systemConfigForm.loading || !systemConfigForm.siteEnabled" />
+                <span><b>开启登录</b><small>关闭普通 OAuth 登录；管理员账号密码登录保留。</small></span>
+              </label>
+              <label class="option-check">
+                <TxCheckbox v-model="systemConfigForm.registrationEnabled" variant="checkmark" :disabled="!isAdmin || systemConfigForm.loading || !systemConfigForm.siteEnabled" />
+                <span><b>开启注册</b><small>关闭后新 OAuth 用户不能创建账号，已有用户仍可登录。</small></span>
+              </label>
+              <label class="option-check">
+                <TxCheckbox v-model="systemConfigForm.rechargeEnabled" variant="checkmark" :disabled="!isAdmin || systemConfigForm.loading || !systemConfigForm.siteEnabled" />
+                <span><b>开启充值</b><small>关闭用户充值入口和新充值订单创建。</small></span>
+              </label>
+              <label class="option-check">
+                <TxCheckbox v-model="systemConfigForm.studentVerificationEnabled" variant="checkmark" :disabled="!isAdmin || systemConfigForm.loading || !systemConfigForm.siteEnabled" />
+                <span><b>开启学生认证</b><small>控制学生认证材料提交和教育邮箱证明码生成。</small></span>
+              </label>
+              <label class="option-check">
+                <TxCheckbox v-model="systemConfigForm.frontlineVerificationEnabled" variant="checkmark" :disabled="!isAdmin || systemConfigForm.loading || !systemConfigForm.siteEnabled" />
+                <span><b>开启一线认证</b><small>控制一线认证材料提交。</small></span>
+              </label>
+            </div>
+            <div class="mt-5 gap-4 grid md:grid-cols-2 xl:grid-cols-3">
+              <label class="gap-2 grid">
+                <span class="field-label">关站提示</span>
+                <TxInput v-model="systemConfigForm.siteClosedReason" :disabled="!isAdmin || systemConfigForm.loading" placeholder="系统维护中，请稍后再试。" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">登录关闭提示</span>
+                <TxInput v-model="systemConfigForm.loginClosedReason" :disabled="!isAdmin || systemConfigForm.loading" placeholder="登录入口维护中，请稍后再试。" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">注册关闭提示</span>
+                <TxInput v-model="systemConfigForm.registrationClosedReason" :disabled="!isAdmin || systemConfigForm.loading" placeholder="新用户注册暂未开放。" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">充值关闭提示</span>
+                <TxInput v-model="systemConfigForm.rechargeClosedReason" :disabled="!isAdmin || systemConfigForm.loading" placeholder="充值入口维护中，请稍后再试。" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">学生认证关闭提示</span>
+                <TxInput v-model="systemConfigForm.studentVerificationReason" :disabled="!isAdmin || systemConfigForm.loading" placeholder="学生认证暂未开放。" />
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">一线认证关闭提示</span>
+                <TxInput v-model="systemConfigForm.frontlineVerificationReason" :disabled="!isAdmin || systemConfigForm.loading" placeholder="一线认证暂未开放。" />
+              </label>
+            </div>
+            <div v-if="systemConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+              {{ systemConfigForm.message }}
+            </div>
+          </div>
+
+          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
             <div class="flex flex-wrap gap-3 items-start justify-between">
               <div>
                 <div class="text-lg fw-900 mb-1 flex gap-2 items-center">

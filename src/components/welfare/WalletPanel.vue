@@ -12,6 +12,8 @@ const route = useRoute()
 const {
   currentUser,
   rechargeForm,
+  rechargeFeatureEnabled,
+  systemConfig,
   latestTransactions,
   currentUserCoupons,
   currentUserDailyCheckIns,
@@ -82,8 +84,12 @@ const isRechargeAmountValid = computed(() => {
   const amount = Number(rechargeForm.amount)
   return Number.isInteger(amount) && amount >= RECHARGE_MIN_LDC && amount <= RECHARGE_MAX_LDC
 })
+const rechargeClosedReason = computed(() => !systemConfig.value.siteEnabled ? systemConfig.value.siteClosedReason : systemConfig.value.rechargeClosedReason)
 
 function openRechargeDialog() {
+  if (!rechargeFeatureEnabled.value)
+    return
+
   if (!isRechargeAmountValid.value)
     rechargeForm.amount = RECHARGE_DEFAULT_LDC
 
@@ -210,10 +216,10 @@ onMounted(async () => {
         </div>
 
         <div class="wallet-recharge-panel">
-          <TxButton class="wallet-recharge-button" variant="primary" :disabled="rechargeForm.loading" @click="openRechargeDialog">
-            {{ rechargeForm.loading ? '创建订单中...' : '充值' }}
+          <TxButton class="wallet-recharge-button" variant="primary" :disabled="rechargeForm.loading || !rechargeFeatureEnabled" @click="openRechargeDialog">
+            {{ rechargeForm.loading ? '创建订单中...' : rechargeFeatureEnabled ? '充值' : '充值关闭' }}
           </TxButton>
-          <span class="wallet-recharge-rate">限时倍率 1:10</span>
+          <span class="wallet-recharge-rate">{{ rechargeFeatureEnabled ? '限时倍率 1:10' : rechargeClosedReason }}</span>
         </div>
       </div>
     </TxCard>
@@ -420,7 +426,7 @@ onMounted(async () => {
             <TxButton variant="secondary" :disabled="rechargeForm.loading" @click="closeRechargeDialog">
               取消
             </TxButton>
-            <TxButton variant="primary" :disabled="rechargeForm.loading || !isRechargeAmountValid" @click="recharge">
+            <TxButton variant="primary" :disabled="rechargeForm.loading || !isRechargeAmountValid || !rechargeFeatureEnabled" @click="recharge">
               {{ rechargeForm.loading ? '创建订单中...' : '确认充值' }}
             </TxButton>
           </div>

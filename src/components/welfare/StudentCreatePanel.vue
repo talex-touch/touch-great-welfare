@@ -29,6 +29,7 @@ const {
   studentGradeOptions,
   studentSchoolSuggestions,
   totalStudentBytes,
+  systemConfig,
   submitStudentVerification,
   supplementStudentVerification,
   fillStudentFormFromVerification,
@@ -60,6 +61,9 @@ const currentVerificationLabel = computed(() => verificationTypeLabel(selectedVe
 const currentOrganizationLabel = computed(() => verificationOrganizationLabel(selectedVerificationType.value))
 const currentCategoryOptions = computed(() => isStudentVerification.value ? [...studentCategoryOptions] : [...frontlineCategoryOptions])
 const selectedVerificationOption = computed(() => verificationTypeOptions.find(option => option.value === selectedVerificationType.value) ?? verificationTypeOptions[0])
+const selectedVerificationToggle = computed(() => systemConfig.value.verification[selectedVerificationType.value])
+const isVerificationEntryOpen = computed(() => systemConfig.value.siteEnabled && selectedVerificationToggle.value.enabled)
+const verificationClosedReason = computed(() => !systemConfig.value.siteEnabled ? systemConfig.value.siteClosedReason : selectedVerificationToggle.value.reason || `${currentVerificationLabel.value}暂未开放`)
 const editingVerificationId = computed(() => {
   const raw = route.query.edit
   return Array.isArray(raw) ? raw[0] : String(raw ?? '')
@@ -89,6 +93,9 @@ const filteredStudentSchoolSuggestions = computed(() => {
 const filteredStudentGradeOptions = computed(() => isStudentVerification.value ? [...studentGradeOptions] : ['3 个月内', '半年内', '1 年', '2 年', '3 年及以上', '长期服务'])
 
 function continueToDetails() {
+  if (!isVerificationEntryOpen.value)
+    return
+
   currentStep.value = 'details'
 }
 
@@ -163,6 +170,9 @@ function normalizeSchoolQuery(value: string) {
 
 function onSubmitStudentVerification() {
   runSafely(async () => {
+    if (!isSupplementMode.value && !isVerificationEntryOpen.value)
+      throw new Error(verificationClosedReason.value)
+
     const payload = {
       realName: studentForm.realName,
       verificationType: studentForm.verificationType,
@@ -263,6 +273,9 @@ onMounted(() => {
       <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
         登录后可以申请认证。
       </div>
+      <div v-else-if="!isSupplementMode && !isVerificationEntryOpen" class="mt-6 p-8 text-center border border-amber-300 rounded-3xl bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-950/30 dark:text-amber-200">
+        {{ verificationClosedReason }}
+      </div>
 
       <div v-else class="mt-6 space-y-6">
         <template v-if="currentStep === 'notice'">
@@ -272,7 +285,7 @@ onMounted(() => {
             <span>我确认认证资料由我自愿提供，已按需脱敏；继续填写即表示同意提交成功后生成云端记录、审核费规则、管理员审核处理和上述免责说明。</span>
           </label>
           <div class="flex justify-end">
-            <TxButton variant="primary" :disabled="!hasStudentConsent" @click="continueToDetails">
+            <TxButton variant="primary" :disabled="!hasStudentConsent || !isVerificationEntryOpen" @click="continueToDetails">
               继续填写
             </TxButton>
           </div>

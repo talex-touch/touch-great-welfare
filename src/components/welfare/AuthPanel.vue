@@ -30,6 +30,9 @@ const {
   adminForm,
   adminLoginForm,
   selectedSection,
+  systemConfig,
+  loginFeatureEnabled,
+  registrationFeatureEnabled,
   createAdmin,
   loginAsAdmin,
   refreshOAuthProviders,
@@ -43,6 +46,8 @@ const isAdminLoginOpen = ref(false)
 const pendingLoginSource = ref<PublicOAuthProvider | undefined>()
 const linuxDoProvider = computed(() => publicOAuthProviders.value.find(provider => provider.id === 'linux-do'))
 const otherOAuthProviders = computed(() => publicOAuthProviders.value.filter(provider => provider.id !== 'linux-do'))
+const loginClosedReason = computed(() => !systemConfig.value.siteEnabled ? systemConfig.value.siteClosedReason : systemConfig.value.loginClosedReason)
+const registrationClosedReason = computed(() => systemConfig.value.registrationClosedReason)
 
 function onCreateAdmin() {
   runSafely(async () => {
@@ -63,7 +68,7 @@ function onOauthLogin(source = pendingLoginSource.value) {
 }
 
 function openUserConsentDialog(source?: PublicOAuthProvider) {
-  if (!source)
+  if (!source || !loginFeatureEnabled.value)
     return
 
   pendingLoginSource.value = source
@@ -138,12 +143,18 @@ onMounted(() => {
           普通用户使用 LINUX DO 授权登录；管理员使用账号密码进入后台。
         </p>
       </div>
-      <div v-if="!linuxDoProvider" class="auth-warning">
+      <div v-if="!loginFeatureEnabled" class="auth-warning">
+        {{ loginClosedReason }} 管理员仍可使用账号密码登录后台。
+      </div>
+      <div v-else-if="!registrationFeatureEnabled" class="auth-warning">
+        {{ registrationClosedReason }} 已有账号仍可继续登录。
+      </div>
+      <div v-else-if="!linuxDoProvider" class="auth-warning">
         LINUX DO 登录源尚未启用。请管理员登录后台，在 OAuth/OIDC 登录源中配置并启用 LINUX DO。
       </div>
       <DataNotice mode="compact" title="注册登录前请确认" />
       <div class="space-y-4">
-        <TxButton class="linuxdo-login-button" block variant="primary" size="lg" :disabled="!linuxDoProvider || !!oauthLoginForm.loadingProviderId" @click="openUserConsentDialog(linuxDoProvider)">
+        <TxButton class="linuxdo-login-button" block variant="primary" size="lg" :disabled="!linuxDoProvider || !loginFeatureEnabled || !!oauthLoginForm.loadingProviderId" @click="openUserConsentDialog(linuxDoProvider)">
           <span class="i-carbon-login" />
           使用 LINUX DO 授权登录
         </TxButton>
@@ -152,7 +163,7 @@ onMounted(() => {
             v-for="provider in otherOAuthProviders"
             :key="provider.id"
             variant="ghost"
-            :disabled="!!oauthLoginForm.loadingProviderId"
+            :disabled="!loginFeatureEnabled || !!oauthLoginForm.loadingProviderId"
             @click="openUserConsentDialog(provider)"
           >
             <span class="oauth-provider-logo small">
@@ -233,6 +244,7 @@ onMounted(() => {
                 </h3>
                 <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
                   首次 {{ pendingLoginSource?.name ?? 'LINUX DO' }} 授权会创建账号并同步公开资料；再次登录会更新最后登录时间。
+                  <template v-if="!registrationFeatureEnabled">当前新用户注册关闭，未注册账号会被拦截。</template>
                 </p>
               </div>
               <button class="icon-btn shrink-0" title="关闭" @click="closeUserConsentDialog">

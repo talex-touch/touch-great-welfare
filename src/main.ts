@@ -2,7 +2,7 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { routes } from 'vue-router/auto-routes'
 import App from './App.vue'
-import { ensureWelfareStateLoaded, useWelfareStore } from './composables/welfare'
+import { ensureWelfareStateLoaded, normalizeSystemConfig, useWelfareStore } from './composables/welfare'
 
 import '@talex-touch/tuffex/style.css'
 import './styles/main.css'
@@ -23,6 +23,7 @@ router.beforeEach(async (to) => {
 
   const hasAdmin = welfare.hasAdmin.value
   const currentUser = welfare.currentUser.value
+  const systemConfig = normalizeSystemConfig(welfare.state.systemConfig)
   const isAuthRoute = to.path === '/init' || to.path === '/login'
   const isDashboardRoute = to.path === '/dashboard' || to.path.startsWith('/dashboard/')
 
@@ -38,6 +39,14 @@ router.beforeEach(async (to) => {
   if (to.path !== '/init' && !hasAdmin) {
     return {
       path: '/init',
+      replace: true,
+    }
+  }
+
+  // When the site is closed, keep only login/admin recovery available.
+  if (!systemConfig.siteEnabled && currentUser?.role !== 'admin' && to.path !== '/login') {
+    return {
+      path: '/login',
       replace: true,
     }
   }

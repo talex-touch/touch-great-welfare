@@ -21,6 +21,7 @@ const {
   userName,
   profileForm,
   githubAppConfigForm,
+  systemConfig,
   approveStudentVerification,
   requestStudentSupplement,
   rejectStudentVerification,
@@ -47,6 +48,9 @@ function verificationStatusText(status: string) {
 
 function verificationCardState(type: VerificationType, approved: boolean) {
   const verification = latestVerification(type)
+  const config = systemConfig.value
+  const toggle = config.verification[type]
+  const isOpen = config.siteEnabled && toggle.enabled
 
   if (verification) {
     return {
@@ -66,10 +70,11 @@ function verificationCardState(type: VerificationType, approved: boolean) {
 
   return {
     verification: undefined,
-    statusText: approved ? '已认证' : '可申请',
-    statusTone: approved ? 'success' : 'available',
-    actionText: '提交材料',
-    meta: approved ? '认证记录已生效' : '尚未提交材料',
+    statusText: approved ? '已认证' : isOpen ? '可申请' : '已关闭',
+    statusTone: approved ? 'success' : isOpen ? 'available' : 'danger',
+    actionText: isOpen ? '提交材料' : '暂不开放',
+    meta: approved ? '认证记录已生效' : isOpen ? '尚未提交材料' : (toggle.reason || `${verificationTypeLabel(type)}暂未开放`),
+    disabled: !isOpen,
   }
 }
 
@@ -111,6 +116,9 @@ function goCard(key: string) {
   }
 
   const card = verificationCards.value.find(item => item.key === key)
+  if (card?.disabled)
+    return
+
   if (card?.verification) {
     router.push(`/dashboard/student/${card.verification.id}`)
     return
@@ -186,8 +194,9 @@ function onRejectStudent(id: string) {
           v-for="card in verificationCards"
           :key="card.key"
           class="verification-card"
+          :class="{ 'op60 cursor-not-allowed': card.disabled }"
           role="button"
-          tabindex="0"
+          :tabindex="card.disabled ? -1 : 0"
           @click="goCard(card.key)"
           @keydown.enter.prevent="goCard(card.key)"
           @keydown.space.prevent="goCard(card.key)"
@@ -215,7 +224,7 @@ function onRejectStudent(id: string) {
             <span class="text-xs text-slate-500 pr-3 min-w-0 dark:text-slate-400">
               {{ card.meta || (card.key === 'frontline' ? verificationTypeLabel('frontline') : card.title) }}
             </span>
-            <TxButton size="sm" variant="secondary">
+            <TxButton size="sm" variant="secondary" :disabled="card.disabled">
               {{ card.actionText }}
             </TxButton>
           </div>
