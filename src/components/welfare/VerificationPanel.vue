@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { StudentVerification, VerificationType } from '~/composables/welfare'
 import { TxButton, TxCard, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@talex-touch/tuffex'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
@@ -30,6 +30,7 @@ const {
 
 const router = useRouter()
 const { runSafely } = useWelfareFeedback()
+const activeSection = ref<'mine' | 'review'>('mine')
 const activeAdminTab = ref<'pending' | 'history'>('pending')
 const selectedVerificationId = ref('')
 const studentApproved = computed(() => !!currentUser.value?.profile.studentVerified)
@@ -38,6 +39,11 @@ const openSourceConfigured = computed(() => !!currentUser.value?.profile.githubA
 const sortedStudentVerifications = computed(() => [...state.studentVerifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
 const pendingStudentVerifications = computed(() => sortedStudentVerifications.value.filter(item => item.status === 'pending' || item.status === 'needs_supplement'))
 const selectedVerification = computed(() => sortedStudentVerifications.value.find(item => item.id === selectedVerificationId.value))
+
+watch(isAdmin, (canReview) => {
+  if (!canReview && activeSection.value === 'review')
+    activeSection.value = 'mine'
+})
 
 function latestVerification(type: VerificationType) {
   return currentStudentVerifications.value.find(item => (item.verificationType ?? 'student') === type)
@@ -58,7 +64,7 @@ function verificationCardState(type: VerificationType, approved: boolean) {
       verification,
       statusText: verificationStatusText(verification.status),
       statusTone: statusTone(verification.status),
-      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '补充资料' : verification.status === 'rejected' ? '查看回复' : '查看详情',
+      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '补充资料' : verification.status === 'revoked' ? '查看原因' : verification.status === 'rejected' ? '查看回复' : '查看详情',
       meta: verification.status === 'pending'
         ? `${formatDate(verification.createdAt)} 提交，等待审核回复`
         : verification.status === 'needs_supplement'
@@ -82,14 +88,6 @@ function verificationCardState(type: VerificationType, approved: boolean) {
 
 const verificationCards = computed(() => [
   {
-    key: 'student',
-    title: '学生认证',
-    icon: 'i-carbon-education',
-    description: '在读学生、科研人员、教师等教育相关身份材料审核。',
-    ...verificationCardState('student', studentApproved.value),
-    tags: [`审核费 ${STUDENT_REVIEW_FEE}`, '通过返还'],
-  },
-  {
     key: 'frontline',
     title: '一线认证',
     icon: 'i-carbon-campsite',
@@ -110,7 +108,19 @@ const verificationCards = computed(() => [
     disabled: false,
     tags: ['GitHub App', '公开仓库'],
   },
+  {
+    key: 'student',
+    title: '学生认证',
+    icon: 'i-carbon-education',
+    description: '在读学生、科研人员、教师等教育相关身份材料审核。',
+    ...verificationCardState('student', studentApproved.value),
+    tags: [`审核费 ${STUDENT_REVIEW_FEE}`, '通过返还'],
+  },
 ] as const)
+
+function setActiveSection(section: 'mine' | 'review') {
+  activeSection.value = section
+}
 
 function goCard(key: string) {
   if (key === 'openSource') {
@@ -174,153 +184,148 @@ function onRejectStudent(id: string) {
 </script>
 
 <template>
-  <section class="space-y-6">
-    <TxCard class="solid-panel verification-panel" background="pure" shadow="soft" :padding="24" :radius="28">
-      <div class="flex flex-wrap gap-4 items-start justify-between">
-        <div>
-          <h2 class="text-3xl fw-900 tracking-tight">
-            认证申请
-          </h2>
-          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            选择需要提交或维护的认证类型；认证只用于提高申请通过率和审核优先级，不是提交资源申请的前置条件。
-          </p>
+  <section class="verification-dashboard application-dashboard space-y-6">
+    <div v-if="isAdmin" class="application-dashboard__hero">
+      <div class="min-w-0">
+        <div class="application-dashboard__tabs" role="tablist" aria-label="认证页面切换">
+          <button
+            type="button"
+            :class="{ 'is-active': activeSection === 'mine' }"
+            @click="setActiveSection('mine')"
+          >
+            我的认证
+          </button>
+          <button
+            type="button"
+            :class="{ 'is-active': activeSection === 'review' }"
+            @click="setActiveSection('review')"
+          >
+            审核队列
+          </button>
         </div>
-        <TxStatusBadge :text="currentUser ? '已登录' : '未登录'" :status="currentUser ? 'success' : 'warning'" />
       </div>
+    </div>
 
-      <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
-        登录后可以提交认证申请。
-      </div>
+    <div v-if="!currentUser" class="p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
+      登录后可以提交认证申请。
+    </div>
 
-      <div v-else class="mt-6 gap-4 grid lg:grid-cols-3">
-        <div class="verification-submit-warning lg:col-span-3">
+    <template v-else>
+      <div v-show="activeSection === 'mine'" class="verification-entry-list">
+        <div class="verification-submit-warning">
           认证是可选辅助材料。未完成学生认证、一线认证或开源认证也可以正常提交申请；管理员会结合申请内容、材料完整度和资源余量综合判断。
         </div>
         <div
           v-for="card in verificationCards"
           :key="card.key"
           class="verification-card"
-          :class="{ 'op60 cursor-not-allowed': card.disabled }"
+          :class="[`verification-card--${card.key}`, { 'is-disabled': card.disabled }]"
           role="button"
           :tabindex="card.disabled ? -1 : 0"
           @click="goCard(card.key)"
           @keydown.enter.prevent="goCard(card.key)"
           @keydown.space.prevent="goCard(card.key)"
         >
-          <div class="flex gap-3 items-start justify-between">
-            <span class="verification-card__icon" :class="card.icon" />
-            <span class="verification-status" :class="`verification-status--${card.statusTone}`">
-              {{ card.statusText }}
-            </span>
+          <div class="verification-card__content">
+            <div class="verification-card__copy">
+              <h3>{{ card.title }}</h3>
+              <p>{{ card.description }}</p>
+            </div>
+            <div class="verification-card__footer">
+              <span>{{ card.meta || (card.key === 'frontline' ? verificationTypeLabel('frontline') : card.title) }}</span>
+              <TxButton size="sm" variant="secondary" :disabled="card.disabled">
+                {{ card.actionText }}
+              </TxButton>
+            </div>
           </div>
-          <div class="mt-5">
-            <h3 class="text-xl fw-900">
-              {{ card.title }}
-            </h3>
-            <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-              {{ card.description }}
-            </p>
-          </div>
-          <div class="mt-5 flex flex-wrap gap-2">
-            <span v-for="tag in card.tags" :key="tag" class="verification-tag">
-              {{ tag }}
-            </span>
-          </div>
-          <div class="mt-6 flex items-center justify-between">
-            <span class="text-xs text-slate-500 pr-3 min-w-0 dark:text-slate-400">
-              {{ card.meta || (card.key === 'frontline' ? verificationTypeLabel('frontline') : card.title) }}
-            </span>
-            <TxButton size="sm" variant="secondary" :disabled="card.disabled">
-              {{ card.actionText }}
-            </TxButton>
-          </div>
+          <div class="verification-card__media" aria-hidden="true" />
         </div>
       </div>
-    </TxCard>
 
-    <TxCard v-if="isAdmin" class="solid-panel verification-admin-panel" background="pure" shadow="soft" :padding="0" :radius="28">
-      <TxTabs
-        v-model="activeAdminTab"
-        default-value="pending"
-        placement="top"
-        indicator-variant="line"
-        indicator-motion="glide"
-        :content-padding="0"
-        :content-scrollable="false"
-        auto-height
-        borderless
-      >
-        <TxTabItem name="pending" icon-class="i-carbon-time">
-          <template #name>
-            待处理
-          </template>
+      <TxCard v-if="isAdmin" v-show="activeSection === 'review'" class="solid-panel verification-admin-panel" background="pure" shadow="soft" :padding="0" :radius="28">
+        <TxTabs
+          v-model="activeAdminTab"
+          default-value="pending"
+          placement="top"
+          indicator-variant="line"
+          indicator-motion="glide"
+          :content-padding="0"
+          :content-scrollable="false"
+          auto-height
+          borderless
+        >
+          <TxTabItem name="pending" icon-class="i-carbon-time">
+            <template #name>
+              待处理
+            </template>
 
-          <div class="verification-admin-head">
-            <div>
-              <h3>待处理认证</h3>
-              <p>点击记录查看材料详情，可通过、要求补充资料或最终退回。</p>
+            <div class="verification-admin-head">
+              <div>
+                <h3>待处理认证</h3>
+                <p>点击记录查看材料详情，可通过、要求补充资料或最终退回。</p>
+              </div>
+              <TxStatusBadge :text="`${pendingStudentVerifications.length} 条待处理`" :status="pendingStudentVerifications.length ? 'warning' : 'success'" size="sm" />
             </div>
-            <TxStatusBadge :text="`${pendingStudentVerifications.length} 条待处理`" :status="pendingStudentVerifications.length ? 'warning' : 'success'" size="sm" />
-          </div>
-          <div class="verification-admin-list">
-            <div v-if="!pendingStudentVerifications.length" class="verification-admin-empty">
-              暂无待处理认证申请
+            <div class="verification-admin-list">
+              <div v-if="!pendingStudentVerifications.length" class="verification-admin-empty">
+                暂无待处理认证申请
+              </div>
+              <button
+                v-for="item in pendingStudentVerifications"
+                :key="item.id"
+                class="verification-admin-row"
+                type="button"
+                @click="openVerificationDrawer(item.id)"
+              >
+                <span>
+                  <b>{{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }}</b>
+                  <small>{{ userName(item.userId) }} · {{ item.category }} · {{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }}</small>
+                </span>
+                <span class="verification-admin-row__meta">
+                  <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
+                  <small>{{ formatDate(item.createdAt) }}</small>
+                </span>
+              </button>
             </div>
-            <button
-              v-for="item in pendingStudentVerifications"
-              :key="item.id"
-              class="verification-admin-row"
-              type="button"
-              @click="openVerificationDrawer(item.id)"
-            >
-              <span>
-                <b>{{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }}</b>
-                <small>{{ userName(item.userId) }} · {{ item.category }} · {{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }}</small>
-              </span>
-              <span class="verification-admin-row__meta">
-                <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
-                <small>{{ formatDate(item.createdAt) }}</small>
-              </span>
-            </button>
-          </div>
-        </TxTabItem>
+          </TxTabItem>
 
-        <TxTabItem name="history" icon-class="i-carbon-list-boxes">
-          <template #name>
-            申请历史
-          </template>
+          <TxTabItem name="history" icon-class="i-carbon-list-boxes">
+            <template #name>
+              申请历史
+            </template>
 
-          <div class="verification-admin-head">
-            <div>
-              <h3>认证申请历史</h3>
-              <p>按提交时间倒序查看所有认证记录，点击记录打开详情。</p>
+            <div class="verification-admin-head">
+              <div>
+                <h3>认证申请历史</h3>
+                <p>按提交时间倒序查看所有认证记录，点击记录打开详情。</p>
+              </div>
+              <TxStatusBadge :text="`${sortedStudentVerifications.length} 条记录`" status="info" size="sm" />
             </div>
-            <TxStatusBadge :text="`${sortedStudentVerifications.length} 条记录`" status="info" size="sm" />
-          </div>
-          <div class="verification-admin-list">
-            <div v-if="!sortedStudentVerifications.length" class="verification-admin-empty">
-              暂无认证申请历史
+            <div class="verification-admin-list">
+              <div v-if="!sortedStudentVerifications.length" class="verification-admin-empty">
+                暂无认证申请历史
+              </div>
+              <button
+                v-for="item in sortedStudentVerifications"
+                :key="item.id"
+                class="verification-admin-row"
+                type="button"
+                @click="openVerificationDrawer(item.id)"
+              >
+                <span>
+                  <b>{{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }}</b>
+                  <small>{{ userName(item.userId) }} · {{ item.category }} · {{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }}</small>
+                </span>
+                <span class="verification-admin-row__meta">
+                  <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
+                  <small>{{ item.reviewedAt ? `${formatDate(item.reviewedAt)} 回复` : `${formatDate(item.createdAt)} 提交` }}</small>
+                </span>
+              </button>
             </div>
-            <button
-              v-for="item in sortedStudentVerifications"
-              :key="item.id"
-              class="verification-admin-row"
-              type="button"
-              @click="openVerificationDrawer(item.id)"
-            >
-              <span>
-                <b>{{ item.realName }} · {{ verificationTypeLabel(item.verificationType) }}</b>
-                <small>{{ userName(item.userId) }} · {{ item.category }} · {{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }}</small>
-              </span>
-              <span class="verification-admin-row__meta">
-                <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
-                <small>{{ item.reviewedAt ? `${formatDate(item.reviewedAt)} 回复` : `${formatDate(item.createdAt)} 提交` }}</small>
-              </span>
-            </button>
-          </div>
-        </TxTabItem>
-      </TxTabs>
-    </TxCard>
+          </TxTabItem>
+        </TxTabs>
+      </TxCard>
+    </template>
 
     <Teleport to="body">
       <Transition name="admin-drawer">
