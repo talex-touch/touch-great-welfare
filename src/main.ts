@@ -21,11 +21,21 @@ router.beforeEach(async (to) => {
   if (welfare.persistenceError.value)
     return undefined
 
-  const hasAdmin = welfare.hasAdmin.value
-  const currentUser = welfare.currentUser.value
-  const systemConfig = normalizeSystemConfig(welfare.state.systemConfig)
   const isAuthRoute = to.path === '/init' || to.path === '/login'
   const isDashboardRoute = to.path === '/dashboard' || to.path.startsWith('/dashboard/')
+  let hasAdmin = welfare.hasAdmin.value
+  let currentUser = welfare.currentUser.value
+  let systemConfig = normalizeSystemConfig(welfare.state.systemConfig)
+
+  if (!isAuthRoute && currentUser && !welfare.isFullStateLoaded.value) {
+    await welfare.reloadWelfareState().catch(() => undefined)
+    if (welfare.persistenceError.value)
+      return undefined
+
+    hasAdmin = welfare.hasAdmin.value
+    currentUser = welfare.currentUser.value
+    systemConfig = normalizeSystemConfig(welfare.state.systemConfig)
+  }
 
   // `/init` is only for first-run bootstrap. Once an admin exists, use login/dashboard instead.
   if (to.path === '/init' && hasAdmin) {

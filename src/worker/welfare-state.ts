@@ -59,6 +59,14 @@ const ADMIN_LOGIN_MAX_FAILURES = 8
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000
 const PASSWORD_PBKDF2_ITERATIONS = 210000
+const POSTGRES_TIMEOUT_MS = 10000
+
+type PointBalanceSyncMode = false | 'current-user' | 'all'
+
+interface ReadWelfareStateOptions {
+  syncPointBalances?: PointBalanceSyncMode
+  currentUserId?: string
+}
 
 let pool: Pool | undefined
 let poolKey = ''
@@ -411,6 +419,17 @@ function publicBootstrapState(state: unknown) {
           lastLoginAt: '',
         }]
       : [],
+    siteBanner: isRecord(state) ? state.siteBanner : undefined,
+    systemConfig: isRecord(state) ? state.systemConfig : undefined,
+    createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
+  }
+}
+
+function publicBootstrapPayload(state: unknown) {
+  const users = isRecord(state) && Array.isArray(state.users) ? state.users : []
+  const hasAdmin = users.some(user => isRecord(user) && user.role === 'admin')
+  return {
+    hasAdmin,
     siteBanner: isRecord(state) ? state.siteBanner : undefined,
     systemConfig: isRecord(state) ? state.systemConfig : undefined,
     createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
@@ -889,7 +908,7 @@ async function applyTrustedPointTransactionsFromState(env: WorkerEnv, previousSt
 }
 
 async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {
-  if (!isRecord(previousState) || !isRecord(nextState) || !isRecord(nextState.applicationPolicy))
+  if (!isRecord(previousState) || !isRecord(nextState))
     return nextState
 
   const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
@@ -913,17 +932,19 @@ async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(pre
     : nextState.users
 
   const previousPolicy = isRecord(previousState.applicationPolicy) ? previousState.applicationPolicy : {}
+  const nextPolicy = isRecord(nextState.applicationPolicy) ? nextState.applicationPolicy : previousPolicy
   const previousTurnstileSecretKey = typeof previousPolicy.turnstileSecretKey === 'string'
     ? previousPolicy.turnstileSecretKey.trim()
     : ''
-  const nextTurnstileSecretKey = typeof nextState.applicationPolicy.turnstileSecretKey === 'string'
-    ? nextState.applicationPolicy.turnstileSecretKey.trim()
+  const nextTurnstileSecretKey = typeof nextPolicy.turnstileSecretKey === 'string'
+    ? nextPolicy.turnstileSecretKey.trim()
     : ''
 
   if (nextTurnstileSecretKey && !isMaskedSecret(nextTurnstileSecretKey) && await canUpdateSensitiveState(previousState, request, env)) {
     return await mergeClientWritableState(previousState, {
       ...nextState,
       users: nextUsers,
+      applicationPolicy: nextPolicy,
     }, request, env)
   }
 
@@ -931,7 +952,7 @@ async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(pre
     ...nextState,
     users: nextUsers,
     applicationPolicy: {
-      ...nextState.applicationPolicy,
+      ...nextPolicy,
       turnstileSecretKey: previousTurnstileSecretKey,
     },
   } as T, request, env)
@@ -973,6 +994,9 @@ export function getPool(env: WorkerEnv) {
     poolKey = connectionString
     pool = new Pool({
       connectionString,
+      connectionTimeoutMillis: POSTGRES_TIMEOUT_MS,
+      query_timeout: POSTGRES_TIMEOUT_MS,
+      statement_timeout: POSTGRES_TIMEOUT_MS,
     })
   }
 
@@ -992,7 +1016,7 @@ async function ensureSchema(env: WorkerEnv) {
   `)
 }
 
-export async function readWelfareState(env: WorkerEnv) {
+export async function readWelfareState(env: WorkerEnv, options: ReadWelfareStateOptions = {}) {
   await ensureSchema(env)
 
   const rawState = shouldUseD1(env)
@@ -1009,7 +1033,12 @@ export async function readWelfareState(env: WorkerEnv) {
       )).rows[0]?.state ?? {}
 
   const state = await decodeStoredState(env, rawState)
-  await syncUserPointBalancesFromLedger(env, state)
+  if (options.syncPointBalances === 'all') {
+    await syncUserPointBalancesFromLedger(env, state)
+  }
+  else if (options.syncPointBalances === 'current-user' && options.currentUserId) {
+    await syncUserPointBalancesFromLedger(env, state, [options.currentUserId])
+  }
   return applyWelfareRetentionPolicy(state).state
 }
 
@@ -1648,10 +1677,60 @@ async function currentStateResponse(request: Request, env: WorkerEnv) {
   return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId })
 }
 
+async function bootstrapResponse(env: WorkerEnv) {
+  const state = await readWelfareState(env)
+  return json(publicBootstrapPayload(state))
+}
+
+async function sessionResponse(request: Request, env: WorkerEnv) {
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    return json({ currentUser: null })
+
+  const state = await readWelfareState(env)
+  const user = stateUsers(state as Partial<WelfareState>).find(item => item.id === userId && item.accountStatus !== 'suspended')
+  return json({
+    currentUser: user ? sanitizeUser(user) : null,
+  })
+}
+
+async function currentUserStateResponse(request: Request, env: WorkerEnv) {
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
+
+  const state = await readWelfareState(env, { syncPointBalances: 'current-user', currentUserId: userId })
+  const user = stateUsers(state as Partial<WelfareState>).find(item => item.id === userId && item.accountStatus !== 'suspended')
+  if (!user)
+    throw new Error('请先登录')
+
+  return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId })
+}
+
+async function adminStateResponse(request: Request, env: WorkerEnv) {
+  const state = await readWelfareState(env)
+  const user = await authenticatedUser(request, env, state as Partial<WelfareState>)
+  assertAdminUser(user)
+  await syncUserPointBalancesFromLedger(env, state)
+  return json({ state: clientVisibleWelfareState(state, user.id), currentUserId: user.id })
+}
+
 export async function handleWelfareStateRequest(request: Request, env: WorkerEnv) {
   try {
-    if (request.method === 'GET')
-      return currentStateResponse(request, env)
+    const url = new URL(request.url)
+
+    if (request.method === 'GET') {
+      if (url.pathname === '/api/bootstrap')
+        return await bootstrapResponse(env)
+      if (url.pathname === '/api/session')
+        return await sessionResponse(request, env)
+      if (url.pathname === '/api/welfare-state/me')
+        return await currentUserStateResponse(request, env)
+      if (url.pathname === '/api/welfare-state/admin')
+        return await adminStateResponse(request, env)
+      if (url.pathname === '/api/welfare-state')
+        return currentStateResponse(request, env)
+    }
 
     if (request.method === 'POST') {
       const action = request.headers.get('x-welfare-action')?.trim()

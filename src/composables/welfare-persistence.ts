@@ -1,25 +1,85 @@
-import type { CreateAdminPayload, LoginAdminPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, WelfareState } from './welfare'
+import type { CreateAdminPayload, LoginAdminPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, User, UserRole, WelfareState } from './welfare'
 
 const STATE_ENDPOINT = '/api/welfare-state'
+const BOOTSTRAP_ENDPOINT = '/api/bootstrap'
+const SESSION_ENDPOINT = '/api/session'
+const STATE_REQUEST_TIMEOUT_MS = 10000
 
-async function requestState<T>(init?: RequestInit): Promise<T> {
-  const response = await fetch(STATE_ENDPOINT, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      'content-type': 'application/json',
-      ...init?.headers,
+interface BootstrapPayload {
+  hasAdmin: boolean
+  siteBanner?: WelfareState['siteBanner']
+  systemConfig?: WelfareState['systemConfig']
+  createdAt: string
+}
+
+async function requestState<T>(path = STATE_ENDPOINT, init?: RequestInit): Promise<T> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), STATE_REQUEST_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      headers: {
+        'content-type': 'application/json',
+        ...init?.headers,
+      },
+      signal: controller.signal,
+    })
+
+    if (!response.ok)
+      throw new Error(await readErrorMessage(response))
+
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.includes('application/json'))
+      throw new Error('接口返回了页面内容，请使用 pnpm dev 启动 Cloudflare 本地环境后访问 Wrangler 地址')
+
+    return response.json() as Promise<T>
+  }
+  catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError')
+      throw new Error('数据库接口响应超时，请检查生产数据库或 Hyperdrive 配置')
+
+    throw error
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+}
+
+function adminPlaceholderUser(): User {
+  return {
+    id: 'admin-present',
+    role: 'admin',
+    profile: {
+      displayName: '管理员',
+      email: '',
+      studentVerified: false,
     },
-  })
+    points: 0,
+    accountStatus: 'active',
+    createdAt: '',
+    lastLoginAt: '',
+  }
+}
 
-  if (!response.ok)
-    throw new Error(await readErrorMessage(response))
+function mergeBootstrapAndSession(bootstrap: BootstrapPayload, currentUser: User | null): Partial<WelfareState> {
+  const users = bootstrap.hasAdmin ? [adminPlaceholderUser()] : []
+  if (currentUser) {
+    const index = users.findIndex(user => user.id === currentUser.id)
+    if (index >= 0)
+      users[index] = currentUser
+    else
+      users.push(currentUser)
+  }
 
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!contentType.includes('application/json'))
-    throw new Error('接口返回了页面内容，请使用 pnpm dev 启动 Cloudflare 本地环境后访问 Wrangler 地址')
-
-  return response.json() as Promise<T>
+  return {
+    users,
+    currentUserId: currentUser?.id,
+    siteBanner: bootstrap.siteBanner,
+    systemConfig: bootstrap.systemConfig,
+    createdAt: bootstrap.createdAt,
+  }
 }
 
 async function readErrorMessage(response: Response) {
@@ -40,8 +100,17 @@ async function readErrorMessage(response: Response) {
   }
 }
 
-export async function loadWelfareState() {
-  const result = await requestState<{ state: Partial<WelfareState>, currentUserId?: string }>()
+export async function loadInitialWelfareState() {
+  const [bootstrap, session] = await Promise.all([
+    requestState<BootstrapPayload>(BOOTSTRAP_ENDPOINT),
+    requestState<{ currentUser: User | null }>(SESSION_ENDPOINT),
+  ])
+  return mergeBootstrapAndSession(bootstrap, session.currentUser)
+}
+
+export async function loadWelfareState(role?: UserRole) {
+  const endpoint = role === 'admin' ? `${STATE_ENDPOINT}/admin` : `${STATE_ENDPOINT}/me`
+  const result = await requestState<{ state: Partial<WelfareState>, currentUserId?: string }>(endpoint)
   return {
     ...result.state,
     currentUserId: result.currentUserId,
@@ -49,7 +118,7 @@ export async function loadWelfareState() {
 }
 
 export async function saveWelfareState(state: WelfareState, userId?: string) {
-  await requestState<{ ok: true }>({
+  await requestState<{ ok: true }>(STATE_ENDPOINT, {
     method: 'PUT',
     headers: userId ? { 'x-welfare-user-id': userId } : undefined,
     body: JSON.stringify({ state }),
@@ -57,7 +126,7 @@ export async function saveWelfareState(state: WelfareState, userId?: string) {
 }
 
 export async function bootstrapAdmin(payload: CreateAdminPayload) {
-  await requestState<{ ok: true }>({
+  await requestState<{ ok: true }>(STATE_ENDPOINT, {
     method: 'POST',
     body: JSON.stringify(payload),
     headers: {
@@ -67,7 +136,7 @@ export async function bootstrapAdmin(payload: CreateAdminPayload) {
 }
 
 export async function loginAdmin(payload: LoginAdminPayload) {
-  return requestState<{ ok: true, userId: string, state?: Partial<WelfareState> }>({
+  return requestState<{ ok: true, userId: string, state?: Partial<WelfareState> }>(STATE_ENDPOINT, {
     method: 'POST',
     body: JSON.stringify(payload),
     headers: {
@@ -77,7 +146,7 @@ export async function loginAdmin(payload: LoginAdminPayload) {
 }
 
 export async function endSession() {
-  await requestState<{ ok: true }>({
+  await requestState<{ ok: true }>(STATE_ENDPOINT, {
     method: 'POST',
     headers: {
       'x-welfare-action': 'logout',
@@ -86,7 +155,7 @@ export async function endSession() {
 }
 
 async function postWelfareAction<T>(action: string, payload: unknown) {
-  return requestState<T>({
+  return requestState<T>(STATE_ENDPOINT, {
     method: 'POST',
     body: JSON.stringify(payload ?? {}),
     headers: {

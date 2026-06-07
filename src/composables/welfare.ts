@@ -1,7 +1,7 @@
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
 import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
-import { bootstrapAdmin, endSession, loadWelfareState, loginAdmin as requestAdminLogin, saveWelfareState } from './welfare-persistence'
+import { bootstrapAdmin, endSession, loadInitialWelfareState, loadWelfareState, loginAdmin as requestAdminLogin } from './welfare-persistence'
 
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
@@ -750,7 +750,6 @@ export interface ApplicationPolicyStatus {
   turnstileSiteKey: string
 }
 
-const SAVE_DEBOUNCE_MS = 250
 const USER_LEVEL_MAX_SCORE = 3000
 const USER_LEVEL_APPROVAL_TIERS = [
   { count: 3, points: 12 },
@@ -2263,6 +2262,7 @@ function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTe
 
 const state = reactive<WelfareState>(defaultState())
 const isHydrated = ref(false)
+const isFullStateLoaded = ref(false)
 
 function assertResourceTypeCanApply(resourceType: ResourceType, userId: string) {
   const config = assertKnownResourceType(resourceType)
@@ -2276,56 +2276,51 @@ function assertResourceTypeCanApply(resourceType: ResourceType, userId: string) 
 }
 const persistenceError = ref('')
 let hydratePromise: Promise<void> | undefined
-let saveTimer: ReturnType<typeof setTimeout> | undefined
-
-watch(
-  state,
-  (value) => {
-    if (!isHydrated.value)
-      return
-
-    if (saveTimer)
-      clearTimeout(saveTimer)
-
-    saveTimer = setTimeout(() => {
-      saveWelfareState(value)
-        .then(() => {
-          persistenceError.value = ''
-        })
-        .catch((error) => {
-          persistenceError.value = error instanceof Error ? error.message : '数据库状态保存失败'
-          console.error(error)
-        })
-    }, SAVE_DEBOUNCE_MS)
-  },
-  { deep: true },
-)
+let reloadPromise: Promise<void> | undefined
+function applyRemoteState(storedState: Partial<WelfareState>, fullState: boolean) {
+  Object.assign(state, normalizeState(storedState))
+  persistenceError.value = ''
+  isHydrated.value = true
+  isFullStateLoaded.value = fullState
+}
 
 export function ensureWelfareStateLoaded() {
   if (isHydrated.value)
     return persistenceError.value ? Promise.reject(new Error(persistenceError.value)) : Promise.resolve()
 
-  hydratePromise ??= loadWelfareState()
+  hydratePromise ??= loadInitialWelfareState()
     .then((storedState) => {
-      Object.assign(state, normalizeState(storedState))
-      persistenceError.value = ''
+      applyRemoteState(storedState, false)
     })
     .catch((error) => {
       persistenceError.value = error instanceof Error ? error.message : '数据库状态加载失败'
       throw error
     })
     .finally(() => {
-      isHydrated.value = true
+      if (!isHydrated.value)
+        isHydrated.value = true
     })
 
   return hydratePromise
 }
 
-export async function reloadWelfareState() {
-  const storedState = await loadWelfareState()
-  Object.assign(state, normalizeState(storedState))
-  persistenceError.value = ''
-  isHydrated.value = true
+export async function reloadWelfareState(options: { initial?: boolean } = {}) {
+  reloadPromise ??= (async () => {
+    const current = state.users.find(user => user.id === state.currentUserId)
+    const storedState = options.initial || !current
+      ? await loadInitialWelfareState()
+      : await loadWelfareState(current.role)
+    applyRemoteState(storedState, !!current && !options.initial)
+  })()
+    .catch((error) => {
+      persistenceError.value = error instanceof Error ? error.message : '数据库状态加载失败'
+      throw error
+    })
+    .finally(() => {
+      reloadPromise = undefined
+    })
+
+  return reloadPromise
 }
 
 if (typeof window !== 'undefined') {
@@ -3295,15 +3290,13 @@ export function useWelfareStore() {
   async function loginAsAdmin(payload: LoginAdminPayload) {
     assertPersistenceReady()
     const result = await requestAdminLogin(payload)
-    Object.assign(state, normalizeState({ ...(result.state ?? state), currentUserId: result.userId }))
-    persistenceError.value = ''
-    isHydrated.value = true
+    applyRemoteState({ ...(result.state ?? state), currentUserId: result.userId }, false)
   }
 
   async function logout() {
     assertPersistenceReady()
     await endSession()
-    await reloadWelfareState()
+    await reloadWelfareState({ initial: true })
   }
 
   function updateCurrentProfile(profile: Partial<UserProfile>) {
@@ -4675,6 +4668,7 @@ export function useWelfareStore() {
   return {
     state,
     isHydrated,
+    isFullStateLoaded,
     persistenceError,
     hasAdmin,
     currentUser,

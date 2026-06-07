@@ -40,6 +40,10 @@ interface PointTransactionQuery {
 
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 200
+const BALANCE_QUERY_CHUNK_SIZE = 100
+
+let pointSchemaKey = ''
+let pointSchemaPromise: Promise<void> | undefined
 
 function now() {
   return new Date().toISOString()
@@ -142,20 +146,7 @@ async function transactionExists(env: WorkerEnv, id: string) {
 }
 
 async function latestBalanceForUser(env: WorkerEnv, userId: string) {
-  await ensurePointTransactionSchema(env)
-  if (shouldUseD1(env)) {
-    const row = await env.LOCAL_DB!
-      .prepare('select balance_after from point_transactions where user_id = ?1 order by created_at desc, id desc limit 1')
-      .bind(userId)
-      .first<{ balance_after: number }>()
-    return row?.balance_after
-  }
-
-  const result = await getPool(env).query<{ balance_after: number }>(
-    'select balance_after from point_transactions where user_id = $1 order by created_at desc, id desc limit 1',
-    [userId],
-  )
-  return result.rows[0]?.balance_after
+  return (await latestBalancesForUsers(env, [userId])).get(userId)
 }
 
 async function currentBalanceForUser(env: WorkerEnv, users: Array<{ id: string, points: number }>, userId: string) {
@@ -164,6 +155,48 @@ async function currentBalanceForUser(env: WorkerEnv, users: Array<{ id: string, 
     return ledgerBalance
 
   return users.find(item => item.id === userId)?.points ?? 0
+}
+
+async function latestBalancesForUsers(env: WorkerEnv, userIds: string[]) {
+  const uniqueUserIds = Array.from(new Set(userIds.map(id => id.trim()).filter(Boolean)))
+  const balances = new Map<string, number>()
+  if (!uniqueUserIds.length)
+    return balances
+
+  await ensurePointTransactionSchema(env)
+
+  for (let index = 0; index < uniqueUserIds.length; index += BALANCE_QUERY_CHUNK_SIZE) {
+    const chunk = uniqueUserIds.slice(index, index + BALANCE_QUERY_CHUNK_SIZE)
+    const placeholders = chunk.map((_, chunkIndex) => shouldUseD1(env) ? '?' : `$${chunkIndex + 1}`).join(', ')
+    const sql = `
+      select user_id, balance_after
+      from (
+        select
+          user_id,
+          balance_after,
+          row_number() over (partition by user_id order by created_at desc, id desc) as row_number
+        from point_transactions
+        where user_id in (${placeholders})
+      )
+      where row_number = 1
+    `
+
+    if (shouldUseD1(env)) {
+      const result = await env.LOCAL_DB!
+        .prepare(sql)
+        .bind(...chunk)
+        .all<{ user_id: string, balance_after: number }>()
+      for (const row of result.results ?? [])
+        balances.set(row.user_id, Number(row.balance_after))
+      continue
+    }
+
+    const result = await getPool(env).query<{ user_id: string, balance_after: number }>(sql, chunk)
+    for (const row of result.rows)
+      balances.set(row.user_id, Number(row.balance_after))
+  }
+
+  return balances
 }
 
 async function insertPointTransaction(env: WorkerEnv, tx: Required<Omit<CreditTransaction, 'balanceAfter'>> & { balanceAfter: number }) {
@@ -188,49 +221,62 @@ async function insertPointTransaction(env: WorkerEnv, tx: Required<Omit<CreditTr
 }
 
 export async function ensurePointTransactionSchema(env: WorkerEnv) {
-  if (shouldUseD1(env)) {
-    await env.LOCAL_DB!
-      .prepare(`
-        create table if not exists point_transactions (
-          id text primary key,
-          user_id text not null,
-          delta integer not null,
-          type text not null,
-          reason text not null,
-          ref_id text,
-          balance_after integer not null,
-          created_at text not null default current_timestamp
-        )
-      `)
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_point_transactions_user_created on point_transactions (user_id, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_point_transactions_type on point_transactions (type)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_point_transactions_ref on point_transactions (ref_id)')
-      .run()
-    return
-  }
+  const key = shouldUseD1(env) ? 'd1' : `pg:${env.HYPERDRIVE?.connectionString ?? ''}`
+  if (pointSchemaPromise && pointSchemaKey === key)
+    return pointSchemaPromise
 
-  const pool = getPool(env)
-  await pool.query(`
-    create table if not exists point_transactions (
-      id text primary key,
-      user_id text not null,
-      delta integer not null,
-      type text not null,
-      reason text not null,
-      ref_id text,
-      balance_after integer not null,
-      created_at timestamptz not null default now()
-    )
-  `)
-  await pool.query('create index if not exists idx_point_transactions_user_created on point_transactions (user_id, created_at desc, id desc)')
-  await pool.query('create index if not exists idx_point_transactions_type on point_transactions (type)')
-  await pool.query('create index if not exists idx_point_transactions_ref on point_transactions (ref_id)')
+  pointSchemaKey = key
+  pointSchemaPromise = (async () => {
+    if (shouldUseD1(env)) {
+      await env.LOCAL_DB!
+        .prepare(`
+          create table if not exists point_transactions (
+            id text primary key,
+            user_id text not null,
+            delta integer not null,
+            type text not null,
+            reason text not null,
+            ref_id text,
+            balance_after integer not null,
+            created_at text not null default current_timestamp
+          )
+        `)
+        .run()
+      await env.LOCAL_DB!
+        .prepare('create index if not exists idx_point_transactions_user_created on point_transactions (user_id, created_at desc, id desc)')
+        .run()
+      await env.LOCAL_DB!
+        .prepare('create index if not exists idx_point_transactions_type on point_transactions (type)')
+        .run()
+      await env.LOCAL_DB!
+        .prepare('create index if not exists idx_point_transactions_ref on point_transactions (ref_id)')
+        .run()
+      return
+    }
+
+    const pool = getPool(env)
+    await pool.query(`
+      create table if not exists point_transactions (
+        id text primary key,
+        user_id text not null,
+        delta integer not null,
+        type text not null,
+        reason text not null,
+        ref_id text,
+        balance_after integer not null,
+        created_at timestamptz not null default now()
+      )
+    `)
+    await pool.query('create index if not exists idx_point_transactions_user_created on point_transactions (user_id, created_at desc, id desc)')
+    await pool.query('create index if not exists idx_point_transactions_type on point_transactions (type)')
+    await pool.query('create index if not exists idx_point_transactions_ref on point_transactions (ref_id)')
+  })().catch((error) => {
+    if (pointSchemaKey === key)
+      pointSchemaPromise = undefined
+    throw error
+  })
+
+  return pointSchemaPromise
 }
 
 export async function backfillPointTransactionsFromState(env: WorkerEnv, state: unknown) {
@@ -488,15 +534,19 @@ export async function pointTransactionExistsByRef(env: WorkerEnv, type: CreditTr
   return (result.rowCount ?? 0) > 0
 }
 
-export async function syncUserPointBalancesFromLedger(env: WorkerEnv, state: unknown) {
+export async function syncUserPointBalancesFromLedger(env: WorkerEnv, state: unknown, userIds?: string[]) {
   const users = stateUsers(state)
+  const allowedUserIds = userIds?.length ? new Set(userIds) : undefined
+  const targetUsers = users.filter((user): user is Record<string, unknown> =>
+    isRecord(user)
+    && typeof user.id === 'string'
+    && (!allowedUserIds || allowedUserIds.has(user.id)),
+  )
+  const latestBalances = await latestBalancesForUsers(env, targetUsers.map(user => user.id as string))
   let changed = false
 
-  for (const user of users) {
-    if (!isRecord(user) || typeof user.id !== 'string')
-      continue
-
-    const ledgerBalance = await latestBalanceForUser(env, user.id)
+  for (const user of targetUsers) {
+    const ledgerBalance = latestBalances.get(user.id as string)
     if (ledgerBalance === undefined)
       continue
 
@@ -545,10 +595,17 @@ export async function handlePointRequest(request: Request, env: WorkerEnv) {
     })
 
     const targetUserId = user.role === 'admin' ? requestedUserId : user.id
-    const balance = targetUserId
-      ? await currentBalanceForUser(env, users, targetUserId)
-      : (await Promise.all(users.map(item => currentBalanceForUser(env, users, item.id))))
-          .reduce((sum, value) => sum + value, 0)
+    let balance: number
+    if (targetUserId) {
+      balance = await currentBalanceForUser(env, users, targetUserId)
+    }
+    else {
+      const latestBalances = await latestBalancesForUsers(env, users.map(item => item.id))
+      balance = users.reduce((sum, user) => {
+        const currentPoints = Number(user.points)
+        return sum + (latestBalances.get(user.id) ?? (Number.isFinite(currentPoints) ? currentPoints : 0))
+      }, 0)
+    }
     return json({
       ...result,
       balance,

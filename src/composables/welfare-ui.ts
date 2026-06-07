@@ -4,7 +4,7 @@ import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-ap
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
-import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, StudentVerification, VerificationType, WelfareApplication } from './welfare'
+import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, StudentVerification, UserProfile, VerificationType, WelfareApplication } from './welfare'
 import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
@@ -1278,13 +1278,15 @@ export function useWelfareUiState() {
     await welfare.reloadWelfareState()
   }
 
-  function completeResourceProvision(applicationId: string, itemId: string) {
+  async function completeResourceProvision(applicationId: string, itemId: string) {
     welfare.completeResourceProvision({
       applicationId,
       itemId,
       note: resourceProvisionDrafts[itemId],
     })
     delete resourceProvisionDrafts[itemId]
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
   }
 
   watch(() => resourceApplicationForm.selectedResourceTypes.slice(), () => {
@@ -1458,10 +1460,12 @@ export function useWelfareUiState() {
     return crowdReviewDrafts[applicationId]
   }
 
-  function submitCrowdReviewDraft(applicationId: string) {
+  async function submitCrowdReviewDraft(applicationId: string) {
     const draft = crowdReviewDraftFor(applicationId)
     const review = welfare.submitCrowdReview('pro_application', applicationId, draft.decision, draft.note)
     delete crowdReviewDrafts[applicationId]
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
     return review
   }
 
@@ -1542,9 +1546,12 @@ export function useWelfareUiState() {
     await refreshPointTransactions()
   }
 
-  function rejectApplicationWithOptions(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
+  async function rejectApplicationWithOptions(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
     welfare.rejectApplication(applicationId, reason, options)
     delete rejectFraudulentDrafts[applicationId]
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
+    await refreshPointTransactions()
   }
 
   async function answerApplication(applicationId: string, answer: string) {
@@ -1555,12 +1562,16 @@ export function useWelfareUiState() {
     await refreshPointTransactions()
   }
 
-  function completeApplication(applicationId: string) {
+  async function completeApplication(applicationId: string) {
     welfare.completeApplication(applicationId)
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
   }
 
-  function requestApplicationSupplement(applicationId: string, content: string) {
+  async function requestApplicationSupplement(applicationId: string, content: string) {
     welfare.requestApplicationSupplement(applicationId, content)
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
   }
 
   async function submitApplicationSupplement(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
@@ -2720,8 +2731,49 @@ export function useWelfareUiState() {
     await refreshPointTransactions()
   }
 
+  async function persistStateAndReload(userId = welfare.currentUser.value?.id) {
+    await saveWelfareState(welfare.state, userId)
+    await welfare.reloadWelfareState()
+  }
+
+  async function updateCurrentProfile(profile: Partial<UserProfile>) {
+    welfare.updateCurrentProfile(profile)
+    await persistStateAndReload()
+  }
+
+  async function setUserCrowdReviewer(userId: string, enabled: boolean) {
+    welfare.setUserCrowdReviewer(userId, enabled)
+    await persistStateAndReload()
+  }
+
+  async function setUserSuspended(userId: string, suspended: boolean, reason = '') {
+    welfare.setUserSuspended(userId, suspended, reason)
+    await persistStateAndReload()
+  }
+
+  async function setUserStudentVerified(userId: string, verified: boolean) {
+    welfare.setUserStudentVerified(userId, verified)
+    await persistStateAndReload()
+  }
+
+  async function revokeUserStudentVerification(userId: string, reason: string) {
+    welfare.revokeUserStudentVerification(userId, reason)
+    await persistStateAndReload()
+  }
+
+  async function unbindUserGitHub(userId: string) {
+    welfare.unbindUserGitHub(userId)
+    await persistStateAndReload()
+  }
+
   return {
     ...welfare,
+    updateCurrentProfile,
+    setUserCrowdReviewer,
+    setUserSuspended,
+    setUserStudentVerified,
+    revokeUserStudentVerification,
+    unbindUserGitHub,
     adminForm,
     adminLoginForm,
     profileForm,

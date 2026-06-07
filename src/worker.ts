@@ -15,7 +15,7 @@ import { handleWelfareStateRequest } from './worker/welfare-state'
 export default {
   fetch(request: Request, env: WorkerEnv) {
     const url = new URL(request.url)
-    if (url.pathname === '/api/welfare-state')
+    if (url.pathname === '/api/bootstrap' || url.pathname === '/api/session' || url.pathname === '/api/welfare-state' || url.pathname.startsWith('/api/welfare-state/'))
       return handleWelfareStateRequest(request, env)
     if (url.pathname.startsWith('/api/ai/'))
       return handleAiRequest(request, env)
