@@ -2297,7 +2297,7 @@ onMounted(() => {
                   Sub2API 直连配置
                 </div>
                 <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在个人信息页生成和删除 API Key。' : '尚未配置 Sub2API 地址或数据库连接。' }}
+                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在个人信息页生成和删除 API Key。' : '尚未配置 Sub2API 基础地址，或未提供 Admin API Key / 数据库连接。' }}
                 </div>
                 <div class="gap-5 grid lg:grid-cols-2">
                   <label class="gap-2 grid lg:col-span-2">
@@ -2307,12 +2307,12 @@ onMounted(() => {
                   <label class="gap-2 grid">
                     <span class="field-label">Admin API Key</span>
                     <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
-                    <span class="field-hint">用于查询/创建 Sub2API 用户；服务端加密保存。</span>
+                    <span class="field-hint">优先用于查询/创建 Sub2API 用户，并通过 Admin API 创建/删除 API Key；服务端加密保存。</span>
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Sub2API 数据库连接</span>
                     <TxInput v-model="sub2ApiConfigForm.databaseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.databaseUrlMasked || 'postgresql://...'" />
-                    <span class="field-hint">用于生成/删除 API Key 的受控兜底；只在 Worker 后端使用。</span>
+                    <span class="field-hint">仅在 Admin API 不支持创建/删除 API Key 时作为受控兜底；只在 Worker 后端使用。</span>
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">默认分组 ID</span>
