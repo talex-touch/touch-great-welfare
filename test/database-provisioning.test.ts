@@ -329,6 +329,56 @@ describe('database resource provisioning', () => {
     expect(firstHeaders.get('1Panel-Token')).toBe(md5Hex(`1Panelop_test_key${timestamp}`))
   })
 
+  it('clears stored PostgreSQL root URL and OnePanel API key on explicit request', async () => {
+    const d1 = createMemoryD1(createState())
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    const saveResponse = await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+        onePanelBaseUrl: 'https://panel.example.com/',
+        onePanelApiKey: 'op_test_key',
+      }),
+    }), env)
+    expect(saveResponse.ok).toBe(true)
+    expect((await saveResponse.json() as { configured: boolean, onePanelApiKeyMasked: string }).configured).toBe(true)
+
+    const clearResponse = await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: false,
+        clearRootUrl: true,
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+        onePanelBaseUrl: 'https://panel.example.com/',
+        clearOnePanelApiKey: true,
+      }),
+    }), env)
+
+    expect(clearResponse.ok).toBe(true)
+    const config = await clearResponse.json() as {
+      enabled: boolean
+      configured: boolean
+      rootUrlMasked: string
+      onePanelApiKeyMasked: string
+    }
+    expect(config.enabled).toBe(false)
+    expect(config.configured).toBe(false)
+    expect(config.rootUrlMasked).toBe('')
+    expect(config.onePanelApiKeyMasked).toBe('')
+  })
+
   it('creates a PostgreSQL database binding for approved database resource items', async () => {
     const d1 = createMemoryD1(createState())
     const env = {

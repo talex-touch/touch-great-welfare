@@ -331,11 +331,13 @@ export const sub2ApiConfigForm = reactive({
 export const databaseProvisionConfigForm = reactive({
   enabled: true,
   rootUrl: '',
+  clearRootUrl: false,
   rootUrlMasked: '',
   defaultExpiresInDays: 30,
   databasePrefix: 'twg',
   onePanelBaseUrl: '',
   onePanelApiKey: '',
+  clearOnePanelApiKey: false,
   onePanelApiKeyMasked: '',
   onePanelStatus: '',
   onePanelStatusSnapshot: null as Awaited<ReturnType<typeof loadOnePanelStatus>> | null,
@@ -2082,11 +2084,13 @@ export function useWelfareUiState() {
   function applyDatabaseProvisionConfig(config: Awaited<ReturnType<typeof loadDatabaseProvisionConfig>>) {
     databaseProvisionConfigForm.enabled = config.enabled
     databaseProvisionConfigForm.rootUrl = ''
+    databaseProvisionConfigForm.clearRootUrl = false
     databaseProvisionConfigForm.rootUrlMasked = config.rootUrlMasked
     databaseProvisionConfigForm.defaultExpiresInDays = config.defaultExpiresInDays
     databaseProvisionConfigForm.databasePrefix = config.databasePrefix
     databaseProvisionConfigForm.onePanelBaseUrl = config.onePanelBaseUrl
     databaseProvisionConfigForm.onePanelApiKey = ''
+    databaseProvisionConfigForm.clearOnePanelApiKey = false
     databaseProvisionConfigForm.onePanelApiKeyMasked = config.onePanelApiKeyMasked
     databaseProvisionConfigForm.configured = config.configured
   }
@@ -2116,10 +2120,12 @@ export function useWelfareUiState() {
       const result = await saveDatabaseProvisionConfig(welfare.currentUser.value.id, {
         enabled: databaseProvisionConfigForm.enabled,
         rootUrl: databaseProvisionConfigForm.rootUrl,
+        clearRootUrl: databaseProvisionConfigForm.clearRootUrl,
         defaultExpiresInDays: Number(databaseProvisionConfigForm.defaultExpiresInDays),
         databasePrefix: databaseProvisionConfigForm.databasePrefix,
         onePanelBaseUrl: databaseProvisionConfigForm.onePanelBaseUrl,
         onePanelApiKey: databaseProvisionConfigForm.onePanelApiKey,
+        clearOnePanelApiKey: databaseProvisionConfigForm.clearOnePanelApiKey,
       })
       applyDatabaseProvisionConfig(result)
       databaseProvisionConfigForm.message = '数据库自动发放配置已保存'

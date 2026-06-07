@@ -2334,6 +2334,10 @@ onMounted(() => {
                     <span class="field-label">PostgreSQL root 连接</span>
                     <TxInput v-model="databaseProvisionConfigForm.rootUrl" :disabled="!isAdmin || databaseProvisionConfigForm.loading" type="password" :placeholder="databaseProvisionConfigForm.rootUrlMasked || 'postgresql://root:password@host:5432/postgres'" />
                     <span class="field-hint">仅在 Worker 后端用于创建数据库、登录角色和授权；服务端加密保存。</span>
+                    <label v-if="databaseProvisionConfigForm.rootUrlMasked" class="option-check compact">
+                      <TxCheckbox v-model="databaseProvisionConfigForm.clearRootUrl" variant="checkmark" :disabled="!isAdmin || databaseProvisionConfigForm.loading || !!databaseProvisionConfigForm.rootUrl" aria-label="清空已保存的 PostgreSQL root 连接" />
+                      <span><b>清空已保存 root 连接</b></span>
+                    </label>
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">默认有效期（天）</span>
@@ -2351,6 +2355,10 @@ onMounted(() => {
                   <label class="gap-2 grid">
                     <span class="field-label">OnePanel API Key</span>
                     <TxInput v-model="databaseProvisionConfigForm.onePanelApiKey" :disabled="!isAdmin || databaseProvisionConfigForm.loading" type="password" :placeholder="databaseProvisionConfigForm.onePanelApiKeyMasked || 'op_...'" />
+                    <label v-if="databaseProvisionConfigForm.onePanelApiKeyMasked" class="option-check compact">
+                      <TxCheckbox v-model="databaseProvisionConfigForm.clearOnePanelApiKey" variant="checkmark" :disabled="!isAdmin || databaseProvisionConfigForm.loading || !!databaseProvisionConfigForm.onePanelApiKey" aria-label="清空已保存的 OnePanel API Key" />
+                      <span><b>清空已保存 OnePanel Key</b></span>
+                    </label>
                   </label>
                 </div>
                 <div class="mt-5 flex flex-wrap gap-3 items-center">
