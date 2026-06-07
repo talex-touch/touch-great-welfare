@@ -3009,8 +3009,8 @@ async function submitCollaborationApplication(request: Request, env: WorkerEnv) 
     createdAt: now(),
   }
   applications.unshift(application)
-  await commitActionState(env, originalState, previousState, record.version)
-  return json({ ok: true, application })
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, application, ...stateVersionPayload(result.version) })
 }
 
 async function reviewCollaborationApplication(request: Request, env: WorkerEnv) {
@@ -3044,8 +3044,8 @@ async function reviewCollaborationApplication(request: Request, env: WorkerEnv) 
       targetUser.role = 'reviewer'
   }
 
-  await commitActionState(env, originalState, previousState, record.version)
-  return json({ ok: true, application })
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, application, ...stateVersionPayload(result.version) })
 }
 
 async function claimDeliveryApplication(request: Request, env: WorkerEnv) {
@@ -3068,8 +3068,8 @@ async function claimDeliveryApplication(request: Request, env: WorkerEnv) {
   application.deliveryClaimedAt = now()
   application.deliveryReviewStatus = undefined
 
-  await commitActionState(env, originalState, previousState, record.version)
-  return json({ ok: true, applicationId: application.id })
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
 }
 
 async function cancelDeliveryClaim(request: Request, env: WorkerEnv) {
@@ -3095,8 +3095,8 @@ async function cancelDeliveryClaim(request: Request, env: WorkerEnv) {
   application.deliverySubmittedAt = undefined
   application.deliveryReviewStatus = undefined
 
-  await commitActionState(env, originalState, previousState, record.version)
-  return json({ ok: true, applicationId: application.id })
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
 }
 
 async function submitDeliveryResult(request: Request, env: WorkerEnv) {
@@ -3130,8 +3130,8 @@ async function submitDeliveryResult(request: Request, env: WorkerEnv) {
   application.deliverySubmittedAt = now()
   application.deliveryReviewStatus = 'pending_review'
 
-  await commitActionState(env, originalState, previousState, record.version)
-  return json({ ok: true, applicationId: application.id })
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
 }
 
 async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
@@ -3159,8 +3159,8 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
     application.deliverySubmittedAt = undefined
     application.deliveryReviewStatus = 'rejected'
     pushApplicationMessage(application, user.id, 'system', note || '<p>管理员复核未通过，任务已重新开放认领。</p>')
-    await commitActionState(env, originalState, previousState, record.version)
-    return json({ ok: true, applicationId: application.id })
+    const result = await commitActionState(env, originalState, previousState, record.version)
+    return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
   }
 
   const rewardPoints = Math.trunc(Number(payload.rewardPoints))
@@ -3185,8 +3185,8 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
     refId: application.id,
     createdAt: reviewedAt,
   }, previousState)
-  await commitActionState(env, originalState, previousState, record.version)
-  return json({ ok: true, applicationId: application.id })
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
 }
 
 async function currentStateResponse(request: Request, env: WorkerEnv) {

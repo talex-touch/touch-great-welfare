@@ -518,6 +518,27 @@ describe('welfare state security', () => {
     await expect(second.json()).resolves.toMatchObject({ code: 'STATE_VERSION_CONFLICT' })
   })
 
+  it('returns the next state version from collaboration actions', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+        'x-welfare-action': 'submit-collaboration-application',
+      },
+      body: JSON.stringify({
+        reason: '<p>我可以长期协助处理公益申请，熟悉项目交付和用户沟通流程。</p>',
+      }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, version: 2 })
+  })
+
   it('rejects D1 conditional writes when state changes between version check and update', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
