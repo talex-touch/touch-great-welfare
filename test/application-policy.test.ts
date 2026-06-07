@@ -571,8 +571,14 @@ describe('application policy', () => {
     }
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockClear()
-    fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ state: remoteState, currentUserId: 'user_1' }), {
+    fetchMock.mockImplementationOnce(async () =>
+      new Response(JSON.stringify({ state: remoteState, currentUserId: 'user_1', version: 1 }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    fetchMock.mockImplementationOnce(async () =>
+      new Response(JSON.stringify({ error: '积分不足' }), {
+        status: 500,
         headers: { 'content-type': 'application/json' },
       }),
     )
@@ -588,7 +594,7 @@ describe('application policy', () => {
     expect(store.state.users[0].points).toBe(0)
     expect(store.state.studentVerifications).toHaveLength(0)
     expect(store.state.transactions).toHaveLength(1)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('normalizes missing verification types as student', () => {

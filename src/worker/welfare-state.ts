@@ -3,35 +3,72 @@ import type {
   AttachmentMeta,
   CreditTransaction,
   CrowdReview,
+  DailyCheckIn,
   EducationEmailChallenge,
   InvitationBinding,
+  ResourceType,
   SquareBoost,
   SquarePost,
   SquareReport,
   StudentVerification,
+  SubmitApplicationPayload,
+  SubmitResourceApplicationPayload,
+  SubmitStudentPayload,
   User,
+  UserCoupon,
   WelfareApplication,
   WelfareState,
 } from '~/composables/welfare'
 import { Pool } from 'pg'
 import {
+  ACTIVITY_END_AT,
+  applicationPowChallenge,
+  applyRateDiscount,
   BASE_REQUEST_COST,
+  buildPricingSnapshot,
+  buildUserLevelCard,
   calculateActivityPrice,
   calculateLlmApiBudgetActivityPrice,
   calculateLlmApiCostPoints,
+  calculateLlmApiRateLimitChangeCost,
+  calculateRejectionReviewFee,
+  canApplyResourceType,
   COLLABORATION_APPLICATION_MIN_REASON_CHARS,
   COLLABORATION_DELIVERY_REWARD_MAX,
   COLLABORATION_DELIVERY_REWARD_MIN,
+  createProcessingDueAt,
+  createRetentionExpiresAt,
   createUserInviteCode,
+  DAILY_CHECK_IN_COUPON_TTL_DAYS,
   DAILY_CHECK_IN_MAX_POINTS,
+  discountedResourceItemCost,
+  estimatedResourceItemCost,
+  INVITATION_BIND_WINDOW_HOURS,
+  isValidApplicationPow,
+  LLM_API_EXTENDED_PROCESSING_HOURS,
+  LLM_API_STANDARD_PROCESSING_HOURS,
+  llmApiRequiresExtendedReview,
+  MAX_ACTIVE_USER_REQUESTS,
   MAX_ATTACHMENT_BYTES,
+  normalizeLlmApiBudgetUsd,
+  normalizeResourceItems,
+  PRO_CONTEXT_APPEND_COST,
   PRO_EXPEDITE_COST,
+  PRO_STANDARD_PROCESSING_HOURS,
+  REJECTION_REVIEW_FEE_RATE,
   resolveSelectableLlmApiModel,
+  RESOURCE_TYPE_CONFIGS,
+  resourceActivityPromotionName,
+  rollDailyCheckInPoints,
+  SQUARE_BOOST_REPORT_COOLDOWN_DAYS,
   SQUARE_BOOST_REPORT_PENALTY_POINTS,
   SQUARE_BOOST_REWARD_POINTS,
+  SQUARE_DAILY_BOOST_LIMIT,
   SQUARE_MIN_DISCOUNT_RATE,
+  SQUARE_SHARE_DISCOUNT_RATE,
   STORAGE_EXTENSION_COST,
   STUDENT_REVIEW_FEE,
+  termsForResourceTypes,
 } from '~/composables/welfare'
 import { isRichTextEmpty, richTextToPlainText } from '~/utils/rich-text'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
@@ -53,6 +90,7 @@ export interface WorkerEnv {
 }
 
 const STATE_KEY = 'default'
+const INITIAL_STATE_VERSION = 1
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 const MASKED_SECRET_MARKER = '****'
 const ADMIN_LOGIN_MAX_FAILURES = 8
@@ -66,6 +104,22 @@ type PointBalanceSyncMode = false | 'current-user' | 'all'
 interface ReadWelfareStateOptions {
   syncPointBalances?: PointBalanceSyncMode
   currentUserId?: string
+}
+
+interface WelfareStateRecord {
+  state: unknown
+  version: number
+}
+
+interface WriteWelfareStateOptions {
+  expectedVersion?: number
+}
+
+class StateVersionConflictError extends Error {
+  constructor() {
+    super('业务状态已被其他请求更新，请刷新后重试')
+    this.name = 'StateVersionConflictError'
+  }
 }
 
 let pool: Pool | undefined
@@ -440,7 +494,7 @@ async function requestUserId(request: Request, env: WorkerEnv) {
   return await authenticatedUserId(request, env)
 }
 
-async function canUpdateState(previousState: unknown, request: Request, env: WorkerEnv) {
+export async function canUpdateState(previousState: unknown, request: Request, env: WorkerEnv) {
   if (!isRecord(previousState))
     return false
 
@@ -741,7 +795,7 @@ async function appendTrustedPointTransaction(env: WorkerEnv, state: unknown, inp
   await appendPointTransaction(env, input, state)
 }
 
-async function applyTrustedPointTransactionsFromState(env: WorkerEnv, previousState: unknown, nextState: unknown, userId: string) {
+export async function applyTrustedPointTransactionsFromState(env: WorkerEnv, previousState: unknown, nextState: unknown, userId: string) {
   if (!isRecord(previousState) || !isRecord(nextState))
     return
 
@@ -1004,71 +1058,361 @@ export function getPool(env: WorkerEnv) {
 }
 
 async function ensureSchema(env: WorkerEnv) {
-  if (shouldUseD1(env))
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare(`
+        create table if not exists welfare_app_state (
+          id text primary key,
+          state text not null,
+          updated_at text not null default current_timestamp,
+          version integer not null default 1
+        )
+      `)
+      .run()
+    try {
+      await env.LOCAL_DB!
+        .prepare('alter table welfare_app_state add column version integer not null default 1')
+        .run()
+    }
+    catch {
+      // Some D1 runtimes do not support ADD COLUMN IF NOT EXISTS; duplicate-column is harmless here.
+    }
+    await ensureSnapshotSchema(env)
     return
+  }
 
   await getPool(env).query(`
     create table if not exists welfare_app_state (
       id text primary key,
       state jsonb not null,
+      version integer not null default 1,
       updated_at timestamptz not null default now()
     )
   `)
+  await getPool(env).query('alter table welfare_app_state add column if not exists version integer not null default 1')
+  await ensureSnapshotSchema(env)
 }
 
-export async function readWelfareState(env: WorkerEnv, options: ReadWelfareStateOptions = {}) {
+async function ensureSnapshotSchema(env: WorkerEnv) {
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare(`
+        create table if not exists welfare_applications (
+          id text primary key,
+          user_id text not null,
+          type text not null,
+          status text not null,
+          title text not null,
+          payload text not null,
+          created_at text not null,
+          updated_at text not null default current_timestamp
+        )
+      `)
+      .run()
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
+      .run()
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
+      .run()
+    await env.LOCAL_DB!
+      .prepare(`
+        create table if not exists user_coupons (
+          id text primary key,
+          user_id text not null,
+          name text not null,
+          scope text,
+          discount_type text,
+          discount_rate real not null,
+          discount_amount integer,
+          payload text not null,
+          created_at text not null,
+          expires_at text,
+          used_at text
+        )
+      `)
+      .run()
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_user_coupons_user_created on user_coupons (user_id, created_at desc, id desc)')
+      .run()
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_user_coupons_user_used on user_coupons (user_id, used_at)')
+      .run()
+    return
+  }
+
+  await getPool(env).query(`
+    create table if not exists welfare_applications (
+      id text primary key,
+      user_id text not null,
+      type text not null,
+      status text not null,
+      title text not null,
+      payload text not null,
+      created_at text not null,
+      updated_at text not null default current_timestamp
+    )
+  `)
+  await getPool(env).query('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
+  await getPool(env).query('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
+  await getPool(env).query(`
+    create table if not exists user_coupons (
+      id text primary key,
+      user_id text not null,
+      name text not null,
+      scope text,
+      discount_type text,
+      discount_rate real not null,
+      discount_amount integer,
+      payload text not null,
+      created_at text not null,
+      expires_at text,
+      used_at text
+    )
+  `)
+  await getPool(env).query('create index if not exists idx_user_coupons_user_created on user_coupons (user_id, created_at desc, id desc)')
+  await getPool(env).query('create index if not exists idx_user_coupons_user_used on user_coupons (user_id, used_at)')
+}
+
+function normalizeStateVersion(value: unknown) {
+  const version = Math.trunc(Number(value))
+  return Number.isFinite(version) && version > 0 ? version : INITIAL_STATE_VERSION
+}
+
+export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfareStateOptions = {}): Promise<WelfareStateRecord> {
   await ensureSchema(env)
 
-  const rawState = shouldUseD1(env)
+  const record = shouldUseD1(env)
     ? await (async () => {
         const row = await env.LOCAL_DB!
-          .prepare('select state from welfare_app_state where id = ?1')
+          .prepare('select state, version from welfare_app_state where id = ?1')
           .bind(STATE_KEY)
-          .first<{ state: string }>()
-        return row?.state ? JSON.parse(row.state) : {}
+          .first<{ state: string, version?: number }>()
+        return {
+          state: row?.state ? JSON.parse(row.state) : {},
+          version: normalizeStateVersion(row?.version),
+        }
       })()
-    : (await getPool(env).query(
-        'select state from welfare_app_state where id = $1',
-        [STATE_KEY],
-      )).rows[0]?.state ?? {}
+    : await (async () => {
+        const row = (await getPool(env).query<{ state: unknown, version?: number }>(
+          'select state, version from welfare_app_state where id = $1',
+          [STATE_KEY],
+        )).rows[0]
+        return {
+          state: row?.state ?? {},
+          version: normalizeStateVersion(row?.version),
+        }
+      })()
 
-  const state = await decodeStoredState(env, rawState)
+  const state = await decodeStoredState(env, record.state)
   if (options.syncPointBalances === 'all') {
     await syncUserPointBalancesFromLedger(env, state)
   }
   else if (options.syncPointBalances === 'current-user' && options.currentUserId) {
     await syncUserPointBalancesFromLedger(env, state, [options.currentUserId])
   }
-  return applyWelfareRetentionPolicy(state).state
+  return {
+    state: applyWelfareRetentionPolicy(state).state,
+    version: record.version,
+  }
 }
 
-export async function writeWelfareState(env: WorkerEnv, state: unknown) {
+export async function readWelfareState(env: WorkerEnv, options: ReadWelfareStateOptions = {}) {
+  return (await readWelfareStateRecord(env, options)).state
+}
+
+async function currentStateVersion(env: WorkerEnv) {
   await ensureSchema(env)
+  if (shouldUseD1(env)) {
+    const row = await env.LOCAL_DB!
+      .prepare('select version from welfare_app_state where id = ?1')
+      .bind(STATE_KEY)
+      .first<{ version?: number }>()
+    return row ? normalizeStateVersion(row.version) : undefined
+  }
+
+  const row = (await getPool(env).query<{ version?: number }>(
+    'select version from welfare_app_state where id = $1',
+    [STATE_KEY],
+  )).rows[0]
+  return row ? normalizeStateVersion(row.version) : undefined
+}
+
+async function assertExpectedStateVersion(env: WorkerEnv, expectedVersion?: number) {
+  if (expectedVersion === undefined)
+    return
+
+  const currentVersion = await currentStateVersion(env)
+  if (currentVersion !== undefined && currentVersion !== expectedVersion)
+    throw new StateVersionConflictError()
+}
+
+function applicationSnapshotUpdatedAt(application: WelfareApplication) {
+  return application.completedAt
+    || application.reviewedAt
+    || application.submittedAt
+    || application.deliveryRewardedAt
+    || application.deliverySubmittedAt
+    || application.deliveryClaimedAt
+    || application.createdAt
+    || now()
+}
+
+function couponSnapshotDiscountRate(coupon: UserCoupon) {
+  const rate = Number(coupon.discountRate ?? 1)
+  return Number.isFinite(rate) ? rate : 1
+}
+
+async function syncStateSnapshots(env: WorkerEnv, state: unknown) {
+  if (!isRecord(state))
+    return
+
+  const applications = Array.isArray(state.applications) ? state.applications.filter((item): item is WelfareApplication => isRecord(item) && typeof item.id === 'string') : []
+  const coupons = Array.isArray(state.coupons) ? state.coupons.filter((item): item is UserCoupon => isRecord(item) && typeof item.id === 'string') : []
+
+  if (shouldUseD1(env)) {
+    for (const application of applications) {
+      await env.LOCAL_DB!
+        .prepare(`
+          insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
+          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          on conflict (id)
+          do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
+        `)
+        .bind(
+          application.id,
+          application.userId,
+          application.type,
+          application.status,
+          application.title || '未命名申请',
+          JSON.stringify(application),
+          application.createdAt || now(),
+          applicationSnapshotUpdatedAt(application),
+        )
+        .run()
+    }
+    for (const coupon of coupons) {
+      await env.LOCAL_DB!
+        .prepare(`
+          insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
+          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          on conflict (id)
+          do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
+        `)
+        .bind(
+          coupon.id,
+          coupon.userId,
+          coupon.name || '未命名优惠券',
+          coupon.scope ?? null,
+          coupon.discountType ?? 'rate',
+          couponSnapshotDiscountRate(coupon),
+          coupon.discountAmount ?? null,
+          JSON.stringify(coupon),
+          coupon.createdAt || now(),
+          coupon.expiresAt ?? null,
+          coupon.usedAt ?? null,
+        )
+        .run()
+    }
+    return
+  }
+
+  for (const application of applications) {
+    await getPool(env).query(
+      `
+        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
+        values ($1, $2, $3, $4, $5, $6, $7, $8)
+        on conflict (id)
+        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
+      `,
+      [
+        application.id,
+        application.userId,
+        application.type,
+        application.status,
+        application.title || '未命名申请',
+        JSON.stringify(application),
+        application.createdAt || now(),
+        applicationSnapshotUpdatedAt(application),
+      ],
+    )
+  }
+  for (const coupon of coupons) {
+    await getPool(env).query(
+      `
+        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        on conflict (id)
+        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
+      `,
+      [
+        coupon.id,
+        coupon.userId,
+        coupon.name || '未命名优惠券',
+        coupon.scope ?? null,
+        coupon.discountType ?? 'rate',
+        couponSnapshotDiscountRate(coupon),
+        coupon.discountAmount ?? null,
+        JSON.stringify(coupon),
+        coupon.createdAt || now(),
+        coupon.expiresAt ?? null,
+        coupon.usedAt ?? null,
+      ],
+    )
+  }
+}
+
+export async function writeWelfareState(env: WorkerEnv, state: unknown, options: WriteWelfareStateOptions = {}) {
+  await ensureSchema(env)
+  await assertExpectedStateVersion(env, options.expectedVersion)
   await backfillPointTransactionsFromState(env, state)
   const storedState = await encodeStoredState(env, state)
+  const nextVersion = options.expectedVersion !== undefined
+    ? options.expectedVersion + 1
+    : (await currentStateVersion(env) ?? 0) + 1
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
-        insert into welfare_app_state (id, state, updated_at)
-        values (?1, ?2, current_timestamp)
+        insert into welfare_app_state (id, state, updated_at, version)
+        values (?1, ?2, current_timestamp, ?3)
         on conflict (id)
-        do update set state = excluded.state, updated_at = current_timestamp
+        do update set state = excluded.state, updated_at = current_timestamp, version = excluded.version
       `)
-      .bind(STATE_KEY, JSON.stringify(storedState))
+      .bind(STATE_KEY, JSON.stringify(storedState), nextVersion)
       .run()
-    return
+    await syncStateSnapshots(env, state)
+    return nextVersion
+  }
+
+  if (options.expectedVersion !== undefined) {
+    const result = await getPool(env).query<{ version: number }>(
+      `
+        update welfare_app_state
+        set state = $2::jsonb, updated_at = now(), version = version + 1
+        where id = $1 and version = $3
+        returning version
+      `,
+      [STATE_KEY, JSON.stringify(storedState), options.expectedVersion],
+    )
+    const version = result.rows[0]?.version
+    if (!version)
+      throw new StateVersionConflictError()
+    await syncStateSnapshots(env, state)
+    return normalizeStateVersion(version)
   }
 
   await getPool(env).query(
     `
-      insert into welfare_app_state (id, state, updated_at)
-      values ($1, $2::jsonb, now())
+      insert into welfare_app_state (id, state, updated_at, version)
+      values ($1, $2::jsonb, now(), $3)
       on conflict (id)
-      do update set state = excluded.state, updated_at = now()
+      do update set state = excluded.state, updated_at = now(), version = excluded.version
     `,
-    [STATE_KEY, JSON.stringify(storedState)],
+    [STATE_KEY, JSON.stringify(storedState), nextVersion],
   )
+  await syncStateSnapshots(env, state)
+  return nextVersion
 }
 
 function json(payload: unknown, status = 200, headers?: HeadersInit) {
@@ -1086,6 +1430,13 @@ function forbidden(message = '需要管理员权限') {
 }
 
 function errorResponse(error: unknown) {
+  if (error instanceof StateVersionConflictError) {
+    return json({
+      code: 'STATE_VERSION_CONFLICT',
+      error: error.message,
+    }, 409)
+  }
+
   return json({
     error: error instanceof Error ? error.message : '服务端错误',
   }, 500)
@@ -1105,7 +1456,7 @@ function assertStateShape(state: unknown): asserts state is Record<string, unkno
     throw new Error('oauth must be an object')
 }
 
-function outOfScopeRecordLabel(state: Record<string, unknown>, userId: string) {
+export function outOfScopeRecordLabel(state: Record<string, unknown>, userId: string) {
   const scopedCollections: Array<{
     key: string
     label: string
@@ -1297,6 +1648,289 @@ function stateApplications(state: Partial<WelfareState>) {
   return Array.isArray(state.applications) ? state.applications : []
 }
 
+function localDateKey(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function addDays(value: string, days: number) {
+  return new Date(new Date(value).getTime() + days * 24 * 60 * 60 * 1000).toISOString()
+}
+
+function addHours(value: string, hours: number) {
+  return new Date(new Date(value).getTime() + hours * 60 * 60 * 1000).toISOString()
+}
+
+function shiftDateKey(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return localDateKey(date)
+}
+
+function timeToMinutes(value: string) {
+  const match = value.match(/^(\d{2}):(\d{2})$/)
+  if (!match)
+    return undefined
+
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+function isWithinOpenWindow(policy: { openStart: string, openEnd: string }, current = new Date()) {
+  const start = timeToMinutes(policy.openStart)
+  const end = timeToMinutes(policy.openEnd)
+  if (start === undefined || end === undefined || start === end)
+    return true
+
+  const currentMinutes = current.getHours() * 60 + current.getMinutes()
+  if (start < end)
+    return currentMinutes >= start && currentMinutes <= end
+  return currentMinutes >= start || currentMinutes <= end
+}
+
+function isActiveApplicationStatus(status: string) {
+  return ['draft', 'reserved', 'pending_review', 'needs_supplement', 'processing', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(status)
+}
+
+function isActiveStudentStatus(status: string) {
+  return ['pending', 'needs_supplement'].includes(status)
+}
+
+function activeRequestCountForState(state: Partial<WelfareState>, userId: string) {
+  return stateApplications(state).filter(item => item.userId === userId && isActiveApplicationStatus(item.status)).length
+    + (state.studentVerifications ?? []).filter(item => item.userId === userId && isActiveStudentStatus(item.status)).length
+}
+
+function recentSubmissionCooldownUntilForState(state: Partial<WelfareState>, userId: string, createdAt: string) {
+  const cooldownMs = (state.applicationPolicy?.submitCooldownSeconds ?? 0) * 1000
+  if (cooldownMs <= 0)
+    return undefined
+
+  const lastSubmittedAt = stateApplications(state)
+    .filter(item => item.userId === userId && item.status !== 'draft')
+    .map(item => new Date(item.createdAt).getTime())
+    .filter(Number.isFinite)
+    .sort((left, right) => right - left)[0]
+  if (!lastSubmittedAt)
+    return undefined
+
+  const until = lastSubmittedAt + cooldownMs
+  if (new Date(createdAt).getTime() < until)
+    return new Date(until).toISOString()
+}
+
+function rejectionFeeWaiverBlockedUntilForState(state: Partial<WelfareState>, userId: string) {
+  const currentTime = Date.now()
+  return stateApplications(state)
+    .filter(item => item.userId === userId && !!item.waiveRejectionReviewFeeBlockedUntil)
+    .map(item => item.waiveRejectionReviewFeeBlockedUntil!)
+    .filter((value) => {
+      const time = new Date(value).getTime()
+      return Number.isFinite(time) && time > currentTime
+    })
+    .sort()
+    .at(-1)
+}
+
+function assertCanCreateRequestForState(state: Partial<WelfareState>, userId: string) {
+  const systemConfig = state.systemConfig
+  if (systemConfig && !systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+
+  if (activeRequestCountForState(state, userId) >= MAX_ACTIVE_USER_REQUESTS)
+    throw new Error(`一个用户最多只能同时创建 ${MAX_ACTIVE_USER_REQUESTS} 个待处理请求`)
+}
+
+function assertApplicationPolicyForState(state: Partial<WelfareState>, input: {
+  userId: string
+  type: SubmitApplicationPayload['type']
+  title: string
+  description: string
+  createdAt: string
+  powNonce?: string
+  turnstileVerified?: boolean
+}) {
+  const systemConfig = state.systemConfig
+  if (systemConfig && !systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+
+  const policy = state.applicationPolicy
+  const kindPolicy = policy?.categories?.[input.type]
+  if (!policy || !kindPolicy)
+    throw new Error('申请策略未配置')
+  if (!kindPolicy.enabled)
+    throw new Error(kindPolicy.closedReason || `${input.type.toUpperCase()} 申请暂未开放`)
+  if (!isWithinOpenWindow(kindPolicy, new Date(input.createdAt)))
+    throw new Error(`${input.type.toUpperCase()} 申请不在当前开放时间段`)
+
+  const plainLength = richTextToPlainText(input.description).trim().length
+  if (plainLength < policy.minDescriptionChars)
+    throw new Error(`申请内容不得少于 ${policy.minDescriptionChars} 字`)
+
+  const cooldownUntil = recentSubmissionCooldownUntilForState(state, input.userId, input.createdAt)
+  if (cooldownUntil)
+    throw new Error(`提交过于频繁，请在 ${cooldownUntil} 后再提交`)
+
+  const today = localDateKey(input.createdAt)
+  const sameDayApplications = stateApplications(state)
+    .filter(item => item.type === input.type && item.status !== 'draft' && localDateKey(item.createdAt) === today)
+  if (kindPolicy.dailyLimit > 0 && sameDayApplications.length >= kindPolicy.dailyLimit)
+    throw new Error(`${input.type.toUpperCase()} 今日申请名额已满`)
+  if (kindPolicy.perUserDailyLimit > 0 && sameDayApplications.filter(item => item.userId === input.userId).length >= kindPolicy.perUserDailyLimit)
+    throw new Error(`你今日 ${input.type.toUpperCase()} 申请次数已达上限`)
+
+  if (policy.turnstileEnabled && !input.turnstileVerified)
+    throw new Error('请先完成人机验证')
+  if (policy.powEnabled) {
+    const challenge = applicationPowChallenge(input)
+    if (!isValidApplicationPow(challenge, input.powNonce, policy.powDifficulty))
+      throw new Error('PoW 校验未通过，请重新提交')
+  }
+}
+
+function squareDiscountSnapshot(cost: number, shareToSquare: boolean) {
+  if (!shareToSquare)
+    return { cost, discountRate: 1, discountAmount: 0 }
+
+  const payableCost = applyRateDiscount(cost, SQUARE_SHARE_DISCOUNT_RATE)
+  return {
+    cost: payableCost,
+    discountRate: SQUARE_SHARE_DISCOUNT_RATE,
+    discountAmount: Math.max(0, cost - payableCost),
+  }
+}
+
+function applyCouponDiscount(cost: number, coupon?: UserCoupon) {
+  if (!coupon)
+    return { payableCost: cost, discountAmount: 0 }
+
+  let discountAmount = 0
+  if (coupon.discountType === 'fixed_points' || coupon.discountType === 'fixed_ldc') {
+    discountAmount = coupon.discountAmount ?? 0
+  }
+  else {
+    const payableCost = applyRateDiscount(cost, coupon.discountRate)
+    discountAmount = Math.max(0, cost - payableCost)
+  }
+
+  if (coupon.maxDiscount)
+    discountAmount = Math.min(discountAmount, coupon.maxDiscount)
+
+  const payableCost = Math.max(0, cost - Math.min(cost, discountAmount))
+  return {
+    payableCost,
+    discountAmount: Math.max(0, cost - payableCost),
+  }
+}
+
+function availableResourceCoupon(state: Partial<WelfareState>, userId: string, couponId: string | undefined, cost: number, resourceTypes: ResourceType[], createdAt: string) {
+  if (!couponId)
+    return undefined
+
+  const coupon = (state.coupons ?? []).find(item => item.id === couponId)
+  if (!coupon || coupon.userId !== userId || coupon.usedAt)
+    throw new Error('优惠券不可用、不适用于当前资源或已过期')
+  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() <= new Date(createdAt).getTime())
+    throw new Error('优惠券不可用、不适用于当前资源或已过期')
+  if (coupon.scope && coupon.scope !== 'general' && coupon.scope !== 'resource')
+    throw new Error('优惠券不可用、不适用于当前资源或已过期')
+  if (coupon.minSpend && cost < coupon.minSpend)
+    throw new Error('优惠券不可用、不适用于当前资源或已过期')
+  if (coupon.resourceTypes?.length && !resourceTypes.some(type => coupon.resourceTypes?.includes(type)))
+    throw new Error('优惠券不可用、不适用于当前资源或已过期')
+  return coupon
+}
+
+function resourceCheckoutSnapshotForState(state: Partial<WelfareState>, userId: string, items: SubmitResourceApplicationPayload['resourceItems'], couponId: string | undefined, createdAt: string, shareToSquare = false) {
+  const baseCost = items.reduce((sum, item) => sum + estimatedResourceItemCost(item), 0)
+  const activityCost = items.reduce((sum, item) => sum + discountedResourceItemCost(item, createdAt), 0)
+  const resourceTypes = Array.from(new Set(items.map(item => item.resourceType)))
+  const coupon = availableResourceCoupon(state, userId, couponId, activityCost, resourceTypes, createdAt)
+  const couponResult = applyCouponDiscount(activityCost, coupon)
+  const squareResult = squareDiscountSnapshot(couponResult.payableCost, shareToSquare)
+  return {
+    baseCost,
+    activityCost,
+    cost: squareResult.cost,
+    activityDiscountRate: baseCost > 0 ? activityCost / baseCost : 1,
+    activityDiscountAmount: Math.max(0, baseCost - activityCost),
+    coupon,
+    couponDiscountAmount: couponResult.discountAmount,
+    squareDiscountRate: squareResult.discountRate,
+    squareDiscountAmount: squareResult.discountAmount,
+  }
+}
+
+function assertResourceTypeCanApplyForState(state: Partial<WelfareState>, resourceType: ResourceType, user: User) {
+  const config = RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === resourceType)
+  if (!config)
+    throw new Error('资源类型无效')
+  const userLevel = buildUserLevelCard(user, {
+    applications: stateApplications(state),
+    studentVerifications: state.studentVerifications ?? [],
+  })
+  if (!canApplyResourceType(config, userLevel.priority))
+    throw new Error(`${config.displayName} 暂不可申请`)
+}
+
+function buildResourceDescription(payload: SubmitResourceApplicationPayload) {
+  return sanitizeWorkerRichText(payload.reason || payload.businessBackground)
+}
+
+function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTermIds: SubmitResourceApplicationPayload['acceptedTermIds'], userId: string, acceptedAt: string) {
+  const requiredTerms = termsForResourceTypes(resourceTypes)
+  const accepted = new Set(acceptedTermIds)
+  const missing = requiredTerms.filter(term => !accepted.has(term.id))
+  if (missing.length)
+    throw new Error(`请确认所有条款：${missing.map(term => term.title).join('、')}`)
+
+  return requiredTerms.map(term => ({
+    termId: term.id,
+    version: term.version,
+    acceptedBy: userId,
+    acceptedAt,
+  }))
+}
+
+function buildResourceSquarePost(application: WelfareApplication, payload: SubmitResourceApplicationPayload, actualResourceTypes: ResourceType[], squarePostId: string, createdAt: string): SquarePost {
+  return {
+    id: squarePostId,
+    userId: application.userId,
+    type: 'application_template',
+    title: application.title,
+    content: sanitizeWorkerRichText(payload.squarePostContent || payload.reason),
+    applicationId: application.id,
+    requestType: 'resource',
+    template: {
+      title: application.title,
+      departmentId: payload.departmentId,
+      projectId: payload.projectId,
+      reason: payload.reason,
+      businessBackground: payload.businessBackground,
+      urgency: payload.urgency,
+      expectedEffectiveAt: payload.expectedEffectiveAt,
+      costCenter: payload.costCenter,
+      ownerId: payload.ownerId,
+      duration: payload.duration,
+      selectedResourceTypes: actualResourceTypes,
+      resourceItems: payload.resourceItems.map(item => ({
+        resourceType: item.resourceType,
+        resourceSubtype: item.resourceSubtype,
+        payload: item.payload,
+        requestedQuota: item.requestedQuota,
+        requestedPermission: item.requestedPermission,
+        duration: item.duration,
+      })),
+      acceptedTermIds: payload.acceptedTermIds,
+    },
+    createdAt,
+    updatedAt: createdAt,
+  }
+}
+
+function stateVersionPayload(version: number) {
+  return { version }
+}
+
 async function authenticatedUser(request: Request, env: WorkerEnv, state: Partial<WelfareState>) {
   const userId = await requestUserId(request, env)
   if (!userId)
@@ -1317,6 +1951,874 @@ function assertAdminUser(user: User) {
 function assertReviewerUser(user: User) {
   if (user.role !== 'reviewer' && user.role !== 'admin')
     throw new Error('需要协作处理员权限')
+}
+
+function ensureApplications(state: Partial<WelfareState>) {
+  state.applications ??= []
+  return state.applications
+}
+
+function ensureSquarePosts(state: Partial<WelfareState>) {
+  state.squarePosts ??= []
+  return state.squarePosts
+}
+
+function ensureCoupons(state: Partial<WelfareState>) {
+  state.coupons ??= []
+  return state.coupons
+}
+
+function ensureDailyCheckIns(state: Partial<WelfareState>) {
+  state.dailyCheckIns ??= []
+  return state.dailyCheckIns
+}
+
+function ensureInvitationBindings(state: Partial<WelfareState>) {
+  state.invitationBindings ??= []
+  return state.invitationBindings
+}
+
+function ensureSquareBoosts(state: Partial<WelfareState>) {
+  state.squareBoosts ??= []
+  return state.squareBoosts
+}
+
+function ensureSquareReports(state: Partial<WelfareState>) {
+  state.squareReports ??= []
+  return state.squareReports
+}
+
+function ensureStudentVerifications(state: Partial<WelfareState>) {
+  state.studentVerifications ??= []
+  return state.studentVerifications
+}
+
+function normalizeInviteCode(value: unknown) {
+  return typeof value === 'string' ? value.trim().toUpperCase() : ''
+}
+
+function createUserCouponFromRule(userId: string, source: UserCoupon['source'], template: Pick<NonNullable<WelfareState['couponTemplates']>[number], 'id' | 'name' | 'rule' | 'ttlDays'>, createdAt = now(), codeId?: string): UserCoupon {
+  const ttlDays = Math.max(0, Math.min(3650, Math.trunc(Number(template.ttlDays ?? DAILY_CHECK_IN_COUPON_TTL_DAYS))))
+  return {
+    id: createId('coupon'),
+    userId,
+    name: template.name,
+    discountRate: Math.max(0.01, Math.min(1, Number(template.rule.discountRate ?? 1))),
+    source,
+    scope: template.rule.scope,
+    discountType: template.rule.discountType ?? 'rate',
+    discountAmount: template.rule.discountAmount,
+    resourceTypes: template.rule.resourceTypes,
+    minSpend: template.rule.minSpend,
+    maxDiscount: template.rule.maxDiscount,
+    templateId: template.id,
+    codeId,
+    createdAt,
+    expiresAt: ttlDays > 0 ? addDays(createdAt, ttlDays) : undefined,
+  }
+}
+
+function createDailyCoupon(userId: string, source: UserCoupon['source'], discountRate: number, createdAt: string) {
+  return {
+    id: createId('coupon'),
+    userId,
+    name: source === 'daily_streak_7' ? '连续签到 7 天福利券' : '连续签到 3 天福利券',
+    discountRate,
+    source,
+    scope: 'general',
+    discountType: 'rate',
+    createdAt,
+    expiresAt: addDays(createdAt, DAILY_CHECK_IN_COUPON_TTL_DAYS),
+  } satisfies UserCoupon
+}
+
+function normalizeVerificationType(value: unknown) {
+  return value === 'frontline' ? 'frontline' : 'student'
+}
+
+function verificationTypeLabel(type: 'student' | 'frontline') {
+  return type === 'frontline' ? '一线认证' : '学生认证'
+}
+
+function normalizeStudentEmail(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : ''
+}
+
+function assertEducationEmail(value: string) {
+  if (!/^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/.test(value))
+    throw new Error('请填写有效的教育邮箱')
+  const domain = value.split('@')[1]?.toLowerCase() ?? ''
+  if (!domain.endsWith('.edu') && !domain.includes('.edu.') && !domain.endsWith('.ac') && !domain.includes('.ac.'))
+    throw new Error('请填写学校或教育机构邮箱')
+}
+
+async function applyStandardApplicationCommand(env: WorkerEnv, state: Partial<WelfareState>, user: User, payload: SubmitApplicationPayload) {
+  if (!['code', 'image', 'pro'].includes(payload.type))
+    throw new Error('申请类型无效')
+
+  const title = payload.title.trim()
+  const description = sanitizeWorkerRichText(payload.description)
+  if (!title)
+    throw new Error('请填写申请标题')
+  if (isRichTextEmpty(description))
+    throw new Error('请填写申请说明')
+
+  const attachments = attachmentsFromPayload(payload.attachments)
+  if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+    throw new Error('附件总大小不能超过 200MB')
+
+  const createdAt = now()
+  const cooldownUntil = stateApplications(state)
+    .filter(item => item.userId === user.id && item.type === payload.type && !!item.rejectionFraudulent && !!item.cooldownUntil)
+    .map(item => item.cooldownUntil!)
+    .filter((value) => {
+      const time = new Date(value).getTime()
+      return Number.isFinite(time) && time > Date.now()
+    })
+    .sort()
+    .at(-1)
+  if (cooldownUntil)
+    throw new Error(`同类申请限制中，请在 ${cooldownUntil} 后再提交`)
+
+  const waiveBlockedUntil = rejectionFeeWaiverBlockedUntilForState(state, user.id)
+  if (payload.waiveRejectionReviewFee && waiveBlockedUntil)
+    throw new Error(`认真填写承诺暂不可用，请在 ${waiveBlockedUntil} 后再勾选`)
+
+  assertCanCreateRequestForState(state, user.id)
+  assertApplicationPolicyForState(state, {
+    userId: user.id,
+    type: payload.type,
+    title,
+    description,
+    createdAt,
+    powNonce: payload.powNonce,
+    turnstileVerified: payload.turnstileVerified,
+  })
+
+  const pricing = buildPricingSnapshot(payload.type, createdAt)
+  const llmApiModel = payload.type === 'code'
+    ? resolveSelectableLlmApiModel(payload.llmApiModelKey ?? (payload.codexBudgetUsd ? 'codex' : undefined))
+    : undefined
+  const llmApiBudgetUsd = payload.type === 'code' && llmApiModel
+    ? normalizeLlmApiBudgetUsd(payload.llmApiBudgetUsd ?? payload.codexBudgetUsd, llmApiModel)
+    : undefined
+  const llmApiCustomRpmLimit = llmApiModel && payload.llmApiCustomRpmLimit !== undefined ? Math.max(1, Math.trunc(Number(payload.llmApiCustomRpmLimit))) : undefined
+  const llmApiCustomTpmLimit = llmApiModel && payload.llmApiCustomTpmLimit !== undefined ? Math.max(1, Math.trunc(Number(payload.llmApiCustomTpmLimit))) : undefined
+  const llmApiRateLimitChangeCost = llmApiModel
+    ? calculateLlmApiRateLimitChangeCost(llmApiCustomRpmLimit ?? llmApiModel.rpmLimit, llmApiModel.rpmLimit, llmApiCustomTpmLimit ?? llmApiModel.tpmLimit, llmApiModel.tpmLimit)
+    : 0
+  const cost = llmApiBudgetUsd && llmApiModel ? calculateLlmApiCostPoints(llmApiBudgetUsd, llmApiModel) : pricing.cost
+  const storageExtended = payload.type !== 'code' && !!payload.extendStorage
+  const storageExtensionCost = storageExtended ? STORAGE_EXTENSION_COST : 0
+  const expedited = payload.type === 'pro' && !!payload.expediteProcessing
+  const expediteCost = expedited ? PRO_EXPEDITE_COST : 0
+  const rejectionReviewFeeWaived = payload.type !== 'code' && !!payload.waiveRejectionReviewFee
+  const squareResult = squareDiscountSnapshot(cost, !!payload.shareToSquare)
+  const prepaidCost = squareResult.cost + storageExtensionCost + expediteCost
+  if (user.points < prepaidCost)
+    throw new Error(`积分不足，本次申请需要预扣 ${prepaidCost} 积分`)
+
+  const applicationId = createId('app')
+  const squarePostId = payload.shareToSquare ? createId('square') : undefined
+  const application: WelfareApplication = {
+    id: applicationId,
+    userId: user.id,
+    type: payload.type,
+    title,
+    description,
+    githubRepo: payload.githubRepo,
+    hasOpenSourceBadge: !!payload.githubRepo && !!user.profile.githubUsername && !!user.profile.githubAuthorized,
+    attachments,
+    status: 'pending_review',
+    baseCost: llmApiBudgetUsd ? cost : pricing.baseCost,
+    cost: squareResult.cost,
+    costCharged: true,
+    sharedToSquare: !!payload.shareToSquare,
+    squarePostId,
+    squareDiscountRate: squareResult.discountRate,
+    squareDiscountAmount: squareResult.discountAmount,
+    pricingDiscountRate: llmApiBudgetUsd ? 1 : pricing.discountRate,
+    pricingPromotionName: llmApiBudgetUsd ? undefined : pricing.promotionName,
+    pricingPromotionEndsAt: llmApiBudgetUsd ? undefined : pricing.promotionEndsAt,
+    pricingAppliedAt: pricing.appliedAt,
+    aiReview: {
+      status: 'pending',
+      summary: 'AI 审核排队中，管理员处理前会展示自动审核结果。',
+      risk: 'medium',
+    },
+    aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
+    rejectionReviewFee: calculateRejectionReviewFee(squareResult.cost),
+    rejectionReviewFeeWaived,
+    rejectionFraudulent: false,
+    llmApiModelKey: llmApiModel?.key,
+    llmApiModelName: llmApiModel?.name,
+    llmApiProvider: llmApiModel?.provider,
+    llmApiBudgetUsd,
+    llmApiPointRate: llmApiModel?.pointsPerUsd,
+    llmApiIpLimit: llmApiModel?.ipLimit,
+    llmApiRpmLimit: llmApiModel?.rpmLimit,
+    llmApiTpmLimit: llmApiModel?.tpmLimit,
+    llmApiCustomRpmLimit,
+    llmApiCustomTpmLimit,
+    llmApiRateLimitChangeCost,
+    llmApiConcurrencyLimit: llmApiModel?.concurrencyLimit,
+    llmApiRequiresExtendedReview: llmApiBudgetUsd && llmApiModel ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined,
+    codexBudgetUsd: llmApiModel?.key === 'codex' ? llmApiBudgetUsd : undefined,
+    codexPointRate: llmApiModel?.key === 'codex' ? llmApiModel.pointsPerUsd : undefined,
+    codexIpLimit: llmApiModel?.key === 'codex' ? llmApiModel.ipLimit : undefined,
+    codexRpmLimit: llmApiModel?.key === 'codex' ? llmApiModel.rpmLimit : undefined,
+    codexConcurrencyLimit: llmApiModel?.key === 'codex' ? llmApiModel.concurrencyLimit : undefined,
+    codexRequiresExtendedReview: llmApiModel?.key === 'codex' && llmApiBudgetUsd ? llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) : undefined,
+    storageExtended,
+    storageExtensionCost,
+    retentionExpiresAt: createRetentionExpiresAt(createdAt, storageExtended),
+    standardProcessingHours: payload.type === 'pro'
+      ? PRO_STANDARD_PROCESSING_HOURS
+      : llmApiBudgetUsd && llmApiModel
+        ? (llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) ? LLM_API_EXTENDED_PROCESSING_HOURS : LLM_API_STANDARD_PROCESSING_HOURS)
+        : undefined,
+    processingDueAt: llmApiBudgetUsd && llmApiModel ? createProcessingDueAt(createdAt, payload.type, expedited) : createProcessingDueAt(createdAt, payload.type, expedited),
+    expedited,
+    expediteCost,
+    contextAppendCost: payload.type === 'pro' ? PRO_CONTEXT_APPEND_COST : undefined,
+    contextAppendUntil: createRetentionExpiresAt(createdAt, storageExtended),
+    postApprovalSupplementLimit: payload.type === 'pro' ? 1 : undefined,
+    postApprovalSupplementCount: payload.type === 'pro' ? 0 : undefined,
+    createdAt,
+  }
+
+  ensureApplications(state).unshift(application)
+  if (payload.shareToSquare && squarePostId) {
+    ensureSquarePosts(state).unshift({
+      id: squarePostId,
+      userId: user.id,
+      type: 'application_template',
+      title,
+      content: sanitizeWorkerRichText(payload.squarePostContent || description),
+      applicationId: application.id,
+      requestType: payload.type,
+      template: {
+        type: payload.type,
+        title,
+        description,
+        githubRepo: payload.githubRepo,
+        extendStorage: payload.extendStorage,
+        expediteProcessing: payload.expediteProcessing,
+        llmApiModelKey: payload.llmApiModelKey,
+        llmApiBudgetUsd: payload.llmApiBudgetUsd,
+        llmApiCustomRpmLimit: payload.llmApiCustomRpmLimit,
+        llmApiCustomTpmLimit: payload.llmApiCustomTpmLimit,
+      },
+      createdAt,
+      updatedAt: createdAt,
+    })
+  }
+
+  if (application.cost > 0) {
+    await appendTrustedPointTransaction(env, state, {
+      id: transactionId('application_cost', application.id),
+      userId: user.id,
+      delta: -application.cost,
+      type: 'spend',
+      reason: `${payload.type.toUpperCase()} 申请预扣`,
+      refId: application.id,
+      createdAt,
+    })
+  }
+  if (storageExtensionCost > 0) {
+    await appendTrustedPointTransaction(env, state, {
+      id: transactionId('storage_extension', application.id),
+      userId: user.id,
+      delta: -storageExtensionCost,
+      type: 'spend',
+      reason: '延长申请存储服务 7 天预扣',
+      refId: application.id,
+      createdAt,
+    })
+  }
+  if (expediteCost > 0) {
+    await appendTrustedPointTransaction(env, state, {
+      id: transactionId('expedite', application.id),
+      userId: user.id,
+      delta: -expediteCost,
+      type: 'spend',
+      reason: 'Pro 处理加速预扣',
+      refId: application.id,
+      createdAt,
+    })
+  }
+
+  return application
+}
+
+async function applyResourceApplicationCommand(env: WorkerEnv, state: Partial<WelfareState>, user: User, payload: SubmitResourceApplicationPayload & { applicationId?: string }) {
+  const title = payload.title.trim()
+  const createdAt = now()
+  const isDraft = !!payload.saveAsDraft
+  const resourceTypes = Array.from(new Set(payload.selectedResourceTypes))
+  if (!title)
+    throw new Error('请填写申请标题')
+  if (!isDraft && !payload.reason.trim())
+    throw new Error('请填写申请说明')
+  if (totalAttachmentBytes(attachmentsFromPayload(payload.attachments)) > MAX_ATTACHMENT_BYTES)
+    throw new Error('附件总大小不能超过 200MB')
+  if (!resourceTypes.length)
+    throw new Error('请至少选择一种资源类型')
+  for (const resourceType of resourceTypes)
+    assertResourceTypeCanApplyForState(state, resourceType, user)
+  for (const item of payload.resourceItems)
+    assertResourceTypeCanApplyForState(state, item.resourceType, user)
+  if (!payload.resourceItems.length)
+    throw new Error('请至少添加一条资源明细')
+  assertCanCreateRequestForState(state, user.id)
+
+  if (!isDraft) {
+    assertApplicationPolicyForState(state, {
+      userId: user.id,
+      type: 'resource',
+      title,
+      description: buildResourceDescription(payload),
+      createdAt,
+      powNonce: payload.powNonce,
+      turnstileVerified: payload.turnstileVerified,
+    })
+  }
+
+  const applications = ensureApplications(state)
+  const existing = payload.applicationId
+    ? applications.find(item => item.id === payload.applicationId)
+    : undefined
+  if (payload.applicationId && (!existing || existing.type !== 'resource'))
+    throw new Error('资源申请不存在')
+  if (existing && existing.userId !== user.id)
+    throw new Error('只能编辑自己的草稿')
+  if (existing && existing.status !== 'draft')
+    throw new Error('提交后申请内容不可修改')
+
+  const applicationId = existing?.id ?? createId('app')
+  const resourceItems = normalizeResourceItems(applicationId, payload.resourceItems, createdAt, !isDraft)
+  const actualResourceTypes = Array.from(new Set(resourceItems.map(item => item.resourceType)))
+  const checkout = isDraft
+    ? undefined
+    : resourceCheckoutSnapshotForState(state, user.id, payload.resourceItems, payload.couponId, createdAt, !!payload.shareToSquare)
+  const promotionName = checkout && checkout.activityDiscountAmount > 0 ? resourceActivityPromotionName(payload.resourceItems, createdAt) : undefined
+  if (checkout && user.points < checkout.cost)
+    throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
+
+  const rejectionReviewFeeWaived = !!payload.waiveRejectionReviewFee
+  const waiveBlockedUntil = rejectionReviewFeeWaived ? rejectionFeeWaiverBlockedUntilForState(state, user.id) : ''
+  if (rejectionReviewFeeWaived && waiveBlockedUntil)
+    throw new Error(`认真填写承诺暂不可用，请在 ${waiveBlockedUntil} 后再勾选`)
+
+  const termsAcceptances = isDraft
+    ? []
+    : buildResourceTermsAcceptances(actualResourceTypes, payload.acceptedTermIds, user.id, createdAt)
+  const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
+  const application: WelfareApplication = {
+    id: applicationId,
+    userId: user.id,
+    type: 'resource',
+    title,
+    description: buildResourceDescription(payload),
+    hasOpenSourceBadge: false,
+    attachments: attachmentsFromPayload(payload.attachments),
+    status: isDraft ? 'draft' : 'in_review',
+    baseCost: checkout?.baseCost ?? 0,
+    cost: checkout?.cost ?? 0,
+    costCharged: !isDraft,
+    couponId: checkout?.coupon?.id,
+    couponName: checkout?.coupon?.name,
+    couponDiscountRate: checkout?.coupon?.discountRate,
+    couponDiscountAmount: checkout?.couponDiscountAmount,
+    sharedToSquare: !isDraft && !!payload.shareToSquare,
+    squarePostId,
+    squareDiscountRate: checkout?.squareDiscountRate,
+    squareDiscountAmount: checkout?.squareDiscountAmount,
+    pricingDiscountRate: checkout?.activityDiscountRate ?? 1,
+    pricingPromotionName: promotionName,
+    pricingPromotionEndsAt: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined,
+    pricingAppliedAt: createdAt,
+    aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
+    rejectionReviewFee: 0,
+    rejectionReviewFeeWaived,
+    rejectionFraudulent: false,
+    storageExtended: false,
+    storageExtensionCost: 0,
+    retentionExpiresAt: createRetentionExpiresAt(createdAt, false),
+    standardProcessingHours: 72,
+    processingDueAt: createProcessingDueAt(createdAt, 'resource'),
+    contextAppendUntil: createRetentionExpiresAt(createdAt, false),
+    departmentId: payload.departmentId?.trim() || undefined,
+    projectId: payload.projectId?.trim() || undefined,
+    reason: payload.reason.trim(),
+    businessBackground: payload.businessBackground.trim(),
+    urgency: payload.urgency,
+    expectedEffectiveAt: payload.expectedEffectiveAt,
+    costCenter: payload.costCenter?.trim() || undefined,
+    ownerId: payload.ownerId?.trim() || user.id,
+    selectedResourceTypes: actualResourceTypes,
+    resourceItems,
+    termsAcceptances,
+    submittedAt: isDraft ? undefined : createdAt,
+    createdAt: existing?.createdAt ?? createdAt,
+  }
+
+  if (existing) {
+    Object.assign(existing, application)
+  }
+  else {
+    applications.unshift(application)
+  }
+
+  if (!isDraft) {
+    if (application.cost > 0) {
+      await appendTrustedPointTransaction(env, state, {
+        id: transactionId('application_cost', application.id),
+        userId: user.id,
+        delta: -application.cost,
+        type: 'spend',
+        reason: '资源申请订单预扣',
+        refId: application.id,
+        createdAt,
+      })
+    }
+    if (checkout?.coupon) {
+      checkout.coupon.usedAt = createdAt
+      checkout.coupon.usedFor = 'resource_application'
+      checkout.coupon.usedRefId = application.id
+      checkout.coupon.usedApplicationId = application.id
+    }
+    if (squarePostId)
+      ensureSquarePosts(state).unshift(buildResourceSquarePost(application, payload, actualResourceTypes, squarePostId, createdAt))
+  }
+
+  ensureCoupons(state)
+  return application
+}
+
+export async function handleApplicationSubmitRequest(request: Request, env: WorkerEnv) {
+  try {
+    if (request.method !== 'POST')
+      return json({ error: 'Method Not Allowed' }, 405)
+
+    const userId = await requestUserId(request, env)
+    if (!userId)
+      throw new Error('请先登录')
+
+    const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
+    const mutableState = state as Partial<WelfareState>
+    const originalState = cloneState(mutableState)
+    const user = stateUsers(mutableState).find(item => item.id === userId && item.accountStatus !== 'suspended')
+    if (!user)
+      throw new Error('请先登录')
+
+    const payload = await readPayload(request) as SubmitApplicationPayload & SubmitResourceApplicationPayload & { type?: string, applicationId?: string }
+    const application = payload.type === 'resource'
+      ? await applyResourceApplicationCommand(env, mutableState, user, payload as SubmitResourceApplicationPayload & { applicationId?: string })
+      : await applyStandardApplicationCommand(env, mutableState, user, payload as SubmitApplicationPayload)
+    const result = await commitActionState(env, originalState, mutableState, version)
+    return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
+  }
+  catch (error) {
+    return errorResponse(error)
+  }
+}
+
+async function commitCurrentUserAction(
+  request: Request,
+  env: WorkerEnv,
+  mutate: (state: Partial<WelfareState>, user: User, payload: Record<string, unknown>) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void,
+) {
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
+
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
+  const mutableState = state as Partial<WelfareState>
+  const originalState = cloneState(mutableState)
+  const user = stateUsers(mutableState).find(item => item.id === userId && item.accountStatus !== 'suspended')
+  if (!user)
+    throw new Error('请先登录')
+
+  const payload = await readPayload(request) as Record<string, unknown>
+  const body = await mutate(mutableState, user, payload)
+  const result = await commitActionState(env, originalState, mutableState, version)
+  return json({ ok: true, ...(body ?? {}), version: result.version })
+}
+
+async function updateCurrentProfileAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (_state, user, payload) => {
+    const profile = isRecord(payload.profile) ? payload.profile : payload
+    user.profile = {
+      ...user.profile,
+      displayName: typeof profile.displayName === 'string' ? profile.displayName : user.profile.displayName,
+      email: typeof profile.email === 'string' ? profile.email : user.profile.email,
+      bio: typeof profile.bio === 'string' ? profile.bio : user.profile.bio,
+      selectedRepo: typeof profile.selectedRepo === 'string' ? profile.selectedRepo : user.profile.selectedRepo,
+    }
+  })
+}
+
+async function checkInTodayAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, async (state, user) => {
+    const createdAt = now()
+    const dateKey = localDateKey(new Date(createdAt))
+    const checkIns = ensureDailyCheckIns(state)
+    if (checkIns.some(item => item.userId === user.id && item.dateKey === dateKey))
+      throw new Error('今日已签到')
+
+    const lastCheckIn = checkIns
+      .filter(item => item.userId === user.id && item.dateKey < dateKey)
+      .sort((left, right) => right.dateKey.localeCompare(left.dateKey))[0]
+    const streak = lastCheckIn?.dateKey === shiftDateKey(dateKey, -1) ? lastCheckIn.streak + 1 : 1
+    const points = rollDailyCheckInPoints()
+    const coupons: UserCoupon[] = []
+    if (streak === 3)
+      coupons.push(createDailyCoupon(user.id, 'daily_streak_3', 0.8, createdAt))
+    if (streak > 0 && streak % 7 === 0)
+      coupons.push(createDailyCoupon(user.id, 'daily_streak_7', 0.5, createdAt))
+    ensureCoupons(state).unshift(...coupons)
+
+    const checkIn: DailyCheckIn = {
+      id: createId('checkin'),
+      userId: user.id,
+      dateKey,
+      points,
+      streak,
+      couponIds: coupons.map(coupon => coupon.id),
+      createdAt,
+    }
+    checkIns.unshift(checkIn)
+    await appendTrustedPointTransaction(env, state, {
+      id: transactionId('daily_checkin', checkIn.id),
+      userId: user.id,
+      delta: points,
+      type: 'grant',
+      reason: `每日签到奖励（连续 ${streak} 天）`,
+      refId: checkIn.id,
+      createdAt,
+    })
+    return { checkIn }
+  })
+}
+
+async function bindInvitationCodeAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const normalizedCode = normalizeInviteCode(payload.code)
+    if (!normalizedCode)
+      throw new Error('请填写邀请码')
+    const bindings = ensureInvitationBindings(state)
+    if (bindings.some(item => item.inviteeUserId === user.id))
+      throw new Error('你已经绑定过邀请人')
+    const deadline = new Date(addHours(user.createdAt, INVITATION_BIND_WINDOW_HOURS)).getTime()
+    if (Number.isFinite(deadline) && Date.now() > deadline)
+      throw new Error(`注册超过 ${INVITATION_BIND_WINDOW_HOURS} 小时，无法再绑定邀请人`)
+
+    const inviter = stateUsers(state).find(item => normalizeInviteCode(item.profile.inviteCode || createUserInviteCode(item.id)) === normalizedCode)
+    if (!inviter)
+      throw new Error('邀请码不存在')
+    if (inviter.id === user.id)
+      throw new Error('不能绑定自己的邀请码')
+
+    const binding: InvitationBinding = {
+      id: createId('invite'),
+      inviterUserId: inviter.id,
+      inviteeUserId: user.id,
+      inviteCode: normalizedCode,
+      createdAt: now(),
+    }
+    bindings.unshift(binding)
+    return { binding }
+  })
+}
+
+async function vouchInvitationAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const binding = ensureInvitationBindings(state).find(item => item.id === payload.bindingId)
+    if (!binding)
+      throw new Error('邀请关系不存在')
+    const createdAt = now()
+    if (binding.inviterUserId === user.id) {
+      binding.inviterVouchedAt = createdAt
+      return { binding }
+    }
+    if (binding.inviteeUserId === user.id) {
+      binding.inviteeVouchedAt = createdAt
+      return { binding }
+    }
+    throw new Error('只能为自己的邀请关系担保')
+  })
+}
+
+async function redeemCouponCodeAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const codeText = normalizeInviteCode(payload.code)
+    if (!codeText)
+      throw new Error('请输入兑换码')
+    const code = (state.couponCodes ?? []).find(item => item.code === codeText)
+    if (!code || !code.enabled)
+      throw new Error('兑换码无效')
+    if (code.expiresAt && new Date(code.expiresAt).getTime() <= Date.now())
+      throw new Error('兑换码已过期')
+    if (code.redeemedCount >= code.maxRedemptions)
+      throw new Error('兑换码次数已用完')
+    const template = (state.couponTemplates ?? []).find(item => item.id === code.templateId)
+    if (!template || !template.enabled)
+      throw new Error('优惠券已停用')
+    state.couponRedemptions ??= []
+    const userRedeemedCount = state.couponRedemptions.filter(item => item.codeId === code.id && item.userId === user.id).length
+    if (userRedeemedCount >= code.perUserLimit)
+      throw new Error('该兑换码已达到你的兑换上限')
+
+    const coupon = createUserCouponFromRule(user.id, 'redemption_code', template, now(), code.id)
+    code.redeemedCount += 1
+    template.grantedCount += 1
+    ensureCoupons(state).unshift(coupon)
+    state.couponRedemptions.unshift({
+      id: createId('cdr'),
+      codeId: code.id,
+      templateId: template.id,
+      userId: user.id,
+      couponId: coupon.id,
+      redeemedAt: coupon.createdAt,
+    })
+    return { coupon }
+  })
+}
+
+async function boostSquarePostAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, async (state, user, payload) => {
+    const postId = typeof payload.postId === 'string' ? payload.postId : ''
+    const post = ensureSquarePosts(state).find(item => item.id === postId)
+    if (!post)
+      throw new Error('广场内容不存在')
+    if (post.userId === user.id)
+      throw new Error('不能为自己的广场内容拼一刀')
+    const boosts = ensureSquareBoosts(state)
+    if (boosts.some(item => item.postId === postId && item.userId === user.id))
+      throw new Error('你已经为该内容助力过')
+    const createdAt = now()
+    const dailyBoostCount = boosts.filter(item =>
+      item.userId === user.id
+      && (item.mode ?? 'boost') === 'boost'
+      && localDateKey(item.createdAt) === localDateKey(createdAt),
+    ).length
+    if (dailyBoostCount >= SQUARE_DAILY_BOOST_LIMIT)
+      throw new Error(`今日助力机会已用完，每人每天最多 ${SQUARE_DAILY_BOOST_LIMIT} 次`)
+    const declaration = sanitizeWorkerRichText(payload.declaration)
+    if (richTextToPlainText(declaration).trim().length < 20)
+      throw new Error('助力宣言至少 20 字，请说明为什么支持这个领域')
+
+    const boost: SquareBoost = {
+      id: createId('boost'),
+      postId,
+      userId: user.id,
+      mode: 'boost',
+      declaration,
+      pointsGranted: SQUARE_BOOST_REWARD_POINTS,
+      createdAt,
+    }
+    boosts.unshift(boost)
+    await appendTrustedPointTransaction(env, state, {
+      id: transactionId('square_boost', boost.id),
+      userId: user.id,
+      delta: SQUARE_BOOST_REWARD_POINTS,
+      type: 'grant',
+      reason: '广场拼一刀助力奖励',
+      refId: boost.id,
+      createdAt,
+    })
+    return { boost }
+  })
+}
+
+async function reportSquareBoostAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, async (state, user, payload) => {
+    const boostId = typeof payload.boostId === 'string' ? payload.boostId : ''
+    const boost = ensureSquareBoosts(state).find(item => item.id === boostId)
+    if (!boost)
+      throw new Error('助力记录不存在')
+    if ((boost.mode ?? 'boost') === 'post_approval_vote')
+      throw new Error('结束后助力投票不产生奖惩，不支持举报扣分')
+    if (boost.userId === user.id)
+      throw new Error('不能举报自己的助力宣言')
+    const reports = ensureSquareReports(state)
+    if (reports.some(item => item.boostId === boostId && item.reporterId === user.id))
+      throw new Error('你已经举报过该助力宣言')
+    const reason = typeof payload.reason === 'string' ? payload.reason.trim() : ''
+    if (reason.length < 6)
+      throw new Error('请说明举报理由')
+
+    const createdAt = now()
+    const report: SquareReport = {
+      id: createId('report'),
+      postId: boost.postId,
+      boostId,
+      reporterId: user.id,
+      reason,
+      createdAt,
+    }
+    boost.reportedAt = createdAt
+    boost.reportReason = reason
+    boost.reportedBy = user.id
+    boost.cooldownUntil = addDays(createdAt, SQUARE_BOOST_REPORT_COOLDOWN_DAYS)
+    if (!boost.penaltyApplied) {
+      await appendTrustedPointTransaction(env, state, {
+        id: transactionId('square_report_penalty', boost.id),
+        userId: boost.userId,
+        delta: -SQUARE_BOOST_REPORT_PENALTY_POINTS,
+        type: 'spend',
+        reason: '广场助力被举报扣除积分',
+        refId: boost.id,
+        createdAt,
+        allowDebt: true,
+      })
+      boost.penaltyApplied = true
+    }
+    const post = ensureSquarePosts(state).find(item => item.id === boost.postId)
+    if (post) {
+      post.penaltyCount = (post.penaltyCount || 0) + 1
+      post.lastPenaltyAt = createdAt
+      post.updatedAt = createdAt
+    }
+    reports.unshift(report)
+    return { report }
+  })
+}
+
+async function submitApplicationSupplementAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const applicationId = typeof payload.applicationId === 'string' ? payload.applicationId : ''
+    const application = stateApplications(state).find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (application.userId !== user.id)
+      throw new Error('只能补充自己的申请材料')
+    if (!['needs_supplement', 'answered'].includes(application.status))
+      throw new Error('该申请状态不支持补充材料')
+    if (application.status === 'answered') {
+      if (application.type !== 'pro')
+        throw new Error('只有 Pro 申请通过后支持免费补充材料')
+      const limit = application.postApprovalSupplementLimit ?? 0
+      const count = application.postApprovalSupplementCount ?? 0
+      if (count >= limit)
+        throw new Error('本次 Pro 申请的免费补充次数已用完')
+      application.postApprovalSupplementCount = count + 1
+    }
+
+    const content = sanitizeWorkerRichText(payload.content)
+    if (isRichTextEmpty(content))
+      throw new Error('请填写补充材料内容')
+    const attachments = attachmentsFromPayload(payload.attachments)
+    if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('附件总大小不能超过 200MB')
+
+    pushApplicationMessage(application, user.id, 'supplement', content, attachments)
+    if (application.status === 'needs_supplement')
+      application.status = 'pending_review'
+    return { applicationId: application.id }
+  })
+}
+
+async function submitStudentVerificationAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, async (state, user, payload) => {
+    const input = payload as unknown as SubmitStudentPayload
+    const verificationType = normalizeVerificationType(input.verificationType)
+    const systemConfig = state.systemConfig
+    const feature = systemConfig?.verification?.[verificationType]
+    if (systemConfig && !systemConfig.siteEnabled)
+      throw new Error(systemConfig.siteClosedReason)
+    if (feature && !feature.enabled)
+      throw new Error(feature.reason || `${verificationTypeLabel(verificationType)}暂未开放`)
+
+    const realName = input.realName.trim()
+    if (!realName)
+      throw new Error('请填写真实姓名')
+    if (!input.category.trim())
+      throw new Error('请填写认证类目')
+    const notes = sanitizeWorkerRichText(input.notes)
+    if (isRichTextEmpty(notes))
+      throw new Error('请填写认证材料说明')
+    const educationEmail = input.educationEmail?.trim() ? normalizeStudentEmail(input.educationEmail) : undefined
+    if (educationEmail)
+      assertEducationEmail(educationEmail)
+    const attachments = attachmentsFromPayload(input.attachments)
+    if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('材料附件总大小不能超过 200MB')
+    assertCanCreateRequestForState(state, user.id)
+    if (user.points < STUDENT_REVIEW_FEE)
+      throw new Error('积分不足')
+
+    const createdAt = now()
+    const verification: StudentVerification = {
+      id: createId('stu'),
+      userId: user.id,
+      verificationType,
+      realName,
+      category: input.category.trim(),
+      school: input.school?.trim(),
+      identity: input.identity?.trim(),
+      grade: input.grade?.trim(),
+      educationLevel: input.educationLevel?.trim(),
+      educationEmail,
+      educationEmailVerified: false,
+      notes,
+      attachments,
+      status: 'pending',
+      reviewFee: STUDENT_REVIEW_FEE,
+      feeReturned: false,
+      createdAt,
+    }
+    ensureStudentVerifications(state).unshift(verification)
+    await appendTrustedPointTransaction(env, state, {
+      id: transactionId('student_review', verification.id),
+      userId: user.id,
+      delta: -STUDENT_REVIEW_FEE,
+      type: 'spend',
+      reason: `${verificationTypeLabel(verificationType)}审核费`,
+      refId: verification.id,
+      createdAt,
+    })
+    return { verificationId: verification.id }
+  })
+}
+
+async function supplementStudentVerificationAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const input = payload as unknown as SubmitStudentPayload
+    if (!input.verificationId)
+      throw new Error('认证申请不存在')
+    const verification = ensureStudentVerifications(state).find(item => item.id === input.verificationId && item.userId === user.id)
+    if (!verification)
+      throw new Error('认证申请不存在')
+    if (verification.status !== 'needs_supplement')
+      throw new Error('该认证申请暂不需要补充资料')
+
+    const realName = input.realName.trim()
+    if (!realName)
+      throw new Error('请填写真实姓名')
+    if (!input.category.trim())
+      throw new Error('请填写认证类目')
+    const notes = sanitizeWorkerRichText(input.notes)
+    if (isRichTextEmpty(notes))
+      throw new Error('请填写认证材料说明')
+    const newAttachments = attachmentsFromPayload(input.attachments)
+    if (totalAttachmentBytes([...(verification.attachments ?? []), ...newAttachments]) > MAX_ATTACHMENT_BYTES)
+      throw new Error('材料附件总大小不能超过 200MB')
+
+    verification.realName = realName
+    verification.category = input.category.trim()
+    verification.school = input.school?.trim()
+    verification.identity = input.identity?.trim()
+    verification.grade = input.grade?.trim()
+    verification.educationLevel = input.educationLevel?.trim()
+    verification.notes = notes
+    verification.attachments = [...(verification.attachments ?? []), ...newAttachments]
+    verification.status = 'pending'
+    verification.reply = undefined
+    verification.reviewedAt = undefined
+    return { verificationId: verification.id }
+  })
 }
 
 function ensureCollaborationApplications(state: Partial<WelfareState>) {
@@ -1353,7 +2855,7 @@ function cloneState<T>(state: T): T {
   return JSON.parse(JSON.stringify(state)) as T
 }
 
-function pushApplicationMessage(application: WelfareApplication, userId: string, type: 'result_submission' | 'system', content: string, attachments: AttachmentMeta[] = []) {
+function pushApplicationMessage(application: WelfareApplication, userId: string, type: 'result_submission' | 'system' | 'supplement', content: string, attachments: AttachmentMeta[] = []) {
   application.messages ??= []
   application.messages.push({
     id: createId('msg'),
@@ -1380,13 +2882,13 @@ function canClaimDeliveryApplication(application: WelfareApplication, user: User
     && application.userId !== user.id
 }
 
-async function commitActionState(env: WorkerEnv, previousState: Partial<WelfareState>, nextState: Partial<WelfareState>) {
+async function commitActionState(env: WorkerEnv, previousState: Partial<WelfareState>, nextState: Partial<WelfareState>, expectedVersion?: number) {
   const retained = applyWelfareRetentionPolicy(nextState).state
   if (isRecord(retained))
     delete retained.currentUserId
-  await writeWelfareState(env, retained)
+  const version = await writeWelfareState(env, retained, expectedVersion === undefined ? {} : { expectedVersion })
   await dispatchWelfareStateChangeNotifications(env, previousState, retained)
-  return retained
+  return { state: retained, version }
 }
 
 async function bootstrapAdmin(request: Request, env: WorkerEnv) {
@@ -1442,7 +2944,8 @@ async function bootstrapAdmin(request: Request, env: WorkerEnv) {
 }
 
 async function loginAdmin(request: Request, env: WorkerEnv) {
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   const users = Array.isArray(state.users) ? state.users : []
   const payload = await readPayload(request) as { email?: string, password?: string }
   const email = normalizeEmail(payload.email)
@@ -1461,8 +2964,8 @@ async function loginAdmin(request: Request, env: WorkerEnv) {
     admin.passwordHash = await hashPassword(typeof payload.password === 'string' ? payload.password : '')
   admin.lastLoginAt = now()
   delete state.currentUserId
-  await writeWelfareState(env, state)
-  return json({ ok: true, userId: admin.id, state: clientVisibleWelfareState(state, admin.id) }, 200, {
+  const version = await writeWelfareState(env, state)
+  return json({ ok: true, userId: admin.id, state: clientVisibleWelfareState(state, admin.id), version }, 200, {
     'set-cookie': await createSessionCookie(request, env, admin.id),
   })
 }
@@ -1666,15 +3169,15 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
 }
 
 async function currentStateResponse(request: Request, env: WorkerEnv) {
-  const state = await readWelfareState(env)
+  const { state, version } = await readWelfareStateRecord(env)
   const userId = await requestUserId(request, env)
   const users = isRecord(state) && Array.isArray(state.users) ? state.users : []
   const user = userId ? users.find(item => isRecord(item) && item.id === userId) : undefined
 
   if (!user)
-    return json({ state: publicBootstrapState(state) })
+    return json({ state: publicBootstrapState(state), version })
 
-  return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId })
+  return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId, version })
 }
 
 async function bootstrapResponse(env: WorkerEnv) {
@@ -1699,20 +3202,20 @@ async function currentUserStateResponse(request: Request, env: WorkerEnv) {
   if (!userId)
     throw new Error('请先登录')
 
-  const state = await readWelfareState(env, { syncPointBalances: 'current-user', currentUserId: userId })
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
   const user = stateUsers(state as Partial<WelfareState>).find(item => item.id === userId && item.accountStatus !== 'suspended')
   if (!user)
     throw new Error('请先登录')
 
-  return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId })
+  return json({ state: clientVisibleWelfareState(state, userId), currentUserId: userId, version })
 }
 
 async function adminStateResponse(request: Request, env: WorkerEnv) {
-  const state = await readWelfareState(env)
+  const { state, version } = await readWelfareStateRecord(env)
   const user = await authenticatedUser(request, env, state as Partial<WelfareState>)
   assertAdminUser(user)
   await syncUserPointBalancesFromLedger(env, state)
-  return json({ state: clientVisibleWelfareState(state, user.id), currentUserId: user.id })
+  return json({ state: clientVisibleWelfareState(state, user.id), currentUserId: user.id, version })
 }
 
 export async function handleWelfareStateRequest(request: Request, env: WorkerEnv) {
@@ -1752,32 +3255,58 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await submitDeliveryResult(request, env)
       if (action === 'review-delivery-result')
         return await reviewDeliveryResult(request, env)
+      if (action === 'update-current-profile')
+        return await updateCurrentProfileAction(request, env)
+      if (action === 'check-in-today')
+        return await checkInTodayAction(request, env)
+      if (action === 'bind-invitation-code')
+        return await bindInvitationCodeAction(request, env)
+      if (action === 'vouch-invitation')
+        return await vouchInvitationAction(request, env)
+      if (action === 'redeem-coupon-code')
+        return await redeemCouponCodeAction(request, env)
+      if (action === 'boost-square-post')
+        return await boostSquarePostAction(request, env)
+      if (action === 'report-square-boost')
+        return await reportSquareBoostAction(request, env)
+      if (action === 'submit-application-supplement')
+        return await submitApplicationSupplementAction(request, env)
+      if (action === 'submit-student-verification')
+        return await submitStudentVerificationAction(request, env)
+      if (action === 'supplement-student-verification')
+        return await supplementStudentVerificationAction(request, env)
     }
 
     if (request.method === 'PUT') {
-      const previousState = await readWelfareState(env)
-      if (!await canUpdateState(previousState, request, env))
-        throw new Error('请先登录')
-
-      const payload = await readPayload(request)
-      assertStateShape(payload.state)
+      const previousRecord = await readWelfareStateRecord(env)
+      const previousState = previousRecord.state as Partial<WelfareState>
+      const currentVersion = previousRecord.version
       const userId = await requestUserId(request, env)
-      if (userId && !isAdminUser(previousState, userId)) {
-        const blockedLabel = outOfScopeRecordLabel(payload.state, userId)
-        if (blockedLabel)
-          return forbidden(`无权修改其他用户的${blockedLabel}`)
+      if (!userId)
+        throw new Error('请先登录')
+      if (!isAdminUser(previousState, userId))
+        return forbidden('全量状态保存仅允许管理员使用')
+
+      const payload = await readPayload(request) as { state?: unknown, version?: unknown }
+      const expectedVersion = Math.trunc(Number(payload.version))
+      if (!Number.isFinite(expectedVersion) || expectedVersion <= 0) {
+        return json({
+          code: 'STATE_VERSION_REQUIRED',
+          error: '保存业务状态必须携带有效 version',
+        }, 400)
       }
-      const mergedSensitiveState = await mergeSensitiveWelfareState(previousState, payload.state, request, env)
-      if (userId && isAdminUser(previousState, userId))
-        await applyPointTransactionsFromClientState(env, previousState, mergedSensitiveState)
-      else if (userId)
-        await applyTrustedPointTransactionsFromState(env, previousState, mergedSensitiveState, userId)
+      if (expectedVersion !== currentVersion)
+        throw new StateVersionConflictError()
+      assertStateShape(payload.state)
+      const statePayload = payload.state
+      const mergedSensitiveState = await mergeSensitiveWelfareState(previousState, statePayload, request, env)
+      await applyPointTransactionsFromClientState(env, previousState, mergedSensitiveState)
       const nextState = applyWelfareRetentionPolicy(mergedSensitiveState).state
       if (isRecord(nextState))
         delete nextState.currentUserId
-      await writeWelfareState(env, nextState)
-      await dispatchWelfareStateChangeNotifications(env, previousState, nextState)
-      return json({ ok: true })
+      const nextVersion = await writeWelfareState(env, nextState, { expectedVersion })
+      await dispatchWelfareStateChangeNotifications(env, previousState, nextState as Partial<WelfareState>)
+      return json({ ok: true, version: nextVersion })
     }
 
     return json({ error: 'Method Not Allowed' }, 405)

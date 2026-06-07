@@ -6,6 +6,7 @@ export default antfu(
     formatters: true,
     pnpm: true,
     ignores: [
+      '.codexpotter/**',
       '.playwright-mcp/**',
       '.spec-workflow/**',
     ],

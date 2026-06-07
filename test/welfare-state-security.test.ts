@@ -7,8 +7,10 @@ vi.stubGlobal('fetch', vi.fn(async () =>
   }),
 ))
 
+const { createEpaySign } = await import('../src/worker/ldc-credit')
 const { createSessionCookie } = await import('../src/worker/session')
-const { handleWelfareStateRequest } = await import('../src/worker/welfare-state')
+const { handleRechargeRequest } = await import('../src/worker/recharge')
+const { handleApplicationSubmitRequest, handleWelfareStateRequest } = await import('../src/worker/welfare-state')
 
 function user(overrides: Partial<User> = {}): User {
   return {
@@ -89,16 +91,36 @@ function state(): WelfareState {
   }
 }
 
+function dateKeyOffset(days: number) {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function createMemoryD1(initialState: WelfareState) {
   let storedState: unknown = initialState
+  let storedVersion = 1
   const pointTransactions: Record<string, unknown>[] = []
   const queries: Array<{ method: 'all' | 'first' | 'run', query: string, values: unknown[] }> = []
+  const rechargeOrders: Record<string, unknown>[] = []
+  const rechargeConfig = {
+    id: 'default',
+    enabled: 1,
+    gateway_base_url: 'https://credit.example/epay',
+    pid: 'pid_1',
+    key: 'secret_1',
+    key_encrypted: null,
+    points_per_ldc: 10,
+  }
   return {
     get pointTransactions() {
       return pointTransactions
     },
     get queries() {
       return queries
+    },
+    get rechargeOrders() {
+      return rechargeOrders
     },
     prepare(query: string) {
       return {
@@ -109,10 +131,18 @@ function createMemoryD1(initialState: WelfareState) {
         },
         async first() {
           queries.push({ method: 'first', query, values: [...this.values] })
-          if (query.includes('select state from welfare_app_state'))
-            return { state: JSON.stringify(storedState) }
+          if (query.includes('select state') && query.includes('welfare_app_state'))
+            return { state: JSON.stringify(storedState), version: storedVersion }
+          if (query.includes('select version from welfare_app_state'))
+            return { version: storedVersion }
+          if (query.includes('select * from recharge_merchant_config'))
+            return rechargeConfig
+          if (query.includes('select * from recharge_orders where out_trade_no'))
+            return rechargeOrders.find(item => item.out_trade_no === this.values[0]) ?? null
           if (query.includes('select id from point_transactions where id'))
             return pointTransactions.find(item => item.id === this.values[0]) ? { id: this.values[0] } : null
+          if (query.includes('select id from point_transactions where type'))
+            return pointTransactions.find(item => item.type === this.values[0] && item.ref_id === this.values[1]) ? { id: 'exists' } : null
           if (query.includes('select balance_after from point_transactions')) {
             const rows = pointTransactions.filter(item => item.user_id === this.values[0])
             return rows.at(-1) ? { balance_after: rows.at(-1)!.balance_after } : null
@@ -121,8 +151,29 @@ function createMemoryD1(initialState: WelfareState) {
         },
         async run() {
           queries.push({ method: 'run', query, values: [...this.values] })
-          if (query.includes('insert into welfare_app_state'))
+          if (query.includes('insert into welfare_app_state')) {
             storedState = JSON.parse(String(this.values[1])) as unknown
+            storedVersion = Number(this.values[2] || storedVersion + 1)
+          }
+          if (query.includes('insert into recharge_orders')) {
+            rechargeOrders.push({
+              out_trade_no: this.values[0],
+              user_id: this.values[1],
+              amount: this.values[2],
+              credited_points: this.values[3],
+              status: this.values[4],
+              payment_type: this.values[5],
+              order_name: this.values[6],
+            })
+          }
+          if (query.includes('update recharge_orders')) {
+            const order = rechargeOrders.find(item => item.out_trade_no === this.values[0])
+            if (order && (!query.includes('status = \'pending\'') || order.status === 'pending')) {
+              order.status = 'succeeded'
+              order.ldc_trade_no = this.values[1]
+              order.notify_payload = this.values[2]
+            }
+          }
           if (query.includes('insert into point_transactions')) {
             if (pointTransactions.some(item => item.id === this.values[0]))
               return
@@ -329,7 +380,47 @@ describe('welfare state security', () => {
     expect(new Set(balanceQueries[0].values)).toEqual(new Set(users.map(item => item.id)))
   })
 
-  it('prevents non-admin PUT from replacing global users when applicationPolicy is omitted', async () => {
+  it('credits replayed recharge notifications only once', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    d1.rechargeOrders.push({
+      out_trade_no: 'TGW_TEST_ORDER',
+      user_id: 'user_1',
+      amount: '2.00',
+      credited_points: 20,
+      status: 'pending',
+      payment_type: 'epay',
+      order_name: '测试充值',
+    })
+    const params = new URLSearchParams({
+      pid: 'pid_1',
+      type: 'epay',
+      trade_status: 'TRADE_SUCCESS',
+      out_trade_no: 'TGW_TEST_ORDER',
+      money: '2.00',
+      trade_no: 'LDC_TEST_TRADE',
+      sign_type: 'MD5',
+    })
+    params.set('sign', createEpaySign(Object.fromEntries(params.entries()), 'secret_1'))
+
+    const notifyUrl = `https://example.com/api/recharge/notify?${params.toString()}`
+    const first = await handleRechargeRequest(new Request(notifyUrl), env)
+    const second = await handleRechargeRequest(new Request(notifyUrl), env)
+
+    expect(await first.text()).toBe('success')
+    expect(await second.text()).toBe('success')
+    expect(d1.pointTransactions).toHaveLength(1)
+    expect(d1.pointTransactions[0]).toMatchObject({
+      id: 'srv_recharge_TGW_TEST_ORDER',
+      user_id: 'user_1',
+      delta: 20,
+      type: 'recharge',
+      ref_id: 'TGW_TEST_ORDER',
+    })
+    expect(d1.rechargeOrders[0].status).toBe('succeeded')
+  })
+
+  it('rejects non-admin full-state PUT', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
@@ -347,7 +438,7 @@ describe('welfare state security', () => {
       body: JSON.stringify({ state: nextState }),
     }), env)
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(403)
 
     const stateResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
       headers: { cookie },
@@ -357,7 +448,123 @@ describe('welfare state security', () => {
     expect(payload.state.users[0].points).toBe(1000)
   })
 
-  it('ignores forged client transactions and derives points from trusted new records', async () => {
+  it('requires matching version for admin full-state PUT', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin' })
+    const d1 = createMemoryD1({ ...state(), users: [admin] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state/admin', {
+      headers: { cookie },
+    }), env)
+    const current = await currentResponse.json() as { state: WelfareState, version: number }
+
+    const first = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'PUT',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        version: current.version,
+        state: {
+          ...current.state,
+          siteBanner: { enabled: true, title: '公告', body: '请留意' },
+        },
+      }),
+    }), env)
+    expect(first.status).toBe(200)
+
+    const second = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'PUT',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        version: current.version,
+        state: {
+          ...current.state,
+          siteBanner: { enabled: true, title: '过期公告', body: '不应覆盖' },
+        },
+      }),
+    }), env)
+    expect(second.status).toBe(409)
+    await expect(second.json()).resolves.toMatchObject({ code: 'STATE_VERSION_CONFLICT' })
+  })
+
+  it('submits applications through command API and ignores forged client fields', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleApplicationSubmitRequest(new Request('https://example.com/api/applications/submit', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 'image',
+        title: '图片申请',
+        description: '<p>这是一个说明足够长的图片申请。</p>',
+        userId: 'admin_1',
+        status: 'approved',
+        cost: 0,
+        transactions: [{ id: 'tx_forged', delta: 999999 }],
+      }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    expect(d1.pointTransactions).toHaveLength(1)
+    expect(Number(d1.pointTransactions[0].delta)).toBeLessThan(0)
+
+    const stateResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state/me', {
+      headers: { cookie },
+    }), env)
+    const payload = await stateResponse.json() as { state: WelfareState }
+    expect(payload.state.applications).toHaveLength(1)
+    expect(payload.state.applications[0]).toMatchObject({
+      userId: 'user_1',
+      type: 'image',
+      status: 'pending_review',
+      costCharged: true,
+    })
+    expect(payload.state.transactions).toEqual([])
+    expect(d1.queries.some(item => item.query.includes('insert into welfare_applications') && item.values[0] === payload.state.applications[0].id)).toBe(true)
+  })
+
+  it('keeps coupon snapshots when issuing check-in coupons', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      dailyCheckIns: [
+        { id: 'checkin_2', userId: 'user_1', dateKey: dateKeyOffset(-1), points: 1, streak: 2, createdAt: new Date().toISOString() },
+        { id: 'checkin_1', userId: 'user_1', dateKey: dateKeyOffset(-2), points: 1, streak: 1, createdAt: new Date().toISOString() },
+      ],
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+        'x-welfare-action': 'check-in-today',
+      },
+      body: '{}',
+    }), env)
+
+    expect(response.status).toBe(200)
+    const stateResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state/me', {
+      headers: { cookie },
+    }), env)
+    const payload = await stateResponse.json() as { state: WelfareState }
+    expect(payload.state.coupons).toHaveLength(1)
+    expect(d1.queries.some(item => item.query.includes('insert into user_coupons') && item.values[0] === payload.state.coupons[0].id)).toBe(true)
+  })
+
+  it('rejects forged non-admin PUT transactions before state merge', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
@@ -384,16 +591,14 @@ describe('welfare state security', () => {
       body: JSON.stringify({ state: nextState }),
     }), env)
 
-    expect(response.status).toBe(200)
-    expect(d1.pointTransactions).toHaveLength(1)
-    expect(d1.pointTransactions[0].id).toBe('srv_application_cost_app_1')
-    expect(d1.pointTransactions[0].delta).toBe(-8)
+    expect(response.status).toBe(403)
+    expect(d1.pointTransactions).toHaveLength(0)
 
     const stateResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
       headers: { cookie },
     }), env)
     const payload = await stateResponse.json() as { state: WelfareState }
-    expect(payload.state.users[0].points).toBe(992)
+    expect(payload.state.users[0].points).toBe(1000)
     expect(payload.state.transactions).toEqual([])
   })
 })

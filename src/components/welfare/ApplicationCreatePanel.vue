@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, calculateRejectionReviewFee, canApplyResourceType, defaultLlmApiDuration, formatBytes, formatDate, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, REJECTION_FEE_WAIVER_BLOCK_DAYS, REJECTION_FRAUD_COOLDOWN_DAYS, REJECTION_REVIEW_FEE_MAX, REJECTION_REVIEW_FEE_MIN, REJECTION_REVIEW_FEE_RATE, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, RESOURCE_POOL_CATEGORIES, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
+import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, calculateRejectionReviewFee, canApplyResourceType, defaultLlmApiDuration, formatBytes, formatDate, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, REJECTION_FEE_WAIVER_BLOCK_DAYS, REJECTION_FRAUD_COOLDOWN_DAYS, REJECTION_REVIEW_FEE_MAX, REJECTION_REVIEW_FEE_MIN, REJECTION_REVIEW_FEE_RATE, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, RESOURCE_POOL_CATEGORIES, RESOURCE_TERMS, RESOURCE_TYPE_CONFIGS, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
@@ -56,12 +56,21 @@ const isRejectionFeeDetailsOpen = ref(false)
 const activeResourceTermTab = ref<ResourceTermId | ''>('')
 const submitReadyMessage = ref('')
 const resourcePoolSearch = ref('')
-const expandedResourcePoolCategoryIds = ref<ResourcePoolCategoryId[]>(RESOURCE_POOL_CATEGORIES.map(category => category.id))
+const expandedResourcePoolCategoryIds = ref<ResourcePoolCategoryId[]>(defaultExpandedResourcePoolCategoryIds())
 const expectedEffectivePreset = ref('after_approval')
 const applicationDraftKey = 'welfare:resource-application-draft'
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
 let stopPersistLocalDraft: (() => void) | undefined
+function defaultExpandedResourcePoolCategoryIds() {
+  return RESOURCE_POOL_CATEGORIES
+    .filter(category => category.items.some((item) => {
+      const config = RESOURCE_TYPE_CONFIGS.find(candidate => candidate.resourceType === item.resourceType)
+      return config?.availability === 'available'
+    }))
+    .map(category => category.id)
+}
+
 const draftApplicationId = computed(() => {
   const raw = route.query.draft
   return Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '')
@@ -107,9 +116,6 @@ const rejectionFeeWaiverBlockedUntil = computed(() => currentUserRejectionFeeWai
 const isRejectionFeeWaiverBlocked = computed(() => !!rejectionFeeWaiverBlockedUntil.value)
 const rejectionFeeWaiverBlockedUntilText = computed(() => rejectionFeeWaiverBlockedUntil.value ? formatDate(rejectionFeeWaiverBlockedUntil.value) : '')
 const rejectionFeeRateText = computed(() => `${Math.round(REJECTION_REVIEW_FEE_RATE * 100)}%`)
-const currentRejectionFeeBaseCost = computed(() => isClassicApplication.value ? selectedPrepaidCost.value : checkoutPayableEstimate.value)
-const currentEstimatedRejectionReviewFee = computed(() => calculateRejectionReviewFee(currentRejectionFeeBaseCost.value))
-const currentRejectionFeeScenario = computed(() => applicationMode.value === 'resource' ? '本单资源申请' : `${currentModeTitle.value} 申请`)
 const resourceTermDetailMap: Record<ResourceTermId, string[]> = {
   general_resource_terms: [
     '适用范围：本条款适用于平台向申请人临时或定向提供的数据库、模型额度、网络访问、计算、存储、仓库、流水线等全部资源。申请人提交申请即视为确认资源仅用于申请单中写明的公益、研发、学习、开源或经审批认可的相关场景。',
@@ -157,6 +163,12 @@ const resourceTermDetailMap: Record<ResourceTermId, string[]> = {
     '高风险场景：涉及未成年人、医疗建议、法律意见、金融投资、身份认证、安全漏洞、公共舆论、招聘录取、信贷评分或其他可能影响个人权益的场景，应取得额外审批并保留人工审查记录。',
     '费用承担：因违反供应商或平台使用政策导致账号、Key、项目、模型额度或用户被封禁、暂停、限流、回收或产生额外成本的，平台不退还任何积分、优惠或费用，申请人需对异常消耗和关联后果负责。',
   ],
+  creative_service_terms: [
+    '素材授权：申请人必须确认提交的文案、图片、视频、肖像、商标、数据和参考资料具备合法使用权，且不包含未授权隐私、商业机密或第三方受限内容。',
+    '用途边界：简历、申请材料、PPT、翻译、发布协助、图片视频和运营素材仅按申请单写明场景交付，不承诺录取、转化、曝光、审核通过或收益结果。',
+    '公开发布：涉及公开渠道发布时，申请人应说明平台、账号、受众、版权归属、署名要求、下架联系人和风险限制，并自行承担第三方平台政策责任。',
+    '合规责任：因素材侵权、虚假包装、违规宣传、诱导营销、隐私泄露或违反第三方平台政策导致投诉、下架、封禁或法律风险的，平台可拒绝交付且不退还已消耗积分。',
+  ],
   infrastructure_resource_terms: [
     '资源范围：本条款适用于服务器、GPU、K8s Namespace、对象存储、VPN、IP 白名单、CI/CD、Git 仓库、运行环境、镜像、网络访问和其他基础设施资源。资源仅可用于申请单写明的项目和环境。',
     '部署限制：申请人不得挖矿、转租、搭建公开代理、部署恶意程序、扫描或压测未授权系统、攻击第三方、规避安全策略、绕过访问控制、运行违规服务或将资源用于高风险公开暴露场景。',
@@ -186,6 +198,7 @@ const resourcePoolCategories = computed(() => RESOURCE_POOL_CATEGORIES.map((cate
       const matchesSearch = !normalizedResourcePoolSearch.value
         || item.label.toLowerCase().includes(normalizedResourcePoolSearch.value)
         || item.description.toLowerCase().includes(normalizedResourcePoolSearch.value)
+        || item.info?.toLowerCase().includes(normalizedResourcePoolSearch.value)
         || category.label.toLowerCase().includes(normalizedResourcePoolSearch.value)
       return {
         ...item,
@@ -200,7 +213,7 @@ const resourcePoolCategories = computed(() => RESOURCE_POOL_CATEGORIES.map((cate
   return {
     ...category,
     items,
-    selectedCount: items.filter(item => item.selected).length,
+    selectedCount: category.items.filter(item => selectedResourcePoolItemIds.value.has(item.id)).length,
     totalCount: category.items.length,
   }
 }).filter(category => category.items.length))
@@ -507,6 +520,9 @@ const resourceCheckoutRows = computed(() => resourceApplicationItems.value.map((
   }
 }))
 const isClassicApplication = computed(() => applicationMode.value !== 'resource')
+const currentRejectionFeeBaseCost = computed(() => isClassicApplication.value ? selectedPrepaidCost.value : checkoutPayableEstimate.value)
+const currentEstimatedRejectionReviewFee = computed(() => calculateRejectionReviewFee(currentRejectionFeeBaseCost.value))
+const currentRejectionFeeScenario = computed(() => applicationMode.value === 'resource' ? '本单资源申请' : `${currentModeTitle.value} 申请`)
 
 function pad2(value: number) {
   return value < 10 ? `0${value}` : String(value)
@@ -706,6 +722,71 @@ function resourcePoolItemDisabledReason(item: ResourcePoolItemConfig) {
   if (config.availability === 'level_required' && currentUserLevelPriority.value < (config.minUserLevelPriority ?? 0))
     return config.unavailableReason || `平台等级 Lv${config.minUserLevelPriority} 开放`
   return ''
+}
+
+function resourcePoolItemTooltip(item: ResourcePoolItemConfig) {
+  const config = resourceConfig(item.resourceType)
+  const disabledReason = resourcePoolItemDisabledReason(item)
+  const termTitles = (config?.termsIds ?? [])
+    .map(termId => RESOURCE_TERMS.find(term => term.id === termId)?.title)
+    .filter((title): title is string => !!title)
+  const status = disabledReason ? `当前限制：${disabledReason}` : '当前限制：可申请，提交后按申请明细和审核结果发放。'
+  const lines = [
+    item.description,
+    item.info ? `支持/适用：${item.info.replace(/^支持：|^适用：/, '')}` : '',
+    config ? `审批组：${config.approverGroup}` : '',
+    status,
+    termTitles.length ? `协议限制：需同意通用资源使用条款、${termTitles.join('、')}。` : '协议限制：需同意通用资源使用条款。',
+    item.resourceType === 'llm_api_quota' ? '合规限制：不得上传未脱敏隐私、密钥、商业机密或受限代码；额度不得共享、倒卖或用于未说明场景。' : '',
+    item.resourceType === 'database' ? '数据限制：遵循最小权限，不导出、不长期保存未授权数据；生产和敏感数据需说明操作范围。' : '',
+    ['content_service', 'media_publishing', 'data_productivity', 'quality_review'].includes(item.resourceType) ? '内容限制：不得提交虚假经历、侵权素材、未授权肖像、密钥、隐私数据或违反第三方平台政策的内容；公开发布需确认版权和下架联系人。' : '',
+    ['server', 'gpu', 'k8s_namespace', 'object_storage', 'git_repository', 'cicd', 'vpn', 'ip_allowlist', 'notification_channel', 'identity_security'].includes(item.resourceType) ? '基础设施限制：不得挖矿、转租、公开代理、攻击第三方或绕过访问控制；到期需释放资源。' : '',
+  ].filter(Boolean)
+  return lines.join('\n')
+}
+
+function genericResourceSpecificationLabel(resourceType: ResourceType) {
+  if (resourceType === 'content_service')
+    return '交付形式'
+  if (resourceType === 'media_publishing')
+    return '发布形式'
+  if (resourceType === 'data_productivity')
+    return '数据范围'
+  if (resourceType === 'quality_review')
+    return '审查范围'
+  return '规格'
+}
+
+function genericResourceSpecificationPlaceholder(resourceType: ResourceType) {
+  if (resourceType === 'content_service')
+    return '简历、PPT、文档页数、语言或目标岗位'
+  if (resourceType === 'media_publishing')
+    return '图片数量、尺寸、平台、格式或发布渠道'
+  if (resourceType === 'data_productivity')
+    return '数据源、指标、报表范围或自动化目标'
+  if (resourceType === 'quality_review')
+    return '页面、流程、浏览器矩阵或检查清单'
+  return '规格、权限级别、容量或配额'
+}
+
+function genericResourcePurposeLabel(resourceType: ResourceType) {
+  if (['content_service', 'media_publishing'].includes(resourceType))
+    return '需求与素材说明'
+  if (['data_productivity', 'quality_review'].includes(resourceType))
+    return '目标与验收说明'
+  return '访问范围或用途说明'
+}
+
+function genericResourcePurposePlaceholder(resourceType: ResourceType) {
+  if (resourceType === 'content_service')
+    return '说明目标受众、素材来源、交付格式、真实性边界和截止时间'
+  if (resourceType === 'media_publishing')
+    return '说明素材来源、版权归属、发布渠道、可见范围和下架联系人'
+  if (resourceType === 'data_productivity')
+    return '说明数据来源、分析目标、指标口径、交付格式和隐私处理'
+  if (resourceType === 'quality_review')
+    return '说明待检查页面/流程、目标设备、验收标准和风险重点'
+  return '说明访问范围、用途和必要性'
 }
 
 function removeResourcePoolItem(item: ResourcePoolItemConfig) {
@@ -1088,13 +1169,10 @@ onBeforeUnmount(() => {
             <div class="resource-pool-card__head">
               <div>
                 <h3>资源选择</h3>
-                <p>按分类展开并勾选所需资源，内部资源池统一维护。</p>
+                <p>按分类展开并勾选所需资源</p>
               </div>
             </div>
-            <label class="resource-pool-search">
-              <span class="i-carbon-search" />
-              <TxInput v-model="resourcePoolSearch" placeholder="搜索资源" />
-            </label>
+            <TxInput v-model="resourcePoolSearch" class="resource-pool-search" placeholder="搜索资源" prefix-icon="i-carbon-search" />
 
             <div class="resource-pool-groups">
               <section v-for="category in resourcePoolCategories" :key="category.id" class="resource-pool-group">
@@ -1102,10 +1180,7 @@ onBeforeUnmount(() => {
                   <span class="resource-pool-group__title">
                     <i class="resource-pool-group__arrow" :class="isResourcePoolCategoryExpanded(category.id) ? 'i-carbon-chevron-down' : 'i-carbon-chevron-right'" />
                     <span class="resource-pool-group__icon" :class="category.icon" />
-                    <span>
-                      <b>{{ category.label }}</b>
-                      <small>{{ category.description }}</small>
-                    </span>
+                    <b>{{ category.label }}</b>
                   </span>
                   <span class="resource-pool-group__count">{{ category.selectedCount }}/{{ category.totalCount }}</span>
                 </button>
@@ -1117,19 +1192,21 @@ onBeforeUnmount(() => {
                     type="button"
                     class="resource-pool-item"
                     :class="{ 'is-selected': item.selected, 'is-disabled': !item.available }"
-                    :disabled="!item.available"
+                    :aria-disabled="!item.available"
+                    :title="resourcePoolItemTooltip(item)"
                     @click="toggleResourcePoolItem(item)"
                   >
                     <TxCheckbox :model-value="item.selected" variant="checkmark" :disabled="!item.available" />
                     <span class="resource-pool-item__content">
                       <b>{{ item.label }}</b>
-                      <small>{{ item.description }}</small>
-                      <small class="resource-pool-item__meta">
-                        {{ item.config?.approverGroup || '管理员' }}
-                        <template v-if="resourcePoolItemDisabledReason(item)">
-                          · {{ resourcePoolItemDisabledReason(item) }}
-                        </template>
-                      </small>
+                      <span
+                        v-if="item.info"
+                        class="resource-pool-item__info"
+                        :aria-label="resourcePoolItemTooltip(item)"
+                        :data-tooltip="resourcePoolItemTooltip(item)"
+                      >
+                        <span class="i-carbon-information" />
+                      </span>
                     </span>
                   </button>
                 </div>
@@ -1280,13 +1357,13 @@ onBeforeUnmount(() => {
                         </template>
 
                         <template v-else>
-                          <label class="gap-2 grid"><span class="field-label">规格</span><TxInput v-model="item.payload.specification" placeholder="规格、权限级别、容量或配额" /></label>
+                          <label class="gap-2 grid"><span class="field-label">{{ genericResourceSpecificationLabel(item.resourceType) }}</span><TxInput v-model="item.payload.specification" :placeholder="genericResourceSpecificationPlaceholder(item.resourceType)" /></label>
                           <label class="gap-2 grid"><span class="field-label">数量</span><TxNumberInput v-model="item.payload.quantity" :min="1" :step="1" :controls="false" /></label>
                           <label class="gap-2 grid"><span class="field-label">环境</span><TxSelect v-model="item.payload.environment" panel-background="pure"><TxSelectItem v-for="env in environmentOptions" :key="env" :value="env" :label="env" /></TxSelect></label>
                           <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
                           <label class="gap-2 grid"><span class="field-label">项目</span><TxInput v-model="item.payload.project" /></label>
                           <label class="gap-2 grid"><span class="field-label">成本归属</span><TxInput v-model="item.payload.costCenter" /></label>
-                          <label class="gap-2 grid md:col-span-2"><span class="field-label">访问范围或用途说明</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" placeholder="说明访问范围、用途和必要性" /></label>
+                          <label class="gap-2 grid md:col-span-2"><span class="field-label">{{ genericResourcePurposeLabel(item.resourceType) }}</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" :placeholder="genericResourcePurposePlaceholder(item.resourceType)" /></label>
                         </template>
                       </div>
                       <div class="resource-estimate-card mt-4">

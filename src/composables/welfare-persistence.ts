@@ -1,9 +1,11 @@
-import type { CreateAdminPayload, LoginAdminPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, User, UserRole, WelfareState } from './welfare'
+import type { CreateAdminPayload, LoginAdminPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SubmitApplicationPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, SubmitResourceApplicationPayload, SubmitStudentPayload, User, UserProfile, UserRole, WelfareState } from './welfare'
 
 const STATE_ENDPOINT = '/api/welfare-state'
 const BOOTSTRAP_ENDPOINT = '/api/bootstrap'
 const SESSION_ENDPOINT = '/api/session'
+const APPLICATION_SUBMIT_ENDPOINT = '/api/applications/submit'
 const STATE_REQUEST_TIMEOUT_MS = 10000
+let currentWelfareStateVersion = 0
 
 interface BootstrapPayload {
   hasAdmin: boolean
@@ -11,6 +13,16 @@ interface BootstrapPayload {
   systemConfig?: WelfareState['systemConfig']
   createdAt: string
 }
+
+interface WelfareStatePayload {
+  state: Partial<WelfareState>
+  currentUserId?: string
+  version?: number
+}
+
+export type SubmitApplicationCommand
+  = | SubmitApplicationPayload
+    | (SubmitResourceApplicationPayload & { type: 'resource', applicationId?: string })
 
 async function requestState<T>(path = STATE_ENDPOINT, init?: RequestInit): Promise<T> {
   const controller = new AbortController()
@@ -110,7 +122,8 @@ export async function loadInitialWelfareState() {
 
 export async function loadWelfareState(role?: UserRole) {
   const endpoint = role === 'admin' ? `${STATE_ENDPOINT}/admin` : `${STATE_ENDPOINT}/me`
-  const result = await requestState<{ state: Partial<WelfareState>, currentUserId?: string }>(endpoint)
+  const result = await requestState<WelfareStatePayload>(endpoint)
+  currentWelfareStateVersion = Math.trunc(Number(result.version || 0))
   return {
     ...result.state,
     currentUserId: result.currentUserId,
@@ -118,11 +131,21 @@ export async function loadWelfareState(role?: UserRole) {
 }
 
 export async function saveWelfareState(state: WelfareState, userId?: string) {
-  await requestState<{ ok: true }>(STATE_ENDPOINT, {
+  const result = await requestState<{ ok: true, version?: number }>(STATE_ENDPOINT, {
     method: 'PUT',
     headers: userId ? { 'x-welfare-user-id': userId } : undefined,
-    body: JSON.stringify({ state }),
+    body: JSON.stringify({ state, version: currentWelfareStateVersion }),
   })
+  currentWelfareStateVersion = Math.trunc(Number(result.version || currentWelfareStateVersion))
+}
+
+export async function submitApplicationCommand(payload: SubmitApplicationCommand) {
+  const result = await requestState<{ ok: true, applicationId: string, version?: number }>(APPLICATION_SUBMIT_ENDPOINT, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  currentWelfareStateVersion = Math.trunc(Number(result.version || currentWelfareStateVersion))
+  return result
 }
 
 export async function bootstrapAdmin(payload: CreateAdminPayload) {
@@ -136,13 +159,15 @@ export async function bootstrapAdmin(payload: CreateAdminPayload) {
 }
 
 export async function loginAdmin(payload: LoginAdminPayload) {
-  return requestState<{ ok: true, userId: string, state?: Partial<WelfareState> }>(STATE_ENDPOINT, {
+  const result = await requestState<{ ok: true, userId: string, state?: Partial<WelfareState>, version?: number }>(STATE_ENDPOINT, {
     method: 'POST',
     body: JSON.stringify(payload),
     headers: {
       'x-welfare-action': 'login-admin',
     },
   })
+  currentWelfareStateVersion = Math.trunc(Number(result.version || currentWelfareStateVersion))
+  return result
 }
 
 export async function endSession() {
@@ -155,13 +180,15 @@ export async function endSession() {
 }
 
 async function postWelfareAction<T>(action: string, payload: unknown) {
-  return requestState<T>(STATE_ENDPOINT, {
+  const result = await requestState<T & { version?: number }>(STATE_ENDPOINT, {
     method: 'POST',
     body: JSON.stringify(payload ?? {}),
     headers: {
       'x-welfare-action': action,
     },
   })
+  currentWelfareStateVersion = Math.trunc(Number(result.version || currentWelfareStateVersion))
+  return result
 }
 
 export async function submitCollaborationApplicationAction(payload: SubmitCollaborationApplicationPayload) {
@@ -186,4 +213,44 @@ export async function submitDeliveryResultAction(payload: SubmitDeliveryPayload)
 
 export async function reviewDeliveryResultAction(payload: ReviewDeliveryPayload) {
   return postWelfareAction<{ ok: true }>('review-delivery-result', payload)
+}
+
+export async function updateCurrentProfileAction(profile: Partial<UserProfile>) {
+  return postWelfareAction<{ ok: true }>('update-current-profile', { profile })
+}
+
+export async function checkInTodayAction() {
+  return postWelfareAction<{ ok: true, checkIn?: WelfareState['dailyCheckIns'][number] }>('check-in-today', {})
+}
+
+export async function bindInvitationCodeAction(code: string) {
+  return postWelfareAction<{ ok: true }>('bind-invitation-code', { code })
+}
+
+export async function vouchInvitationAction(bindingId: string) {
+  return postWelfareAction<{ ok: true }>('vouch-invitation', { bindingId })
+}
+
+export async function redeemCouponCodeAction(code: string) {
+  return postWelfareAction<{ ok: true, coupon?: WelfareState['coupons'][number] }>('redeem-coupon-code', { code })
+}
+
+export async function boostSquarePostAction(postId: string, declaration: string) {
+  return postWelfareAction<{ ok: true }>('boost-square-post', { postId, declaration })
+}
+
+export async function reportSquareBoostAction(boostId: string, reason: string) {
+  return postWelfareAction<{ ok: true }>('report-square-boost', { boostId, reason })
+}
+
+export async function submitApplicationSupplementAction(applicationId: string, content: string, attachments: unknown[] = []) {
+  return postWelfareAction<{ ok: true }>('submit-application-supplement', { applicationId, content, attachments })
+}
+
+export async function submitStudentVerificationAction(payload: SubmitStudentPayload) {
+  return postWelfareAction<{ ok: true, verificationId?: string }>('submit-student-verification', payload)
+}
+
+export async function supplementStudentVerificationAction(payload: SubmitStudentPayload) {
+  return postWelfareAction<{ ok: true, verificationId?: string }>('supplement-student-verification', payload)
 }

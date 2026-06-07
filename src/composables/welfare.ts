@@ -19,13 +19,13 @@ export type DeliveryReviewStatus = 'pending_review' | 'approved' | 'rejected'
 export type UserLevelKey = 'starter' | 'steady' | 'trusted' | 'priority' | 'guardian'
 export type LlmApiModelRegion = 'domestic' | 'global' | 'custom'
 export type SquarePostType = 'application_template' | 'review'
-export type ResourceType = 'database' | 'llm_api_quota' | 'git_repository' | 'cicd' | 'vpn' | 'ip_allowlist' | 'server' | 'gpu' | 'k8s_namespace' | 'object_storage'
+export type ResourceType = 'database' | 'llm_api_quota' | 'content_service' | 'media_publishing' | 'data_productivity' | 'quality_review' | 'git_repository' | 'cicd' | 'vpn' | 'ip_allowlist' | 'notification_channel' | 'identity_security' | 'server' | 'gpu' | 'k8s_namespace' | 'object_storage'
 export type ResourceApprovalStatus = 'pending' | 'approved' | 'rejected' | 'adjusted_approved'
 export type ResourceProvisionStatus = 'not_required' | 'pending' | 'completed'
 export type ResourceUrgency = 'normal' | 'urgent' | 'emergency'
-export type ResourceTermId = 'general_resource_terms' | 'database_security_terms' | 'llm_api_compliance_terms' | 'infrastructure_resource_terms'
+export type ResourceTermId = 'general_resource_terms' | 'database_security_terms' | 'llm_api_compliance_terms' | 'creative_service_terms' | 'infrastructure_resource_terms'
 export type ResourceAvailability = 'available' | 'level_required' | 'unavailable'
-export type ResourcePoolCategoryId = 'database_and_cache' | 'ai_models' | 'cloud_compute' | 'devops_delivery' | 'network_access'
+export type ResourcePoolCategoryId = 'database_and_cache' | 'ai_models' | 'content_services' | 'media_publishing' | 'data_productivity' | 'quality_review' | 'cloud_compute' | 'devops_delivery' | 'network_access' | 'notification_communication' | 'identity_security'
 
 export interface LlmApiModelPricing {
   key: string
@@ -54,7 +54,7 @@ export interface ResourceTermConfig {
 export interface ResourceTypeConfig {
   resourceType: ResourceType
   displayName: string
-  category: 'database' | 'llm' | 'access' | 'compute'
+  category: 'database' | 'llm' | 'service' | 'access' | 'compute'
   description: string
   icon: string
   enabled: boolean
@@ -79,6 +79,7 @@ export interface ResourcePoolItemConfig {
   resourceSubtype: string
   label: string
   description: string
+  info?: string
 }
 
 export interface ResourcePoolCategoryConfig {
@@ -860,12 +861,17 @@ export const GPT_PRO_ACTIVITY_DISCOUNT_RATE = 0.5
 export const GPT_PRO_ACTIVITY_NAME = 'GPT PRO 限量五折'
 export const GPT_PRO_DEFAULT_DURATION = '7 天'
 export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
-export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'gpt-pro', 'claude-code', 'mimo'] as const
-export const LLM_API_SELECTABLE_MODEL_KEYS = ['codex', 'gpt-pro'] as const
+export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'gpt-pro', 'gpt-models', 'claude-code', 'deepseek', 'openai-image', 'seedance', 'gemini-image', 'mimo'] as const
+export const LLM_API_SELECTABLE_MODEL_KEYS = ['codex', 'gpt-pro', 'gpt-models', 'claude-code', 'deepseek', 'openai-image', 'seedance', 'gemini-image'] as const
 export const LLM_API_MODEL_COST_MULTIPLIERS: Record<typeof LLM_API_ALLOWED_MODEL_KEYS[number], number> = {
   'codex': 1,
   'gpt-pro': 20,
+  'gpt-models': 1,
   'claude-code': 10,
+  'deepseek': 0.2,
+  'openai-image': 2,
+  'seedance': 2.5,
+  'gemini-image': 1.5,
   'mimo': 0.1,
 }
 export const RESOURCE_DEFAULT_DURATION = '申请通过之日起至次日凌晨三点'
@@ -907,12 +913,28 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     concurrencyLimit: 1,
   },
   {
+    key: 'gpt-models',
+    name: 'GPT 模型',
+    provider: 'OpenAI',
+    region: 'global',
+    description: '通用 GPT / o 系列模型额度，用于文本、推理、多模态和工具调用。',
+    enabled: true,
+    pointsPerUsd: 10,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 2,
+    tpmLimit: 12000,
+    concurrencyLimit: 1,
+  },
+  {
     key: 'claude-code',
     name: 'ClaudeCode',
     provider: 'Anthropic',
     region: 'global',
     description: '适合长上下文代码分析、重构和复杂推理。',
-    enabled: false,
+    enabled: true,
     pointsPerUsd: 100,
     defaultBudgetUsd: 10,
     minBudgetUsd: 10,
@@ -920,6 +942,70 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     ipLimit: 2,
     rpmLimit: 2,
     tpmLimit: 10000,
+    concurrencyLimit: 1,
+  },
+  {
+    key: 'deepseek',
+    name: 'DeepSeek',
+    provider: 'Domestic',
+    region: 'domestic',
+    description: 'DeepSeek API 模型池，覆盖通用对话和推理模式。',
+    enabled: true,
+    pointsPerUsd: 2,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 5,
+    tpmLimit: 30000,
+    concurrencyLimit: 2,
+  },
+  {
+    key: 'openai-image',
+    name: 'OpenAI 图像生成',
+    provider: 'OpenAI',
+    region: 'global',
+    description: 'GPT Image 系列图像生成、编辑、海报素材和视觉资产额度。',
+    enabled: true,
+    pointsPerUsd: 20,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 2,
+    tpmLimit: 10000,
+    concurrencyLimit: 1,
+  },
+  {
+    key: 'seedance',
+    name: 'Seedance 视频生成',
+    provider: 'ByteDance',
+    region: 'domestic',
+    description: '视频生成、短片、动效和多镜头素材额度。',
+    enabled: true,
+    pointsPerUsd: 25,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 1,
+    rpmLimit: 1,
+    tpmLimit: 8000,
+    concurrencyLimit: 1,
+  },
+  {
+    key: 'gemini-image',
+    name: 'Gemini 图像生成',
+    provider: 'Google',
+    region: 'global',
+    description: 'Gemini 图像生成和多模态创作能力池。',
+    enabled: true,
+    pointsPerUsd: 15,
+    defaultBudgetUsd: 10,
+    minBudgetUsd: 10,
+    maxBudgetUsd: 1000,
+    ipLimit: 2,
+    rpmLimit: 2,
+    tpmLimit: 16000,
     concurrencyLimit: 1,
   },
   {
@@ -975,6 +1061,17 @@ export const RESOURCE_TERMS: ResourceTermConfig[] = [
     ],
   },
   {
+    id: 'creative_service_terms',
+    title: '创作与发布服务条款',
+    version: '2026.06',
+    content: [
+      '简历、文案、图片、视频、PPT、翻译和发布协助仅基于申请人提供的真实材料进行整理、润色、排版或合规发布，不保证录取、收益、曝光或平台审核结果。',
+      '申请人需确认提交素材拥有合法使用权，不上传未授权肖像、商标、版权素材、隐私数据、商业机密或平台禁止传播的内容。',
+      '涉及公开发布、社交平台、图片素材、视频素材或品牌物料时，需说明发布渠道、受众范围、版权归属、署名要求和下架联系人。',
+      '因素材侵权、虚假包装、违规宣传、诱导营销或违反第三方平台政策造成下架、投诉、封禁或法律风险的，平台可拒绝交付并不退还已消耗积分。',
+    ],
+  },
+  {
     id: 'infrastructure_resource_terms',
     title: '基础设施资源条款',
     version: '2026.06',
@@ -987,16 +1084,22 @@ export const RESOURCE_TERMS: ResourceTermConfig[] = [
   },
 ]
 export const RESOURCE_TYPE_CONFIGS: ResourceTypeConfig[] = [
-  { resourceType: 'database', displayName: '数据库', category: 'database', description: 'MySQL / PostgreSQL / Redis 权限或实例访问。', icon: 'i-carbon-data-base', enabled: true, availability: 'available', subtypes: ['mysql', 'postgresql', 'redis'], termsIds: ['database_security_terms'], approverGroup: 'DBA' },
-  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'Codex、GPT PRO 二选一额度；ClaudeCode、Mimo 暂停开放。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['codex', 'gpt-pro'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
-  { resourceType: 'git_repository', displayName: 'Git 仓库权限', category: 'access', description: '代码仓库只读、开发者、维护者权限。', icon: 'i-carbon-logo-github', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['gitlab', 'github', 'gitee'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
-  { resourceType: 'cicd', displayName: 'CI/CD 权限', category: 'access', description: '流水线执行、配置、部署权限。', icon: 'i-carbon-continuous-deployment', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['pipeline', 'runner', 'deployment'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
-  { resourceType: 'vpn', displayName: 'VPN', category: 'access', description: '内网访问 VPN 权限。', icon: 'i-carbon-vpn', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['personal', 'project'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
-  { resourceType: 'ip_allowlist', displayName: 'IP 白名单', category: 'access', description: '办公、服务器或第三方访问白名单。', icon: 'i-carbon-firewall', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['office_ip', 'server_ip', 'third_party_ip'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
-  { resourceType: 'server', displayName: '云服务器', category: 'compute', description: '云主机规格、数量、环境和成本归属。', icon: 'i-carbon-server', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['ecs', 'vm'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
-  { resourceType: 'gpu', displayName: 'GPU', category: 'compute', description: 'GPU 卡型、数量、时长和用途。', icon: 'i-carbon-machine-learning-model', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['nvidia_t4', 'nvidia_a10', 'nvidia_a100', 'other'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
-  { resourceType: 'k8s_namespace', displayName: 'K8s Namespace', category: 'compute', description: '命名空间、资源配额、环境和访问范围。', icon: 'i-carbon-kubernetes', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['dev', 'test', 'staging', 'prod'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
-  { resourceType: 'object_storage', displayName: '对象存储', category: 'compute', description: 'Bucket、容量、权限和生命周期。', icon: 'i-carbon-cloud-storage', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['bucket', 'archive', 'public_assets'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'database', displayName: '数据库', category: 'database', description: 'MySQL / PostgreSQL / Redis / MongoDB / ClickHouse 等权限或实例访问。', icon: 'i-carbon-data-base', enabled: true, availability: 'available', subtypes: ['mysql', 'postgresql', 'redis', 'mongodb', 'clickhouse', 'elasticsearch', 'opensearch', 'meilisearch', 'sqlite', 'database_instance_access'], termsIds: ['database_security_terms'], approverGroup: 'DBA' },
+  { resourceType: 'llm_api_quota', displayName: '大模型 API 额度', category: 'llm', description: 'Codex、Claude Code、GPT、DeepSeek、图像与视频生成额度。', icon: 'i-carbon-ai-status', enabled: true, availability: 'available', subtypes: ['codex', 'gpt-pro', 'gpt-models', 'claude-code', 'deepseek', 'openai-image', 'seedance', 'gemini-image'], termsIds: ['llm_api_compliance_terms'], approverGroup: 'AI 平台/成本负责人' },
+  { resourceType: 'content_service', displayName: '内容与申请材料', category: 'service', description: '简历润色、申请材料、PPT、翻译、本地化和技术文档协作。', icon: 'i-carbon-document', enabled: true, availability: 'available', subtypes: ['resume_polish', 'cover_letter', 'interview_coaching', 'application_statement', 'ppt_deck', 'document_polish', 'translation_localization', 'technical_writing', 'prompt_workflow'], termsIds: ['creative_service_terms'], approverGroup: '内容服务/审核' },
+  { resourceType: 'media_publishing', displayName: '图片与视频发布', category: 'service', description: '图片发布、海报、封面、短视频、社交平台发布和素材清理。', icon: 'i-carbon-image', enabled: true, availability: 'available', subtypes: ['image_publish', 'poster_design', 'social_post_publish', 'video_publish', 'thumbnail_cover', 'asset_cleanup', 'brand_asset', 'content_moderation'], termsIds: ['creative_service_terms'], approverGroup: '创作/运营' },
+  { resourceType: 'data_productivity', displayName: '数据与效率工具', category: 'service', description: '数据分析、报表、埋点、问卷、表格自动化和反馈整理。', icon: 'i-carbon-chart-line', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['analytics_report', 'dashboard_build', 'event_tracking', 'survey_form', 'spreadsheet_automation', 'data_cleaning', 'seo_research', 'feedback_mining'], termsIds: ['creative_service_terms'], approverGroup: '数据/运营' },
+  { resourceType: 'quality_review', displayName: '体验与质量审查', category: 'service', description: 'UI 走查、可访问性、性能、兼容性、发布清单和文案风险复核。', icon: 'i-carbon-task-complete', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['ui_review', 'accessibility_audit', 'performance_audit', 'browser_compatibility', 'release_checklist', 'copy_review', 'privacy_copy_check', 'incident_postmortem'], termsIds: ['creative_service_terms'], approverGroup: '质量/产品' },
+  { resourceType: 'git_repository', displayName: 'Git 仓库权限', category: 'access', description: 'GitHub、GitLab、Gitee、部署密钥和机器人账号权限。', icon: 'i-carbon-logo-github', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['github', 'gitlab', 'gitee', 'codeberg', 'bitbucket', 'deploy_key', 'bot_account'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
+  { resourceType: 'cicd', displayName: 'CI/CD 权限', category: 'access', description: '流水线、Runner、部署、镜像仓库和发布通道权限。', icon: 'i-carbon-continuous-deployment', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['pipeline', 'runner', 'deployment', 'github_actions', 'gitlab_ci', 'docker_registry', 'release_channel'], termsIds: ['infrastructure_resource_terms'], approverGroup: 'DevOps' },
+  { resourceType: 'vpn', displayName: 'VPN', category: 'access', description: '个人、项目、堡垒机、零信任和临时内网访问权限。', icon: 'i-carbon-vpn', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['personal', 'project', 'site_to_site', 'bastion', 'zero_trust', 'temporary_access'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
+  { resourceType: 'ip_allowlist', displayName: 'IP 白名单', category: 'access', description: '办公、服务器、第三方、Webhook、API 网关和 CIDR 放行。', icon: 'i-carbon-firewall', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['office_ip', 'server_ip', 'third_party_ip', 'webhook_ip', 'api_gateway_ip', 'cidr'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/运维' },
+  { resourceType: 'notification_channel', displayName: '通知与通信', category: 'access', description: '邮件、短信、Webhook、飞书、钉钉、企微和 Web Push 通知通道。', icon: 'i-carbon-notification', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['email', 'smtp', 'resend', 'sms', 'webhook', 'feishu', 'dingtalk', 'wecom', 'web_push', 'telegram_bot'], termsIds: ['infrastructure_resource_terms'], approverGroup: '通知/运维' },
+  { resourceType: 'identity_security', displayName: '认证与安全', category: 'access', description: 'OAuth、OIDC、SSO、API Key、Service Account、密钥托管和 WAF 规则。', icon: 'i-carbon-security', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['oauth_app', 'oidc', 'saml_sso', 'api_key', 'service_account', 'secret_vault', 'turnstile', 'waf_rule', 'security_review', 'rbac_role'], termsIds: ['infrastructure_resource_terms'], approverGroup: '安全/身份' },
+  { resourceType: 'server', displayName: '云服务器', category: 'compute', description: '云主机、轻量实例、裸金属、竞价实例和 ARM 实例。', icon: 'i-carbon-server', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['ecs', 'vm', 'lightweight', 'bare_metal', 'spot', 'arm'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'gpu', displayName: 'GPU', category: 'compute', description: 'T4、L4、A10、A100、H100、H200 等 GPU 算力。', icon: 'i-carbon-machine-learning-model', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['nvidia_t4', 'nvidia_l4', 'nvidia_a10', 'nvidia_a100', 'nvidia_h100', 'nvidia_h200', 'other'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'k8s_namespace', displayName: 'K8s Namespace', category: 'compute', description: '命名空间、资源配额、GPU、PVC、Ingress 和 ServiceAccount。', icon: 'i-carbon-kubernetes', enabled: true, availability: 'unavailable', unavailableReason: '暂时不提供申请', subtypes: ['dev', 'test', 'staging', 'prod', 'gpu', 'pvc', 'ingress', 'service_account'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
+  { resourceType: 'object_storage', displayName: '对象存储', category: 'compute', description: 'Bucket、归档、公开素材、私有资产、备份和 CDN 源站。', icon: 'i-carbon-cloud-storage', enabled: true, availability: 'level_required', minUserLevelPriority: 3, unavailableReason: '平台等级 Lv3 开放', subtypes: ['bucket', 'archive', 'public_assets', 'private_assets', 'backup', 'cdn_origin'], termsIds: ['infrastructure_resource_terms'], approverGroup: '基础设施' },
 ]
 export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
   {
@@ -1005,9 +1108,16 @@ export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
     description: '按实例、库表或缓存访问方式选择所需资源。',
     icon: 'i-carbon-data-base',
     items: [
-      { id: 'database:mysql', resourceType: 'database', resourceSubtype: 'mysql', label: 'MySQL', description: 'MySQL 实例、库表访问或只读分析权限。' },
-      { id: 'database:postgresql', resourceType: 'database', resourceSubtype: 'postgresql', label: 'PostgreSQL', description: 'PostgreSQL 业务库、报表库或只读访问。' },
-      { id: 'database:redis', resourceType: 'database', resourceSubtype: 'redis', label: 'Redis', description: '缓存、队列和 KV 访问能力。' },
+      { id: 'database:mysql', resourceType: 'database', resourceSubtype: 'mysql', label: 'MySQL', description: 'MySQL 实例、库表访问或只读分析权限。', info: '适用：业务库、报表库、只读分析、临时运维。' },
+      { id: 'database:postgresql', resourceType: 'database', resourceSubtype: 'postgresql', label: 'PostgreSQL', description: 'PostgreSQL 业务库、报表库或只读访问。', info: '适用：PostgreSQL / PostGIS / TimescaleDB 相关访问。' },
+      { id: 'database:redis', resourceType: 'database', resourceSubtype: 'redis', label: 'Redis', description: '缓存、队列和 KV 访问能力。', info: '适用：缓存、队列、Session、限流和 KV 数据排查。' },
+      { id: 'database:mongodb', resourceType: 'database', resourceSubtype: 'mongodb', label: 'MongoDB', description: '文档数据库集合访问、索引和临时查询。', info: '适用：MongoDB 集合、索引、文档查询和只读分析。' },
+      { id: 'database:clickhouse', resourceType: 'database', resourceSubtype: 'clickhouse', label: 'ClickHouse', description: 'OLAP、日志分析和宽表查询访问。', info: '适用：日志、指标、行为分析、聚合查询和宽表报表。' },
+      { id: 'database:elasticsearch', resourceType: 'database', resourceSubtype: 'elasticsearch', label: 'Elasticsearch', description: '搜索索引、日志检索和聚合分析访问。', info: '适用：搜索索引、日志检索、聚合分析和排障查询。' },
+      { id: 'database:opensearch', resourceType: 'database', resourceSubtype: 'opensearch', label: 'OpenSearch', description: '搜索与日志索引访问。', info: '适用：OpenSearch 索引、Dashboards 查询和日志检索。' },
+      { id: 'database:meilisearch', resourceType: 'database', resourceSubtype: 'meilisearch', label: 'Meilisearch', description: '轻量搜索索引访问。', info: '适用：站内搜索、索引调试和搜索相关配置。' },
+      { id: 'database:sqlite', resourceType: 'database', resourceSubtype: 'sqlite', label: 'SQLite', description: '本地或嵌入式数据库文件访问。', info: '适用：轻量应用、导入导出、离线分析和测试数据。' },
+      { id: 'database:database_instance_access', resourceType: 'database', resourceSubtype: 'database_instance_access', label: '数据库实例访问', description: '跨类型数据库实例、连接串或临时账号访问。', info: '适用：未知或混合数据库类型的临时连接、白名单和账号权限。' },
     ],
   },
   {
@@ -1016,8 +1126,79 @@ export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
     description: '按模型种类和额度池选择所需 AI 资源。',
     icon: 'i-carbon-ai-status',
     items: [
-      { id: 'llm_api_quota:codex', resourceType: 'llm_api_quota', resourceSubtype: 'codex', label: 'Codex', description: '代码生成、重构、Agent 和自动化开发额度。' },
-      { id: 'llm_api_quota:gpt-pro', resourceType: 'llm_api_quota', resourceSubtype: 'gpt-pro', label: 'GPT Pro', description: '高成本推理与深度协作对话轮次资源。' },
+      { id: 'llm_api_quota:codex', resourceType: 'llm_api_quota', resourceSubtype: 'codex', label: 'Codex 套餐', description: '代码生成、重构、Agent 和自动化开发额度。', info: '支持：GPT-5.5、GPT-5.4、GPT-5.4 mini；兼容旧 Codex 模型按平台可用性开放。' },
+      { id: 'llm_api_quota:claude-code', resourceType: 'llm_api_quota', resourceSubtype: 'claude-code', label: 'Claude Code 套餐', description: '长上下文代码分析、重构和复杂推理。', info: '支持：Claude Code 的 sonnet / opus / haiku 别名，以及可配置的完整 Claude 模型名。' },
+      { id: 'llm_api_quota:gpt-models', resourceType: 'llm_api_quota', resourceSubtype: 'gpt-models', label: 'GPT 模型', description: '通用 GPT / o 系列文本、多模态和工具调用。', info: '支持：GPT-5.5、GPT-5.4、GPT-5.4 mini、GPT-5.4 nano 等通用文本、视觉和工具调用模型。' },
+      { id: 'llm_api_quota:gpt-pro', resourceType: 'llm_api_quota', resourceSubtype: 'gpt-pro', label: 'GPT Pro', description: '高成本推理与深度协作对话轮次资源。', info: `默认 ${GPT_PRO_DEFAULT_ROUNDS} 轮 / ${GPT_PRO_DEFAULT_DURATION}，适合深度推理和长链路协作。` },
+      { id: 'llm_api_quota:deepseek', resourceType: 'llm_api_quota', resourceSubtype: 'deepseek', label: 'DeepSeek', description: 'DeepSeek API 模型池，适合低成本通用对话和推理任务。', info: '支持：deepseek-v4-flash、deepseek-v4-pro；deepseek-chat / deepseek-reasoner 为兼容旧名。' },
+      { id: 'llm_api_quota:openai-image', resourceType: 'llm_api_quota', resourceSubtype: 'openai-image', label: 'OpenAI 图像生成', description: '图片生成、编辑、素材与海报视觉资产。', info: '支持：GPT Image 2，以及平台仍开放的图像生成/编辑模型。' },
+      { id: 'llm_api_quota:seedance', resourceType: 'llm_api_quota', resourceSubtype: 'seedance', label: 'Seedance 视频生成', description: '视频生成、短片、动效和多镜头素材。', info: '支持：Seedance 2.0；面向文本、图片、音频、视频多模态参考的视频生成与编辑。' },
+      { id: 'llm_api_quota:gemini-image', resourceType: 'llm_api_quota', resourceSubtype: 'gemini-image', label: 'Gemini 图像生成', description: 'Gemini 图像生成和多模态创作能力池。', info: '支持：Gemini 3.1 Flash Image、Gemini 3 Pro Image、Gemini 2.5 Flash Image。' },
+    ],
+  },
+  {
+    id: 'content_services',
+    label: '内容与申请材料',
+    description: '按简历、申请材料、文档、PPT 和翻译需求选择服务。',
+    icon: 'i-carbon-document',
+    items: [
+      { id: 'content_service:resume_polish', resourceType: 'content_service', resourceSubtype: 'resume_polish', label: '简历润色', description: '简历结构、措辞、项目表达和岗位匹配润色。', info: '适用：中文/英文简历、实习申请、校招、社招、项目经历重写；需提供真实经历和目标岗位。' },
+      { id: 'content_service:cover_letter', resourceType: 'content_service', resourceSubtype: 'cover_letter', label: '求职信', description: 'Cover Letter、动机信和岗位匹配说明。', info: '适用：求职信、导师套磁、学校申请和项目自荐；不虚构经历、不承诺录取结果。' },
+      { id: 'content_service:interview_coaching', resourceType: 'content_service', resourceSubtype: 'interview_coaching', label: '面试材料', description: '面试自我介绍、STAR 案例和问答脚本。', info: '适用：技术面、产品面、运营面、行为面和英文面试；需说明岗位、公司和面试阶段。' },
+      { id: 'content_service:application_statement', resourceType: 'content_service', resourceSubtype: 'application_statement', label: '申请陈述', description: '奖学金、项目、活动、公益计划和学校申请材料。', info: '适用：个人陈述、项目申请、公益计划、奖学金材料；仅做真实材料整理和表达优化。' },
+      { id: 'content_service:ppt_deck', resourceType: 'content_service', resourceSubtype: 'ppt_deck', label: 'PPT 方案', description: '路演、答辩、汇报和课程展示 PPT。', info: '适用：答辩、路演、汇报、课程展示和项目复盘；需提供主题、页数、受众和素材来源。' },
+      { id: 'content_service:document_polish', resourceType: 'content_service', resourceSubtype: 'document_polish', label: '文档润色', description: '技术文档、README、方案、公告和说明文案润色。', info: '适用：README、PRD、设计说明、公告、邮件和帮助文档；保留事实边界和原始意图。' },
+      { id: 'content_service:translation_localization', resourceType: 'content_service', resourceSubtype: 'translation_localization', label: '翻译本地化', description: '中英互译、术语统一和面向受众的本地化改写。', info: '适用：英文简历、产品文案、开源 README、邮件、字幕和说明文档；需说明目标语言和语气。' },
+      { id: 'content_service:technical_writing', resourceType: 'content_service', resourceSubtype: 'technical_writing', label: '技术写作', description: '技术博客、教程、案例和发布说明。', info: '适用：技术博客、教程、案例复盘、Release Notes 和开发者文档；需提供代码、截图或事实材料。' },
+      { id: 'content_service:prompt_workflow', resourceType: 'content_service', resourceSubtype: 'prompt_workflow', label: 'Prompt 工作流', description: 'Prompt、Agent 流程、模板和评测说明整理。', info: '适用：系统提示词、工作流模板、评测集、自动化说明；需说明输入、输出、限制和验收标准。' },
+    ],
+  },
+  {
+    id: 'media_publishing',
+    label: '图片与视频发布',
+    description: '按素材整理、图片发布、视频发布和社交分发选择服务。',
+    icon: 'i-carbon-image',
+    items: [
+      { id: 'media_publishing:image_publish', resourceType: 'media_publishing', resourceSubtype: 'image_publish', label: '图片发布', description: '图片素材整理、压缩、命名、托管和发布协助。', info: '适用：公告图、活动图、作品图、截图和公开素材；需确认素材版权、发布渠道和可见范围。' },
+      { id: 'media_publishing:poster_design', resourceType: 'media_publishing', resourceSubtype: 'poster_design', label: '海报物料', description: '活动海报、长图、封面和宣传图物料。', info: '适用：公益活动、课程、项目招募、发布公告；需提供尺寸、品牌要求、二维码和文案。' },
+      { id: 'media_publishing:social_post_publish', resourceType: 'media_publishing', resourceSubtype: 'social_post_publish', label: '社媒发布', description: '社交平台图文发布、排版和发布前检查。', info: '适用：公众号、小红书、X、LinkedIn、社区帖和开源项目公告；需说明账号、发布时间和审核人。' },
+      { id: 'media_publishing:video_publish', resourceType: 'media_publishing', resourceSubtype: 'video_publish', label: '视频发布', description: '短视频、演示视频、字幕和封面发布协助。', info: '适用：项目 Demo、课程片段、活动回顾、功能演示；需提供素材授权、字幕要求和目标平台。' },
+      { id: 'media_publishing:thumbnail_cover', resourceType: 'media_publishing', resourceSubtype: 'thumbnail_cover', label: '封面缩略图', description: '视频、文章、课程和项目封面图整理。', info: '适用：YouTube、B 站、公众号、课程页、项目页封面；需说明比例、标题和视觉风格。' },
+      { id: 'media_publishing:asset_cleanup', resourceType: 'media_publishing', resourceSubtype: 'asset_cleanup', label: '素材清理', description: '图片压缩、裁剪、去背景、格式转换和命名整理。', info: '适用：PNG/JPEG/WebP、透明底、批量裁剪、压缩和对象存储前整理；不处理侵权或隐私素材。' },
+      { id: 'media_publishing:brand_asset', resourceType: 'media_publishing', resourceSubtype: 'brand_asset', label: '品牌素材', description: 'Logo、色板、图标、模板和公开素材包整理。', info: '适用：项目品牌包、开源 README 素材、赞助页素材和团队模板；需确认商标/版权归属。' },
+      { id: 'media_publishing:content_moderation', resourceType: 'media_publishing', resourceSubtype: 'content_moderation', label: '发布审核', description: '发布前版权、隐私、敏感信息和平台规则检查。', info: '适用：公开图片、视频、文案、案例、截图；重点检查隐私、密钥、商标和未授权素材。' },
+    ],
+  },
+  {
+    id: 'data_productivity',
+    label: '数据与效率工具',
+    description: '按报表、埋点、问卷、自动化和数据整理选择服务。',
+    icon: 'i-carbon-chart-line',
+    items: [
+      { id: 'data_productivity:analytics_report', resourceType: 'data_productivity', resourceSubtype: 'analytics_report', label: '数据分析报告', description: '运营、申请、活动和用户行为分析报告。', info: '适用：转化漏斗、留存、活动复盘、成本分析；需说明数据来源、口径和交付格式。' },
+      { id: 'data_productivity:dashboard_build', resourceType: 'data_productivity', resourceSubtype: 'dashboard_build', label: '看板搭建', description: '指标看板、项目状态、资源消耗和审核进度视图。', info: '适用：内部运营看板、资源消耗、审核效率、用户增长；需说明指标定义和刷新频率。' },
+      { id: 'data_productivity:event_tracking', resourceType: 'data_productivity', resourceSubtype: 'event_tracking', label: '埋点方案', description: '事件命名、属性、漏斗和埋点验收方案。', info: '适用：页面访问、按钮点击、申请流程、支付流程和发布转化；需说明产品流程。' },
+      { id: 'data_productivity:survey_form', resourceType: 'data_productivity', resourceSubtype: 'survey_form', label: '问卷表单', description: '问卷、报名表、反馈表和自动汇总流程。', info: '适用：活动报名、用户调研、满意度、需求收集；需说明题型、隐私声明和导出方式。' },
+      { id: 'data_productivity:spreadsheet_automation', resourceType: 'data_productivity', resourceSubtype: 'spreadsheet_automation', label: '表格自动化', description: '表格清洗、公式、导入导出和批量整理自动化。', info: '适用：Excel、CSV、Sheets、报名表和对账表；需提供样例数据和目标结果。' },
+      { id: 'data_productivity:data_cleaning', resourceType: 'data_productivity', resourceSubtype: 'data_cleaning', label: '数据清洗', description: '去重、格式标准化、字段映射和质量检查。', info: '适用：名单、订单、申请表、日志和指标数据；敏感数据需脱敏后提交。' },
+      { id: 'data_productivity:seo_research', resourceType: 'data_productivity', resourceSubtype: 'seo_research', label: 'SEO 研究', description: '关键词、标题结构、站点地图和搜索展示优化。', info: '适用：项目官网、文档站、博客、活动页；需提供站点 URL、目标受众和关键词方向。' },
+      { id: 'data_productivity:feedback_mining', resourceType: 'data_productivity', resourceSubtype: 'feedback_mining', label: '反馈整理', description: '用户反馈、Issue、评论和客服记录聚类整理。', info: '适用：产品反馈、社区评论、Issue、问卷开放题；需脱敏并说明分类目标。' },
+    ],
+  },
+  {
+    id: 'quality_review',
+    label: '体验与质量审查',
+    description: '按 UI、可访问性、性能、兼容性和发布风险选择复核服务。',
+    icon: 'i-carbon-task-complete',
+    items: [
+      { id: 'quality_review:ui_review', resourceType: 'quality_review', resourceSubtype: 'ui_review', label: 'UI 走查', description: '页面层级、布局、对齐、文案和交互走查。', info: '适用：申请页、详情页、运营页、表单和后台工具；需提供访问地址或截图。' },
+      { id: 'quality_review:accessibility_audit', resourceType: 'quality_review', resourceSubtype: 'accessibility_audit', label: '可访问性审查', description: '键盘导航、语义、对比度和屏幕阅读器基础检查。', info: '适用：表单、弹窗、导航、数据表和发布页面；参考 WCAG 常见检查项。' },
+      { id: 'quality_review:performance_audit', resourceType: 'quality_review', resourceSubtype: 'performance_audit', label: '性能审查', description: '加载、资源体积、交互延迟和关键路径检查。', info: '适用：前端页面、图片资源、脚本加载、移动端体验；需提供测试入口和目标设备。' },
+      { id: 'quality_review:browser_compatibility', resourceType: 'quality_review', resourceSubtype: 'browser_compatibility', label: '兼容性测试', description: '浏览器、移动端、响应式和深浅色模式检查。', info: '适用：Chrome、Safari、Firefox、移动端、暗色模式；需说明目标浏览器矩阵。' },
+      { id: 'quality_review:release_checklist', resourceType: 'quality_review', resourceSubtype: 'release_checklist', label: '发布清单', description: '发布前功能、数据、权限、监控和回滚项检查。', info: '适用：新功能上线、活动页发布、资源开放；需提供变更说明和回滚方式。' },
+      { id: 'quality_review:copy_review', resourceType: 'quality_review', resourceSubtype: 'copy_review', label: '文案审查', description: '页面文案、提示、错误信息和操作语气检查。', info: '适用：按钮、表单、通知、弹窗、协议和帮助文档；关注准确性、歧义和误导表达。' },
+      { id: 'quality_review:privacy_copy_check', resourceType: 'quality_review', resourceSubtype: 'privacy_copy_check', label: '隐私文案检查', description: '隐私提示、数据收集说明和用户授权文案检查。', info: '适用：登录、上传、通知订阅、数据导出；需说明数据字段、用途和保留周期。' },
+      { id: 'quality_review:incident_postmortem', resourceType: 'quality_review', resourceSubtype: 'incident_postmortem', label: '复盘整理', description: '故障、投诉、发布事故和运营事件复盘文档。', info: '适用：事故时间线、影响范围、根因、改进项和负责人；不替代正式安全审计。' },
     ],
   },
   {
@@ -1026,10 +1207,21 @@ export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
     description: '按主机、GPU、K8s 与对象存储等基础设施能力选择。',
     icon: 'i-carbon-cloud-service-management',
     items: [
-      { id: 'server:ecs', resourceType: 'server', resourceSubtype: 'ecs', label: '云服务器', description: '通用云主机、运行环境和基础算力。' },
-      { id: 'gpu:nvidia_t4', resourceType: 'gpu', resourceSubtype: 'nvidia_t4', label: 'GPU 实例', description: 'GPU 卡型、数量、时长与推理/训练用途。' },
-      { id: 'k8s_namespace:dev', resourceType: 'k8s_namespace', resourceSubtype: 'dev', label: 'K8s Namespace', description: '命名空间、资源配额和环境隔离。' },
-      { id: 'object_storage:bucket', resourceType: 'object_storage', resourceSubtype: 'bucket', label: '对象存储', description: 'Bucket、容量、权限与生命周期策略。' },
+      { id: 'server:ecs', resourceType: 'server', resourceSubtype: 'ecs', label: '云服务器', description: '通用云主机、运行环境和基础算力。', info: '适用：ECS / VM / 云主机，需说明规格、区域、端口和用途。' },
+      { id: 'server:lightweight', resourceType: 'server', resourceSubtype: 'lightweight', label: '轻量服务器', description: '轻量应用、Demo 和小型服务实例。', info: '适用：轻量应用、演示环境、低成本公益服务部署。' },
+      { id: 'server:spot', resourceType: 'server', resourceSubtype: 'spot', label: '竞价实例', description: '可中断低成本计算实例。', info: '适用：批处理、离线任务、临时实验和可中断工作负载。' },
+      { id: 'gpu:nvidia_t4', resourceType: 'gpu', resourceSubtype: 'nvidia_t4', label: 'GPU T4', description: 'T4 推理、轻量训练和视频处理。', info: '适用：轻量推理、转码、CV 实验和低成本 GPU 任务。' },
+      { id: 'gpu:nvidia_l4', resourceType: 'gpu', resourceSubtype: 'nvidia_l4', label: 'GPU L4', description: 'L4 推理、图像和视频任务。', info: '适用：推理服务、视觉任务、视频生成或转码。' },
+      { id: 'gpu:nvidia_a10', resourceType: 'gpu', resourceSubtype: 'nvidia_a10', label: 'GPU A10', description: 'A10 推理和中等规模训练。', info: '适用：中等规模模型实验、渲染、推理和图像任务。' },
+      { id: 'gpu:nvidia_a100', resourceType: 'gpu', resourceSubtype: 'nvidia_a100', label: 'GPU A100', description: 'A100 大模型训练和高性能推理。', info: '适用：大模型训练、批量推理和高吞吐 GPU 任务。' },
+      { id: 'gpu:nvidia_h100', resourceType: 'gpu', resourceSubtype: 'nvidia_h100', label: 'GPU H100', description: 'H100 高端训练和推理算力。', info: '适用：高性能训练、长上下文推理和高成本实验。' },
+      { id: 'k8s_namespace:dev', resourceType: 'k8s_namespace', resourceSubtype: 'dev', label: 'K8s Namespace', description: '命名空间、资源配额和环境隔离。', info: '适用：dev / test / staging / prod 命名空间和配额申请。' },
+      { id: 'k8s_namespace:ingress', resourceType: 'k8s_namespace', resourceSubtype: 'ingress', label: 'K8s Ingress', description: 'Ingress、域名路由和服务暴露。', info: '适用：服务入口、TLS、路径路由、灰度和内外网暴露。' },
+      { id: 'k8s_namespace:pvc', resourceType: 'k8s_namespace', resourceSubtype: 'pvc', label: 'K8s PVC', description: '持久卷、挂载和存储配额。', info: '适用：状态服务、模型权重、缓存目录和持久化数据。' },
+      { id: 'object_storage:bucket', resourceType: 'object_storage', resourceSubtype: 'bucket', label: '对象存储', description: 'Bucket、容量、权限与生命周期策略。', info: '适用：OSS / S3 Bucket、读写权限、生命周期和跨域配置。' },
+      { id: 'object_storage:public_assets', resourceType: 'object_storage', resourceSubtype: 'public_assets', label: '公开素材桶', description: '公益项目静态资源和公开素材托管。', info: '适用：图片、下载文件、公开页面素材和 CDN 源站。' },
+      { id: 'object_storage:backup', resourceType: 'object_storage', resourceSubtype: 'backup', label: '备份存储', description: '备份、归档和恢复材料存储。', info: '适用：数据库备份、日志归档、冷数据和恢复演练。' },
+      { id: 'object_storage:cdn_origin', resourceType: 'object_storage', resourceSubtype: 'cdn_origin', label: 'CDN 源站', description: '对象存储作为 CDN 源站使用。', info: '适用：静态资源加速、缓存策略和访问控制。' },
     ],
   },
   {
@@ -1038,8 +1230,15 @@ export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
     description: '按仓库、流水线与交付能力选择协作资源。',
     icon: 'i-carbon-continuous-deployment',
     items: [
-      { id: 'git_repository:github', resourceType: 'git_repository', resourceSubtype: 'github', label: 'Git 仓库权限', description: '仓库只读、开发者或维护者权限。' },
-      { id: 'cicd:pipeline', resourceType: 'cicd', resourceSubtype: 'pipeline', label: 'CI/CD 权限', description: '流水线执行、部署和交付权限。' },
+      { id: 'git_repository:github', resourceType: 'git_repository', resourceSubtype: 'github', label: 'GitHub 仓库', description: 'GitHub 仓库只读、开发者或维护者权限。', info: '适用：仓库协作、Issue、Actions、Deploy Key 和组织权限。' },
+      { id: 'git_repository:gitlab', resourceType: 'git_repository', resourceSubtype: 'gitlab', label: 'GitLab 仓库', description: 'GitLab 项目、Group 和 Runner 访问。', info: '适用：项目权限、Group 权限、MR、CI 和部署密钥。' },
+      { id: 'git_repository:gitee', resourceType: 'git_repository', resourceSubtype: 'gitee', label: 'Gitee 仓库', description: 'Gitee 仓库协作权限。', info: '适用：国内仓库协作、只读、开发者和维护者权限。' },
+      { id: 'git_repository:deploy_key', resourceType: 'git_repository', resourceSubtype: 'deploy_key', label: 'Deploy Key', description: '部署密钥、机器人账号和只读拉取权限。', info: '适用：自动部署、CI 拉取代码、只读密钥和密钥轮换。' },
+      { id: 'cicd:pipeline', resourceType: 'cicd', resourceSubtype: 'pipeline', label: 'CI/CD 权限', description: '流水线执行、配置、部署权限。', info: '适用：流水线运行、变量、环境和发布权限。' },
+      { id: 'cicd:github_actions', resourceType: 'cicd', resourceSubtype: 'github_actions', label: 'GitHub Actions', description: 'GitHub Actions 工作流、Secret 和部署权限。', info: '适用：workflow_dispatch、Secrets、Environments 和 Runner。' },
+      { id: 'cicd:gitlab_ci', resourceType: 'cicd', resourceSubtype: 'gitlab_ci', label: 'GitLab CI', description: 'GitLab CI Runner、变量和部署权限。', info: '适用：CI/CD Variables、Runner、环境和部署任务。' },
+      { id: 'cicd:docker_registry', resourceType: 'cicd', resourceSubtype: 'docker_registry', label: '镜像仓库', description: '镜像推拉、命名空间和制品权限。', info: '适用：Docker Registry、Harbor、GHCR、镜像推送和拉取。' },
+      { id: 'cicd:release_channel', resourceType: 'cicd', resourceSubtype: 'release_channel', label: '发布通道', description: '灰度、正式发布和回滚通道权限。', info: '适用：灰度发布、正式发布、回滚和版本管理。' },
     ],
   },
   {
@@ -1048,8 +1247,52 @@ export const RESOURCE_POOL_CATEGORIES: ResourcePoolCategoryConfig[] = [
     description: '按网络访问、白名单与安全边界选择权限。',
     icon: 'i-carbon-network-4',
     items: [
-      { id: 'vpn:personal', resourceType: 'vpn', resourceSubtype: 'personal', label: 'VPN', description: '个人或项目内网访问能力。' },
-      { id: 'ip_allowlist:office_ip', resourceType: 'ip_allowlist', resourceSubtype: 'office_ip', label: 'IP 白名单', description: '办公、服务器或第三方来源 IP 放行。' },
+      { id: 'vpn:personal', resourceType: 'vpn', resourceSubtype: 'personal', label: '个人 VPN', description: '个人内网访问能力。', info: '适用：短期排查、内部系统访问和远程协作。' },
+      { id: 'vpn:project', resourceType: 'vpn', resourceSubtype: 'project', label: '项目 VPN', description: '项目团队内网访问能力。', info: '适用：项目组多人访问、统一回收和范围限制。' },
+      { id: 'vpn:bastion', resourceType: 'vpn', resourceSubtype: 'bastion', label: '堡垒机访问', description: '堡垒机、跳板机和审计访问。', info: '适用：服务器登录、命令审计、临时账号和最小权限。' },
+      { id: 'vpn:zero_trust', resourceType: 'vpn', resourceSubtype: 'zero_trust', label: '零信任访问', description: '应用级访问、身份校验和策略放行。', info: '适用：Zero Trust、应用网关、身份策略和短期授权。' },
+      { id: 'ip_allowlist:office_ip', resourceType: 'ip_allowlist', resourceSubtype: 'office_ip', label: '办公 IP 白名单', description: '办公网络来源 IP 放行。', info: '适用：办公室、学校、实验室或固定出口 IP。' },
+      { id: 'ip_allowlist:server_ip', resourceType: 'ip_allowlist', resourceSubtype: 'server_ip', label: '服务器 IP 白名单', description: '云服务器或固定机器来源 IP 放行。', info: '适用：服务器访问数据库、API、对象存储或控制面。' },
+      { id: 'ip_allowlist:third_party_ip', resourceType: 'ip_allowlist', resourceSubtype: 'third_party_ip', label: '第三方 IP 白名单', description: '合作方、供应商或外部系统来源 IP 放行。', info: '适用：第三方回调、供应商系统、外部集成和临时联调。' },
+      { id: 'ip_allowlist:webhook_ip', resourceType: 'ip_allowlist', resourceSubtype: 'webhook_ip', label: 'Webhook IP 白名单', description: 'Webhook 回调来源 IP 放行。', info: '适用：GitHub、支付、通知、机器人和自动化回调。' },
+      { id: 'ip_allowlist:api_gateway_ip', resourceType: 'ip_allowlist', resourceSubtype: 'api_gateway_ip', label: 'API 网关白名单', description: '网关、边缘节点或服务出口 IP 放行。', info: '适用：API Gateway、Cloudflare、边缘 Worker 和代理出口。' },
+      { id: 'ip_allowlist:cidr', resourceType: 'ip_allowlist', resourceSubtype: 'cidr', label: 'CIDR 网段', description: '网段级白名单和安全边界配置。', info: '适用：VPC、学校网段、办公网段和专线网段。' },
+    ],
+  },
+  {
+    id: 'notification_communication',
+    label: '通知与通信',
+    description: '按邮件、短信、Webhook、IM 机器人与 Web Push 选择通知通道。',
+    icon: 'i-carbon-notification',
+    items: [
+      { id: 'notification_channel:email', resourceType: 'notification_channel', resourceSubtype: 'email', label: '邮件通知', description: '系统邮件、审核通知和运营邮件通道。', info: '适用：申请进度、审核结果、管理员通知和用户触达；需说明发送对象、频率和退订策略。' },
+      { id: 'notification_channel:smtp', resourceType: 'notification_channel', resourceSubtype: 'smtp', label: 'SMTP', description: 'SMTP 账号、发件域名和邮件中继。', info: '适用：自有域名发信、事务邮件、批量通知；需说明 SPF、DKIM、DMARC 和限流。' },
+      { id: 'notification_channel:resend', resourceType: 'notification_channel', resourceSubtype: 'resend', label: 'Resend', description: 'Resend API Key、发件域名和模板权限。', info: '适用：事务邮件、模板邮件、Webhook 回执；需说明发件域名和日发送量。' },
+      { id: 'notification_channel:sms', resourceType: 'notification_channel', resourceSubtype: 'sms', label: '短信通道', description: '短信验证码、通知短信和签名模板。', info: '适用：验证码、重要提醒和异常告警；需说明签名、模板、频率和接收人范围。' },
+      { id: 'notification_channel:webhook', resourceType: 'notification_channel', resourceSubtype: 'webhook', label: 'Webhook', description: '回调地址、签名密钥和事件订阅。', info: '适用：申请事件、支付回调、CI 通知和第三方集成；需说明鉴权、重试和幂等策略。' },
+      { id: 'notification_channel:feishu', resourceType: 'notification_channel', resourceSubtype: 'feishu', label: '飞书机器人', description: '飞书群机器人、Webhook 和应用消息。', info: '适用：群通知、审核提醒、告警同步；需说明群范围、消息类型和敏感信息脱敏。' },
+      { id: 'notification_channel:dingtalk', resourceType: 'notification_channel', resourceSubtype: 'dingtalk', label: '钉钉机器人', description: '钉钉群机器人和工作通知。', info: '适用：团队通知、任务提醒和告警；需说明安全关键词、签名和发送频率。' },
+      { id: 'notification_channel:wecom', resourceType: 'notification_channel', resourceSubtype: 'wecom', label: '企业微信机器人', description: '企业微信群机器人和应用消息。', info: '适用：企业微信群通知、审批提醒和状态同步；需说明接收群和数据脱敏。' },
+      { id: 'notification_channel:web_push', resourceType: 'notification_channel', resourceSubtype: 'web_push', label: 'Web Push', description: '浏览器推送、VAPID 密钥和订阅管理。', info: '适用：站内通知、离线提醒和审核状态；需说明订阅授权、退订和频率控制。' },
+      { id: 'notification_channel:telegram_bot', resourceType: 'notification_channel', resourceSubtype: 'telegram_bot', label: 'Telegram Bot', description: 'Telegram Bot Token、频道和私聊通知。', info: '适用：国际用户通知、机器人提醒和频道广播；需说明接收范围和隐私保护。' },
+    ],
+  },
+  {
+    id: 'identity_security',
+    label: '认证与安全',
+    description: '按登录认证、密钥、权限、风控和安全策略选择资源。',
+    icon: 'i-carbon-security',
+    items: [
+      { id: 'identity_security:oauth_app', resourceType: 'identity_security', resourceSubtype: 'oauth_app', label: 'OAuth 应用', description: 'OAuth Client、回调地址和授权范围。', info: '适用：第三方登录、GitHub App、Linux.do 登录等；需说明回调域名、Scope 和用户数据范围。' },
+      { id: 'identity_security:oidc', resourceType: 'identity_security', resourceSubtype: 'oidc', label: 'OIDC', description: 'OIDC Provider、Client 和 Token 配置。', info: '适用：统一登录、服务间身份、JWT 校验；需说明 issuer、audience、回调和密钥轮换。' },
+      { id: 'identity_security:saml_sso', resourceType: 'identity_security', resourceSubtype: 'saml_sso', label: 'SAML SSO', description: 'SAML 单点登录、元数据和证书配置。', info: '适用：企业身份源、学校身份源和统一认证；需说明 IdP、SP、证书和属性映射。' },
+      { id: 'identity_security:api_key', resourceType: 'identity_security', resourceSubtype: 'api_key', label: 'API Key', description: 'API Key、临时 Token 和访问密钥。', info: '适用：接口调用、临时授权和自动化任务；需说明权限范围、过期时间和存放方式。' },
+      { id: 'identity_security:service_account', resourceType: 'identity_security', resourceSubtype: 'service_account', label: 'Service Account', description: '服务账号、机器人账号和最小权限角色。', info: '适用：CI、部署、后台任务和服务间调用；需说明负责人、权限边界和回收时间。' },
+      { id: 'identity_security:secret_vault', resourceType: 'identity_security', resourceSubtype: 'secret_vault', label: '密钥托管', description: 'Secret Vault、加密变量和密钥轮换。', info: '适用：环境变量、API Key、数据库密码和部署密钥；需说明读写权限和轮换周期。' },
+      { id: 'identity_security:turnstile', resourceType: 'identity_security', resourceSubtype: 'turnstile', label: 'Turnstile', description: '人机验证站点密钥和后端密钥。', info: '适用：登录、申请提交、防刷和反滥用；需说明域名、验证位置和失败处理。' },
+      { id: 'identity_security:waf_rule', resourceType: 'identity_security', resourceSubtype: 'waf_rule', label: 'WAF 规则', description: 'Web 防火墙、Bot 防护和访问策略。', info: '适用：路径防护、Bot 拦截、速率限制和国家/地区策略；需说明影响范围和回滚方案。' },
+      { id: 'identity_security:security_review', resourceType: 'identity_security', resourceSubtype: 'security_review', label: '安全复核', description: '权限、上线、数据和安全配置复核。', info: '适用：上线前检查、权限复核、敏感数据处理和风控确认；需提供变更说明。' },
+      { id: 'identity_security:rbac_role', resourceType: 'identity_security', resourceSubtype: 'rbac_role', label: 'RBAC 角色', description: '角色、权限组和资源访问策略。', info: '适用：管理员、审核员、协作者和服务账号权限；需说明最小权限和有效期。' },
     ],
   },
 ]
@@ -2204,15 +2447,15 @@ function estimatedResourceItemCostParts(item: SubmitResourceApplicationPayload['
   }
 }
 
-function estimatedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
+export function estimatedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
   return estimatedResourceItemCostParts(item).original
 }
 
-function discountedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
+export function discountedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
   return estimatedResourceItemCostParts(item, referenceTime).discounted
 }
 
-function resourceActivityPromotionName(items: SubmitResourceApplicationPayload['resourceItems'], referenceTime = now()) {
+export function resourceActivityPromotionName(items: SubmitResourceApplicationPayload['resourceItems'], referenceTime = now()) {
   const names = new Set<string>()
   for (const item of items) {
     const parts = estimatedResourceItemCostParts(item, referenceTime)
@@ -2234,8 +2477,8 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
 
   if (item.resourceType === 'database') {
     const dbType = item.resourceSubtype
-    if (!['mysql', 'postgresql', 'redis'].includes(dbType))
-      throw new Error('数据库类型必须是 MySQL、PostgreSQL 或 Redis')
+    if (!config.subtypes.includes(dbType))
+      throw new Error('数据库类型不合法')
     if (!readString(item.payload, 'name'))
       throw new Error('请填写数据库实例/库名')
     if (!['dev', 'test', 'staging', 'prod'].includes(readString(item.payload, 'environment')))
@@ -2249,7 +2492,7 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
   if (item.resourceType === 'llm_api_quota') {
     const modelKey = readString(item.payload, 'model')
     if (!isSelectableLlmApiModelKey(modelKey))
-      throw new Error('大模型只能选择 Codex 或 GPT PRO')
+      throw new Error('大模型类型不合法')
     const model = resolveSelectableLlmApiModel(modelKey)
     const budget = Number(item.payload.budgetLimit)
     if (isGptProModel(model)) {
@@ -2285,13 +2528,13 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
   item.payload.discountableEstimatedCost = estimateParts.base
   item.payload.rateLimitChangeCost = estimateParts.rate
 
-  if (['git_repository', 'cicd', 'vpn', 'ip_allowlist', 'server', 'gpu', 'k8s_namespace', 'object_storage'].includes(item.resourceType)) {
+  if (['content_service', 'media_publishing', 'data_productivity', 'quality_review', 'git_repository', 'cicd', 'vpn', 'ip_allowlist', 'notification_channel', 'identity_security', 'server', 'gpu', 'k8s_namespace', 'object_storage'].includes(item.resourceType)) {
     if (!readString(item.payload, 'purpose'))
       throw new Error(`${config.displayName} 请填写访问范围或用途说明`)
   }
 }
 
-function normalizeResourceItems(applicationId: string, items: SubmitResourceApplicationPayload['resourceItems'], createdAt: string, validate = true): ApplicationItem[] {
+export function normalizeResourceItems(applicationId: string, items: SubmitResourceApplicationPayload['resourceItems'], createdAt: string, validate = true): ApplicationItem[] {
   return items.map((item) => {
     const config = assertKnownResourceType(item.resourceType)
     if (validate)

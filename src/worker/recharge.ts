@@ -401,7 +401,7 @@ async function markOrderSucceeded(env: WorkerEnv, outTradeNo: string, tradeNo: s
       .prepare(`
         update recharge_orders
         set status = 'succeeded', ldc_trade_no = ?2, notify_payload = ?3, paid_at = current_timestamp, updated_at = current_timestamp
-        where out_trade_no = ?1
+        where out_trade_no = ?1 and status = 'pending'
       `)
       .bind(outTradeNo, tradeNo, JSON.stringify(notifyPayload))
       .run()
@@ -411,8 +411,12 @@ async function markOrderSucceeded(env: WorkerEnv, outTradeNo: string, tradeNo: s
   await getPool(env).query(`
     update recharge_orders
     set status = 'succeeded', ldc_trade_no = $2, notify_payload = $3, paid_at = now(), updated_at = now()
-    where out_trade_no = $1
+    where out_trade_no = $1 and status = 'pending'
   `, [outTradeNo, tradeNo, JSON.stringify(notifyPayload)])
+}
+
+function rechargeTransactionId(outTradeNo: string) {
+  return `srv_recharge_${outTradeNo.replace(/[^\w-]+/g, '_')}`
 }
 
 function createOutTradeNo() {
@@ -469,6 +473,7 @@ async function creditRechargeOrder(env: WorkerEnv, order: RechargeOrder, notifyP
   const alreadyCredited = await pointTransactionExistsByRef(env, 'recharge', order.out_trade_no)
   if (!alreadyCredited) {
     await appendPointTransaction(env, {
+      id: rechargeTransactionId(order.out_trade_no),
       userId: user.id,
       delta: order.credited_points,
       type: 'recharge',
