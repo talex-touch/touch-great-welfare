@@ -3,13 +3,14 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { useWelfareUiState } from '~/composables/welfare-ui'
+import PageFooter from './PageFooter.vue'
 import SiteHeader from './SiteHeader.vue'
 
 const route = useRoute()
 const { persistenceError, activeSiteBanner } = useWelfareUiState()
 const { toastMessage } = useWelfareFeedback()
 const isDashboardShell = computed(() => route.path.startsWith('/dashboard'))
-const showFooter = computed(() => !route.path.startsWith('/dashboard/apply/create'))
+const showFooter = computed(() => !isDashboardShell.value && !route.path.startsWith('/dashboard/apply/create'))
 </script>
 
 <template>
@@ -32,13 +33,7 @@ const showFooter = computed(() => !route.path.startsWith('/dashboard/apply/creat
         <slot />
       </div>
 
-      <footer v-if="showFooter" class="text-sm text-slate-500 mt-4 pt-2 border-t border-black/8 flex flex-wrap gap-2 items-center justify-between dark:text-slate-400 dark:border-white/10" :class="isDashboardShell ? 'mx-4 pb-4' : ''">
-        <div class="flex gap-2 items-center">
-          <span>Powered by <a class="underline underline-offset-4" href="https://blog.tagzxia.com" target="_blank" rel="noreferrer">TaGzxia</a>.</span>
-          <span>Built with <a class="underline underline-offset-4" href="https://github.com/talex-touch/tuffex" target="_blank" rel="noreferrer">tuffex</a>.</span>
-        </div>
-        <div>Link Welfare Copyright 2026</div>
-      </footer>
+      <PageFooter v-if="showFooter" class="mt-4" />
     </div>
 
     <Transition name="fade">

@@ -28,6 +28,7 @@ declare module 'vue' {
     NotificationSettingsPanel: typeof import('./src/components/welfare/NotificationSettingsPanel.vue')['default']
     NotificationsPanel: typeof import('./src/components/welfare/NotificationsPanel.vue')['default']
     OpenSourcePanel: typeof import('./src/components/welfare/OpenSourcePanel.vue')['default']
+    PageFooter: typeof import('./src/components/welfare/PageFooter.vue')['default']
     PageShell: typeof import('./src/components/welfare/PageShell.vue')['default']
     ProfilePanel: typeof import('./src/components/welfare/ProfilePanel.vue')['default']
     ReviewQueues: typeof import('./src/components/welfare/ReviewQueues.vue')['default']
@@ -45,6 +46,7 @@ declare module 'vue' {
     TheFooter: typeof import('./src/components/TheFooter.vue')['default']
     TheInput: typeof import('./src/components/TheInput.vue')['default']
     TurnstileChallenge: typeof import('./src/components/welfare/TurnstileChallenge.vue')['default']
+    VerificationAttachmentGrid: typeof import('./src/components/welfare/VerificationAttachmentGrid.vue')['default']
     VerificationPanel: typeof import('./src/components/welfare/VerificationPanel.vue')['default']
     WalletPanel: typeof import('./src/components/welfare/WalletPanel.vue')['default']
   }

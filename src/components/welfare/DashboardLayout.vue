@@ -2,11 +2,13 @@
 import { TxGradualBlur } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import PageFooter from './PageFooter.vue'
 import SideNav from './SideNav.vue'
 
 const route = useRoute()
 const isStandaloneInfoPage = computed(() => route.path.startsWith('/dashboard/square'))
 const isApplyCreatePage = computed(() => route.path.startsWith('/dashboard/apply/create'))
+const showFooter = computed(() => !isApplyCreatePage.value)
 </script>
 
 <template>
@@ -17,6 +19,7 @@ const isApplyCreatePage = computed(() => route.path.startsWith('/dashboard/apply
       <TxGradualBlur class="dashboard-content__blur" preset="page-footer" position="bottom" target="parent" height="2.5rem" />
       <div class="dashboard-content__inner">
         <RouterView />
+        <PageFooter v-if="showFooter" class="dashboard-content__footer" />
       </div>
     </main>
   </section>
