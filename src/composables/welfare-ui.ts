@@ -637,8 +637,20 @@ export const pointTransactionSummary = reactive({
   income: 0,
   outcome: 0,
   count: 0,
+  balance: 0,
+  balanceUserId: '',
   loading: false,
   message: '',
+})
+
+export const currentUserPointBalance = computed(() => {
+  const user = welfare.currentUser.value
+  if (!user)
+    return 0
+
+  return pointTransactionSummary.balanceUserId === user.id
+    ? pointTransactionSummary.balance
+    : user.points
 })
 
 export const pricingSummary = {
@@ -722,6 +734,8 @@ export function useWelfareUiState() {
   const heroProgress = computed(() => Math.min(100, Math.round((welfare.state.users.length / 12) * 100) + 24))
   const pendingCount = computed(() => welfare.pendingApplications.value.length + welfare.pendingStudentVerifications.value.length)
   const latestTransactions = computed(() => pointTransactions.value.slice(0, 8))
+  const currentUserPointBalanceText = computed(() => currentUserPointBalance.value.toLocaleString('zh-CN'))
+  const hasCurrentUserPointBalance = (cost: number) => currentUserPointBalance.value >= cost
   const currentUserCoupons = computed(() => welfare.currentUserCoupons.value)
   const availableCurrentUserCoupons = computed(() => {
     const user = welfare.currentUser.value
@@ -1174,6 +1188,7 @@ export function useWelfareUiState() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
+    await refreshCurrentUserPointBalance()
     ensureSelectedResourceItems()
     if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
       throw new Error('请确认所有自动合并的条款')
@@ -1196,6 +1211,7 @@ export function useWelfareUiState() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
+    await refreshCurrentUserPointBalance()
     ensureSelectedResourceItems()
     if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
       throw new Error('请确认所有自动合并的条款')
@@ -2256,6 +2272,8 @@ export function useWelfareUiState() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
+    if (!applicationId)
+      await refreshCurrentUserPointBalance()
 
     const security = applicationId
       ? {}
@@ -2300,6 +2318,7 @@ export function useWelfareUiState() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
+    await refreshCurrentUserPointBalance()
 
     const security = await prepareApplicationSecurity({
       type: applicationForm.type,
@@ -2471,6 +2490,21 @@ export function useWelfareUiState() {
     return status
   }
 
+  async function refreshCurrentUserPointBalance() {
+    const user = welfare.currentUser.value
+    if (!user)
+      return 0
+
+    await welfare.reloadWelfareState()
+    const refreshedUser = welfare.currentUser.value
+    if (!refreshedUser)
+      return 0
+
+    pointTransactionSummary.balance = refreshedUser.points
+    pointTransactionSummary.balanceUserId = refreshedUser.id
+    return refreshedUser.points
+  }
+
   async function refreshPointTransactions(options: Parameters<typeof loadPointTransactions>[0] & { scope?: 'current' | 'admin' } = {}) {
     const user = welfare.currentUser.value
     if (!user)
@@ -2505,8 +2539,11 @@ export function useWelfareUiState() {
       pointTransactionSummary.income = firstResult.summary.income
       pointTransactionSummary.outcome = firstResult.summary.outcome
       pointTransactionSummary.count = firstResult.summary.count
-      if (scope === 'current')
+      if (scope === 'current') {
+        pointTransactionSummary.balance = firstResult.balance
+        pointTransactionSummary.balanceUserId = user.id
         await welfare.reloadWelfareState()
+      }
     }
     catch (error) {
       pointTransactionSummary.message = error instanceof Error ? error.message : '积分流水加载失败'
@@ -2683,6 +2720,9 @@ export function useWelfareUiState() {
     rechargeConfigForm,
     pointTransactions,
     pointTransactionSummary,
+    currentUserPointBalance,
+    currentUserPointBalanceText,
+    hasCurrentUserPointBalance,
     githubAppConfigForm,
     githubAuthorizationForm,
     oauthConfigForm,
@@ -2882,6 +2922,7 @@ export function useWelfareUiState() {
     generateTemporaryAiKey,
     submitImageGenerationApplication,
     submitApplicationWithAiReview,
+    refreshCurrentUserPointBalance,
     refreshNotifications,
     refreshNotificationSettings,
     persistNotificationSettings,

@@ -24,6 +24,7 @@ const redirectPath = computed(() => {
 const {
   hasAdmin,
   currentUser,
+  currentUserPointBalanceText,
   isAdmin,
   publicOAuthProviders,
   oauthLoginForm,
@@ -201,7 +202,7 @@ onMounted(() => {
           可用积分
         </div>
         <div class="text-4xl fw-900 mt-1">
-          {{ currentUser.points.toLocaleString('zh-CN') }}
+          {{ currentUserPointBalanceText }}
         </div>
         <div class="text-xs mt-3 op70">
           LLMApi 仅可选 Codex / GPT PRO；{{ pricingSummary.activityName }}：Image {{ pricingSummary.currentRequestCost.image }} / Pro {{ pricingSummary.currentRequestCost.pro }}；学生认证审核扣 {{ pricingSummary.studentReviewFee }}，成功返还。

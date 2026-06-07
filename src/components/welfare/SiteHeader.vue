@@ -8,6 +8,7 @@ const route = useRoute()
 const router = useRouter()
 const {
   currentUser,
+  currentUserPointBalanceText,
   logout,
   activeSiteBanner,
   notificationList,
@@ -180,11 +181,11 @@ onUnmounted(() => {
                   {{ currentUser.profile.displayName }}
                 </div>
                 <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10">
-                  余额 {{ currentUser.points.toLocaleString('zh-CN') }}
+                  余额 {{ currentUserPointBalanceText }}
                 </span>
               </div>
               <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10 sm:hidden">
-                余额 {{ currentUser.points.toLocaleString('zh-CN') }}
+                余额 {{ currentUserPointBalanceText }}
               </span>
               <span class="text-sm text-white rounded-full bg-slate-950 flex h-9 w-9 shadow-lg items-center justify-center overflow-hidden dark:text-slate-950 dark:bg-white">
                 <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
@@ -203,7 +204,7 @@ onUnmounted(() => {
                   </div>
                   <div class="mt-3 flex gap-2 items-center">
                     <span class="text-xs text-emerald-700 px-2 py-1 rounded-full bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-400/10">{{ userRoleText }}</span>
-                    <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUser.points.toLocaleString('zh-CN') }}</span>
+                    <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUserPointBalanceText }}</span>
                   </div>
                 </div>
                 <div class="py-1 border-b border-black/8 dark:border-white/10">

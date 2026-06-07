@@ -17,6 +17,8 @@ const route = useRoute()
 const {
   currentUser,
   currentUserLevelCard,
+  currentUserPointBalance,
+  currentUserPointBalanceText,
   profileForm,
   invitationForm,
   rechargeForm,
@@ -357,7 +359,7 @@ function transactionBalance(tx: CreditTransaction, index: number) {
   const laterDelta = latestTransactions.value
     .slice(0, index)
     .reduce((sum, item) => sum + item.delta, 0)
-  const balance = (currentUser.value?.points ?? 0) - laterDelta
+  const balance = currentUserPointBalance.value - laterDelta
 
   return Math.max(0, balance).toLocaleString('zh-CN')
 }
@@ -523,7 +525,7 @@ onUnmounted(() => {
             <div class="profile-wallet-main">
               <div>
                 <span class="profile-overline">可用积分</span>
-                <strong>{{ currentUser.points.toLocaleString('zh-CN') }}</strong>
+                <strong>{{ currentUserPointBalanceText }}</strong>
                 <button class="profile-rule-link" type="button" @click="openPricingDialog">
                   查看计费规则
                   <span class="i-carbon-chevron-right" />

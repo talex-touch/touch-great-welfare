@@ -14,6 +14,7 @@ import TurnstileChallenge from './TurnstileChallenge.vue'
 const {
   state,
   currentUser,
+  hasCurrentUserPointBalance,
   applicationForm,
   applicationSecurityForm,
   applicationFiles,
@@ -732,7 +733,7 @@ function classicSubmissionBlockReason() {
     return selectedApplicationPolicyStatus.value.reason || '当前暂不满足提交条件'
   if (selectedApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
     return '请先完成提交安全校验'
-  if ((currentUser.value.points ?? 0) < selectedPrepaidCost.value)
+  if (!hasCurrentUserPointBalance(selectedPrepaidCost.value))
     return `积分不足，本次申请需要预扣 ${formatPoints(selectedPrepaidCost.value)}`
 
   return ''
@@ -761,7 +762,7 @@ function resourceSubmissionBlockReason() {
     return resourceApplicationPolicyStatus.value.reason || '当前暂不满足提交条件'
   if (resourceApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
     return '请先完成提交安全校验'
-  if ((currentUser.value?.points ?? 0) < checkoutPayableEstimate.value)
+  if (!hasCurrentUserPointBalance(checkoutPayableEstimate.value))
     return `积分不足，本单需要预扣 ${formatPoints(checkoutPayableEstimate.value)}`
 
   return ''
