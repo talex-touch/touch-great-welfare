@@ -73,6 +73,10 @@ function clientVisibleWelfareState(state: unknown, currentUserId = '') {
   if (!isRecord(state))
     return state
 
+  const users = Array.isArray(state.users) ? state.users : []
+  const currentUser = users.find(user => isRecord(user) && user.id === currentUserId)
+  const isAdmin = isRecord(currentUser) && currentUser.role === 'admin'
+
   const applicationPolicy = isRecord(state.applicationPolicy)
     ? {
         ...state.applicationPolicy,
@@ -83,7 +87,12 @@ function clientVisibleWelfareState(state: unknown, currentUserId = '') {
   return {
     ...state,
     currentUserId: currentUserId || undefined,
-    users: Array.isArray(state.users) ? state.users.map(user => isRecord(user) ? sanitizeUser(user as unknown as User) : user) : state.users,
+    users: users.map(user => isRecord(user) ? sanitizeUser(user as unknown as User) : user),
+    studentVerifications: isAdmin
+      ? state.studentVerifications
+      : Array.isArray(state.studentVerifications)
+        ? state.studentVerifications.filter(item => isRecord(item) && item.userId === currentUserId)
+        : state.studentVerifications,
     applicationPolicy,
   }
 }
@@ -140,6 +149,64 @@ async function canUpdateSensitiveState(previousState: unknown, request: Request,
   return isRecord(user) && user.role === 'admin'
 }
 
+function isAdminUser(previousState: unknown, userId: string) {
+  if (!isRecord(previousState))
+    return false
+
+  const users = Array.isArray(previousState.users) ? previousState.users : []
+  const user = users.find(item => isRecord(item) && item.id === userId)
+  return isRecord(user) && user.role === 'admin'
+}
+
+function mergeUserScopedRecords(previousValue: unknown, nextValue: unknown, userId: string) {
+  if (!Array.isArray(previousValue) || !Array.isArray(nextValue))
+    return nextValue
+
+  const nextOwnedRecords = nextValue.filter(item => isRecord(item) && item.userId === userId)
+  const previousOtherRecords = previousValue.filter(item => !isRecord(item) || item.userId !== userId)
+  return [...nextOwnedRecords, ...previousOtherRecords]
+}
+
+function mergeUsersForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
+  if (!Array.isArray(previousValue) || !Array.isArray(nextValue))
+    return previousValue
+
+  return previousValue.map((previousUser) => {
+    if (!isRecord(previousUser) || previousUser.id !== userId)
+      return previousUser
+
+    const nextUser = nextValue.find(item => isRecord(item) && item.id === userId)
+    if (!isRecord(nextUser) || !isRecord(nextUser.profile))
+      return previousUser
+
+    return {
+      ...previousUser,
+      profile: {
+        ...(isRecord(previousUser.profile) ? previousUser.profile : {}),
+        displayName: nextUser.profile.displayName,
+        email: nextUser.profile.email,
+        bio: nextUser.profile.bio,
+        githubUsername: nextUser.profile.githubUsername,
+        selectedRepo: nextUser.profile.selectedRepo,
+      },
+    }
+  })
+}
+
+async function mergeClientWritableState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {
+  const userId = await requestUserId(request, env)
+  if (!userId || isAdminUser(previousState, userId))
+    return nextState
+
+  const previousRecord = isRecord(previousState) ? previousState : {}
+  return {
+    ...nextState,
+    users: mergeUsersForNonAdmin(previousRecord.users, nextState.users, userId),
+    studentVerifications: mergeUserScopedRecords(previousRecord.studentVerifications, nextState.studentVerifications, userId),
+    educationEmailChallenges: mergeUserScopedRecords(previousRecord.educationEmailChallenges, nextState.educationEmailChallenges, userId),
+  }
+}
+
 async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {
   if (!isRecord(previousState) || !isRecord(nextState) || !isRecord(nextState.applicationPolicy))
     return nextState
@@ -173,20 +240,20 @@ async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(pre
     : ''
 
   if (nextTurnstileSecretKey && !isMaskedSecret(nextTurnstileSecretKey) && await canUpdateSensitiveState(previousState, request, env)) {
-    return {
+    return await mergeClientWritableState(previousState, {
       ...nextState,
       users: nextUsers,
-    }
+    }, request, env)
   }
 
-  return {
+  return await mergeClientWritableState(previousState, {
     ...nextState,
     users: nextUsers,
     applicationPolicy: {
       ...nextState.applicationPolicy,
       turnstileSecretKey: previousTurnstileSecretKey,
     },
-  } as T
+  } as T, request, env)
 }
 
 async function decodeStoredState(env: WorkerEnv, storedState: unknown) {
