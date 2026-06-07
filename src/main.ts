@@ -67,6 +67,13 @@ router.beforeEach(async (to) => {
       },
     }
   }
+
+  if ((to.path === '/dashboard/admin' || to.path === '/dashboard/coupons') && currentUser?.role !== 'admin') {
+    return {
+      path: '/dashboard/apply',
+      replace: true,
+    }
+  }
 })
 
 app.use(router)

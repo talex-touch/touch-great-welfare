@@ -18,6 +18,8 @@ declare module 'vue' {
     ApplicationResultSubmit: typeof import('./src/components/welfare/ApplicationResultSubmit.vue')['default']
     ApplicationThread: typeof import('./src/components/welfare/ApplicationThread.vue')['default']
     AuthPanel: typeof import('./src/components/welfare/AuthPanel.vue')['default']
+    CollaborationPanel: typeof import('./src/components/welfare/CollaborationPanel.vue')['default']
+    CouponPanel: typeof import('./src/components/welfare/CouponPanel.vue')['default']
     DashboardLayout: typeof import('./src/components/welfare/DashboardLayout.vue')['default']
     DataNotice: typeof import('./src/components/welfare/DataNotice.vue')['default']
     HeroPanel: typeof import('./src/components/welfare/HeroPanel.vue')['default']

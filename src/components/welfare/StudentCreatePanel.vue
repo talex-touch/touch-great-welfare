@@ -222,7 +222,7 @@ function onOpenEducationEmailClient() {
 function onConfirmEducationEmailSent() {
   runSafely(async () => {
     await confirmEducationEmailSent()
-  }, '已验证教育邮箱真实性')
+  }, '已通过收件 API 验证教育邮箱真实性')
 }
 
 function resetEducationEmailProof() {
@@ -259,7 +259,7 @@ onMounted(() => {
             {{ isSupplementMode ? '补充认证资料' : '提交认证申请' }}
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            {{ isSupplementMode ? '根据审核意见更新资料，重新提交后会回到待审核队列，不重复扣除审核费。' : '先选择认证子类并确认材料处理边界，再填写认证信息。草稿会保存在本地浏览器。' }}
+            {{ isSupplementMode ? '根据审核意见更新资料，重新提交后会回到待审核队列，不重复扣除审核费。' : '认证是可选辅助材料，只提高申请通过率和审核优先级；未认证也可以正常提交资源申请。' }}
           </p>
         </div>
       </div>
@@ -273,7 +273,7 @@ onMounted(() => {
       <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
         登录后可以申请认证。
       </div>
-      <div v-else-if="!isSupplementMode && !isVerificationEntryOpen" class="mt-6 p-8 text-center border border-amber-300 rounded-3xl bg-amber-50 text-amber-800 dark:border-amber-400/30 dark:bg-amber-950/30 dark:text-amber-200">
+      <div v-else-if="!isSupplementMode && !isVerificationEntryOpen" class="text-amber-800 mt-6 p-8 text-center border border-amber-300 rounded-3xl bg-amber-50 dark:text-amber-200 dark:border-amber-400/30 dark:bg-amber-950/30">
         {{ verificationClosedReason }}
       </div>
 
@@ -312,6 +312,10 @@ onMounted(() => {
           </div>
 
           <DataNotice mode="compact" title="填写前提示" timing="before" />
+
+          <div class="verification-submit-warning">
+            认证不是申请门槛。提交认证材料可以帮助管理员更快判断身份背景和公益属性，但未通过或未提交认证也可以继续按常规流程申请资源。
+          </div>
 
           <div class="verification-type-lock">
             <div class="verification-type-lock__main">
@@ -450,12 +454,12 @@ onMounted(() => {
                 <TxButton variant="primary" :disabled="!studentForm.educationEmail" @click="onOpenEducationEmailClient">
                   一键发邮件
                 </TxButton>
-                <TxButton variant="secondary" :disabled="!educationEmailVerificationForm.challengeId || educationEmailVerificationForm.verified" @click="onConfirmEducationEmailSent">
-                  {{ educationEmailVerificationForm.verified ? '已验证真实性' : '我已发送验证码' }}
+                <TxButton variant="secondary" :disabled="!educationEmailVerificationForm.challengeId || educationEmailVerificationForm.verified || educationEmailVerificationForm.verifying" @click="onConfirmEducationEmailSent">
+                  {{ educationEmailVerificationForm.verified ? '已验证真实性' : educationEmailVerificationForm.verifying ? '验证中' : '检查收件验证' }}
                 </TxButton>
               </div>
               <p class="field-hint">
-                需要使用该教育邮箱向 {{ EDUCATION_EMAIL_REVIEW_INBOX }} 发送包含唯一证明码的邮件；该邮件只作为辅助证明，管理员仍会人工复核材料。
+                需要使用该教育邮箱向 {{ EDUCATION_EMAIL_REVIEW_INBOX }} 发送包含唯一证明码的邮件；提交前必须通过收件 API 验证，管理员仍会人工复核材料。
               </p>
               <p v-if="educationEmailVerificationForm.subject" class="field-hint">
                 邮件主题：{{ educationEmailVerificationForm.subject }}

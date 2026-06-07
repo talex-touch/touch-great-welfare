@@ -37,7 +37,7 @@ const userRoleText = computed(() => {
   if (currentUser.value?.role === 'admin')
     return '管理员'
   if (currentUser.value?.role === 'reviewer')
-    return '众包审核'
+    return '协作处理员'
   return '用户'
 })
 const forcedAnnouncement = computed(() => notificationList.value.find((item) => {

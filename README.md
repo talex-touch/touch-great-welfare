@@ -132,11 +132,16 @@ Cloudflare binding：
 
 ```bash
 pnpm exec wrangler secret put NOTIFY_SECRET_KEY
+# 如启用 /api/webhooks/:provider，再配置全局或 provider 级 Webhook Secret：
+pnpm exec wrangler secret put WEBHOOK_SECRET
+# 或 WEBHOOK_SECRET_GITHUB、WEBHOOK_SECRET_STRIPE 等 provider 级变量
 ```
 
-`NOTIFY_SECRET_KEY` 是后台保存密钥类配置的加密根密钥，生产环境必须稳定保存；更换它会导致已保存的加密配置无法解密。
+`NOTIFY_SECRET_KEY` 是后台保存密钥类配置的加密根密钥，同时用于签发服务端 Session，生产环境必须稳定保存；更换它会导致已保存的加密配置无法解密、现有登录 Session 失效。未配置该密钥时，Worker 不再使用默认 Session 密钥。
 
-本地 `wrangler dev` 使用 `.dev.vars` 读取这个根密钥。复制 `.dev.vars.example` 后填入真实值即可：
+安全约束：管理员后台保存的第三方外连地址（GitHub/OAuth、AI Provider、Sub2API、DoneMail、LINUX DO Credit 等）必须使用 HTTPS，且不能指向 localhost、内网网段或 link-local 地址；Webhook 请求必须携带 HMAC-SHA256 签名。
+
+本地 `wrangler dev` 使用 `.dev.vars` 读取这些 Worker Secret。复制 `.dev.vars.example` 后填入真实值即可：
 
 ```bash
 cp .dev.vars.example .dev.vars

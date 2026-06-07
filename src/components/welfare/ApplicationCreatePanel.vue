@@ -2,7 +2,7 @@
 import type { RequestKind, ResourceTermId, ResourceType } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
 import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, canApplyResourceType, defaultLlmApiDuration, formatBytes, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
@@ -12,6 +12,7 @@ import RichTextEditor from './RichTextEditor.vue'
 import TurnstileChallenge from './TurnstileChallenge.vue'
 
 const {
+  state,
   currentUser,
   applicationForm,
   applicationSecurityForm,
@@ -23,7 +24,7 @@ const {
   selectedApplicationPolicyStatus,
   resourceApplicationPolicyStatus,
   selectedPrepaidCost,
-  availableCurrentUserCoupons,
+  availableResourceCoupons,
   totalApplicationBytes,
   activeRequestCount,
   canCreateRequest,
@@ -34,12 +35,15 @@ const {
   removeResourceApplicationItem,
   ensureSelectedResourceItems,
   resetResourceApplicationForm,
+  fillResourceApplicationFormFromDraft,
   resetApplicationFiles,
   resetApplicationSecurity,
   setApplicationTurnstileToken,
   submitApplicationWithAiReview,
+  updateResourceDraft,
 } = useWelfareUiState()
 
+const route = useRoute()
 const router = useRouter()
 const { runSafely } = useWelfareFeedback()
 type ApplicationCreateMode = Extract<RequestKind, 'image' | 'pro' | 'resource'>
@@ -48,11 +52,29 @@ const currentStep = ref<'types' | 'materials' | 'terms'>('types')
 const expectedDatePickerVisible = ref(false)
 const isTermsDialogOpen = ref(false)
 const activeResourceTermTab = ref<ResourceTermId | ''>('')
+const submitReadyMessage = ref('')
 const expectedEffectivePreset = ref('after_approval')
 const applicationDraftKey = 'welfare:resource-application-draft'
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
+let stopPersistLocalDraft: (() => void) | undefined
 const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
+const draftApplicationId = computed(() => {
+  const raw = route.query.draft
+  return Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '')
+})
+const editingDraftApplication = computed(() => {
+  if (!draftApplicationId.value)
+    return undefined
+
+  return state.applications.find(item =>
+    item.id === draftApplicationId.value
+    && item.type === 'resource'
+    && item.status === 'draft'
+    && item.userId === currentUser.value?.id,
+  )
+})
+const isEditingDraft = computed(() => !!editingDraftApplication.value)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
 const visibleResourceTypeConfigs = computed(() => resourceTypeConfigs.value.filter(config => isResourceTypeAvailable(config.resourceType)))
 const applicationModeItems: Array<{ type: ApplicationCreateMode, label: string, icon: string }> = [
@@ -389,10 +411,13 @@ function itemDiscountedEstimate(item: ResourceDraftItem) {
 
 const totalUndiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemUndiscountedEstimate(item), 0))
 const totalDiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemDiscountedEstimate(item), 0))
-const selectedResourceCoupon = computed(() => availableCurrentUserCoupons.value.find(coupon => coupon.id === resourceApplicationForm.selectedCouponId))
+const selectedResourceCoupon = computed(() => availableResourceCoupons.value.find(coupon => coupon.id === resourceApplicationForm.selectedCouponId))
 const couponDiscountAmount = computed(() => {
   if (!selectedResourceCoupon.value)
     return 0
+
+  if (selectedResourceCoupon.value.discountType === 'fixed_points')
+    return Math.min(totalDiscountedEstimate.value, selectedResourceCoupon.value.discountAmount ?? 0)
 
   return Math.max(0, totalDiscountedEstimate.value - Math.max(1, Math.ceil(totalDiscountedEstimate.value * selectedResourceCoupon.value.discountRate)))
 })
@@ -490,7 +515,7 @@ const expectedTimeValue = computed({
   },
 })
 
-watch(availableCurrentUserCoupons, () => {
+watch(availableResourceCoupons, () => {
   if (resourceApplicationForm.selectedCouponId && !selectedResourceCoupon.value)
     resourceApplicationForm.selectedCouponId = ''
 })
@@ -536,8 +561,12 @@ function sanitizeDefaultFormChoices() {
     expectedEffectivePreset.value = 'after_approval'
 }
 
-function couponDiscountText(rate: number) {
-  return `${Number(rate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
+function couponDiscountText(coupon: { discountType?: string, discountRate: number, discountAmount?: number }) {
+  if (coupon.discountType === 'fixed_points')
+    return `抵扣 ${coupon.discountAmount ?? 0} 积分`
+  if (coupon.discountType === 'fixed_ldc')
+    return `抵扣 ${coupon.discountAmount ?? 0} LDC`
+  return `${Number(coupon.discountRate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
 }
 
 function rateDiscountText(rate: number) {
@@ -700,9 +729,15 @@ function selectApplicationMode(type: ApplicationCreateMode) {
   applicationMode.value = type
   applicationForm.type = type
   resetApplicationSecurity()
+  submitReadyMessage.value = ''
+}
+
+function markSubmitReady() {
+  submitReadyMessage.value = '已准备就绪'
 }
 
 function onSubmitClassicApplication() {
+  markSubmitReady()
   runSafely(async () => {
     await submitApplicationWithAiReview()
     resetApplicationFiles()
@@ -714,19 +749,28 @@ function onSaveDraft() {
   runSafely(async () => {
     sanitizeResourceDurations()
     sanitizeLlmItems()
-    await submitResourceApplication(true)
-    clearLocalDraft(applicationDraftKey)
+    if (editingDraftApplication.value)
+      await updateResourceDraft(editingDraftApplication.value.id, true)
+    else
+      await submitResourceApplication(true)
+    if (!isEditingDraft.value)
+      clearLocalDraft(applicationDraftKey)
     resetApplicationFiles()
     router.push('/dashboard/apply')
-  }, '草稿已保存')
+  }, isEditingDraft.value ? '草稿已更新' : '草稿已保存')
 }
 
 function onSubmitResourceApplication() {
+  markSubmitReady()
   runSafely(async () => {
     sanitizeResourceDurations()
     sanitizeLlmItems()
-    await submitResourceApplication(false)
-    clearLocalDraft(applicationDraftKey)
+    if (editingDraftApplication.value)
+      await updateResourceDraft(editingDraftApplication.value.id, false)
+    else
+      await submitResourceApplication(false)
+    if (!isEditingDraft.value)
+      clearLocalDraft(applicationDraftKey)
     resetApplicationFiles()
     router.push('/dashboard/apply')
   }, '资源申请已提交，等待各审批组逐项审批')
@@ -736,16 +780,24 @@ onMounted(() => {
   applicationForm.type = applicationMode.value
   resetResourceApplicationForm()
   resetApplicationSecurity()
-  restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
+  if (editingDraftApplication.value) {
+    fillResourceApplicationFormFromDraft(editingDraftApplication.value)
+    currentStep.value = 'materials'
+  }
+  else {
+    restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
+  }
   sanitizeDefaultFormChoices()
   sanitizeSelectedResourceTypes()
   sanitizeResourceDurations()
   sanitizeLlmItems()
-  persistLocalDraft(applicationDraftKey, resourceApplicationForm)
+  if (!isEditingDraft.value)
+    stopPersistLocalDraft = persistLocalDraft(applicationDraftKey, resourceApplicationForm)
 })
 
 onBeforeUnmount(() => {
   setTermsDialogScrollLock(false)
+  stopPersistLocalDraft?.()
 })
 </script>
 
@@ -758,12 +810,12 @@ onBeforeUnmount(() => {
         </button>
         <div class="min-w-0">
           <h2 class="resource-create-title">
-            {{ currentModeTitle }} 申请
+            {{ isEditingDraft ? '编辑资源草稿' : `${currentModeTitle} 申请` }}
           </h2>
         </div>
       </div>
 
-      <div class="application-mode-tabs" role="tablist" aria-label="申请类型">
+      <div v-if="!isEditingDraft" class="application-mode-tabs" role="tablist" aria-label="申请类型">
         <button
           v-for="item in applicationModeItems"
           :key="item.type"
@@ -799,6 +851,10 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="isClassicApplication" class="classic-application-form mt-5">
+        <div class="verification-submit-warning">
+          学生认证、一线认证和开源认证都是可选辅助信息，只用于提高通过率和审核优先级；未认证也可以提交本申请。
+        </div>
+
         <label class="gap-2 grid">
           <span class="field-label">申请标题</span>
           <TxInput v-model="applicationForm.title" />
@@ -855,6 +911,9 @@ onBeforeUnmount(() => {
 
         <div class="classic-application-footer">
           <span class="field-hint">当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
+          <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
+            {{ submitReadyMessage }}
+          </span>
           <TxButton variant="primary" :disabled="isClassicSubmissionBlocked" @click="onSubmitClassicApplication">
             提交并预扣 {{ formatPoints(selectedPrepaidCost) }}
           </TxButton>
@@ -863,6 +922,10 @@ onBeforeUnmount(() => {
 
       <div v-else class="mt-5 space-y-4">
         <template v-if="currentStep === 'types'">
+          <div class="verification-submit-warning">
+            各类认证不是资源申请门槛。已认证会作为审核参考并可能提高通过率；未认证用户仍可按常规流程提交申请。
+          </div>
+
           <div
             class="resource-consent-card"
             :class="{ 'is-accepted': hasAcceptedAllResourceTerms }"
@@ -1159,7 +1222,7 @@ onBeforeUnmount(() => {
                 <span>优惠券</span>
                 <TxSelect v-model="resourceApplicationForm.selectedCouponId" panel-background="pure">
                   <TxSelectItem value="" label="不使用优惠券" />
-                  <TxSelectItem v-for="coupon in availableCurrentUserCoupons" :key="coupon.id" :value="coupon.id" :label="`${coupon.name} · ${couponDiscountText(coupon.discountRate)}`" />
+                  <TxSelectItem v-for="coupon in availableResourceCoupons" :key="coupon.id" :value="coupon.id" :label="`${coupon.name} · ${couponDiscountText(coupon)}`" />
                 </TxSelect>
               </label>
             </div>
@@ -1213,10 +1276,13 @@ onBeforeUnmount(() => {
             <TxButton variant="secondary" @click="onSaveDraft">
               保存草稿
             </TxButton>
-            <div class="flex gap-3">
+            <div class="flex gap-3 items-center">
               <TxButton variant="ghost" @click="currentStep = 'materials'">
                 上一步
               </TxButton>
+              <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
+                {{ submitReadyMessage }}
+              </span>
               <TxButton variant="primary" :disabled="isResourceSubmissionBlocked" @click="onSubmitResourceApplication">
                 提交并预扣 {{ formatPoints(checkoutPayableEstimate) }}
               </TxButton>

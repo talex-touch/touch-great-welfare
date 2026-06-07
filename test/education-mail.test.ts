@@ -1,6 +1,13 @@
 import type { WelfareState } from '../src/composables/welfare'
-import { describe, expect, it } from 'vitest'
-import { verifyEducationMailChallengesInState } from '../src/worker/education-mail'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.stubGlobal('fetch', vi.fn(async () =>
+  new Response(JSON.stringify({ state: {} }), {
+    headers: { 'content-type': 'application/json' },
+  }),
+))
+
+const { verifyEducationMailChallengesInState } = await import('../src/worker/education-mail')
 
 function state(): WelfareState {
   return {

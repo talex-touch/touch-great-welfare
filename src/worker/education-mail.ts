@@ -3,10 +3,12 @@ import type { EducationEmailChallenge, StudentVerification, WelfareState } from 
 import { EDUCATION_EMAIL_REVIEW_INBOX } from '~/composables/welfare'
 import {
   assertAdminRequest,
+  assertSafeExternalUrl,
   assertWelfareState,
   boolValue,
   errorResponse,
   fetchWithTimeout,
+  getAuthenticatedRequest,
   json,
   maskSecret,
   normalizeUrlBase,
@@ -32,6 +34,10 @@ interface SaveEducationMailConfigPayload {
   clearAdminKey?: boolean
   inboxAddress?: string
   lookbackHours?: number
+}
+
+interface VerifyEducationMailChallengePayload {
+  challengeId?: string
 }
 
 interface DoneMailMessage {
@@ -238,7 +244,7 @@ async function listDoneMailMessages(config: Awaited<ReturnType<typeof getEffecti
   if (!config.baseUrl || !config.adminKey)
     throw new Error('DoneMail 配置不完整')
 
-  const url = new URL(`${config.baseUrl}/api/mails`)
+  const url = new URL(`${assertSafeExternalUrl(config.baseUrl).toString().replace(/\/+$/, '')}/api/mails`)
   for (const [key, value] of Object.entries(params)) {
     if (value)
       url.searchParams.set(key, value)
@@ -345,6 +351,73 @@ async function syncEducationEmailChallenges(env: WorkerEnv) {
   }
 }
 
+async function verifyEducationEmailChallengeForUser(request: Request, env: WorkerEnv) {
+  const config = await getEffectiveEducationMailConfig(env)
+  if (!config.enabled)
+    throw new Error('教育邮箱收件验证未启用')
+  if (!configured(config))
+    throw new Error('教育邮箱收件配置不完整')
+
+  const payload = await readJson<VerifyEducationMailChallengePayload>(request)
+  const challengeId = payload.challengeId?.trim()
+  if (!challengeId)
+    throw new Error('教育邮箱证明码不存在')
+
+  const { state, user } = await getAuthenticatedRequest(request, env)
+  const challenge = state.educationEmailChallenges.find(item => item.id === challengeId && item.userId === user.id)
+  if (!challenge)
+    throw new Error('教育邮箱证明码不存在')
+
+  const expiresAt = new Date(challenge.expiresAt).getTime()
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now())
+    throw new Error('教育邮箱证明码已过期，请重新生成')
+
+  if (challenge.verifiedAt) {
+    return {
+      verified: true,
+      challengeId: challenge.id,
+      email: challenge.email,
+      verifiedAt: challenge.verifiedAt,
+    }
+  }
+
+  const messages = await listDoneMailMessages(config, {
+    limit: '10',
+    from: challenge.email,
+    to: config.inboxAddress,
+    content: challenge.code,
+  })
+  const mail = messages.find(item => mailContainsChallenge(item, challenge))
+  if (!mail) {
+    return {
+      verified: false,
+      challengeId: challenge.id,
+      email: challenge.email,
+    }
+  }
+
+  const verifiedAt = now()
+  challenge.submittedAt = challenge.submittedAt || verifiedAt
+  challenge.verifiedAt = verifiedAt
+  const verification = findVerificationForChallenge(state, challenge)
+  if (verification) {
+    verification.educationEmailVerified = true
+    verification.educationEmailVerifiedAt = verifiedAt
+    verification.educationEmailVerificationSource = 'mail_auto'
+    verification.educationEmailChallengeId = challenge.id
+  }
+  await writeWelfareState(env, state)
+
+  return {
+    verified: true,
+    challengeId: challenge.id,
+    email: challenge.email,
+    verifiedAt,
+    mailId: mail.id || '',
+    receivedAt: mail.receivedAt,
+  }
+}
+
 export async function verifyEducationMailChallengesInState(
   state: WelfareState,
   messages: DoneMailMessage[],
@@ -404,6 +477,9 @@ export async function handleEducationMailRequest(request: Request, env: WorkerEn
       await assertAdminRequest(request, env)
       return json(await syncEducationEmailChallenges(env))
     }
+
+    if (path === '/verify' && request.method === 'POST')
+      return json(await verifyEducationEmailChallengeForUser(request, env))
 
     return json({ error: 'Method Not Allowed' }, 405)
   }

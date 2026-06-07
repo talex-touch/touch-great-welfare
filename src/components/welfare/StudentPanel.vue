@@ -39,7 +39,7 @@ function verificationStatusText(status: string) {
             认证申请
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            用户可提交学生认证或一线认证材料等待审核。为了避免反复无效审核，每次审核先扣 {{ STUDENT_REVIEW_FEE }} 积分；成功后返还。
+            学生认证和一线认证只用于提高申请通过率和审核优先级，不是提交资源申请的前置条件。为了避免反复无效审核，每次审核先扣 {{ STUDENT_REVIEW_FEE }} 积分；成功后返还。
           </p>
         </div>
         <div class="flex flex-wrap gap-3 items-center">

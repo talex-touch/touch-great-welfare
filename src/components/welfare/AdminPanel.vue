@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
-import type { CreditTransaction, RequestKind, StudentVerification, WelfareApplication } from '~/composables/welfare'
+import type { CreditTransaction, RequestKind, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { formatDate, formatPoints, isGptProModel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { saveWelfareState } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, useWelfareUiState } from '~/composables/welfare-ui'
+import RichTextEditor from './RichTextEditor.vue'
+import RichTextView from './RichTextView.vue'
 
 const {
   state,
@@ -34,6 +36,12 @@ const {
   pointTransactions,
   pointTransactionSummary,
   activeAdminTab,
+  pendingCollaborationApplications,
+  pendingDeliveryReviewApplications,
+  collaborationReviewDraftFor,
+  deliveryReviewDraftFor,
+  reviewCollaborationApplication,
+  reviewDeliveryResult,
   adjustUserPoints,
   refreshRechargeConfig,
   persistRechargeConfig,
@@ -183,7 +191,7 @@ const dashboardActivityTypeText: Record<string, string> = {
 const userRoleFilterOptions = [
   { value: ALL_FILTER, label: '全部角色' },
   { value: 'admin', label: '管理员' },
-  { value: 'reviewer', label: '众包审核' },
+  { value: 'reviewer', label: '协作处理员' },
   { value: 'user', label: '普通用户' },
 ]
 
@@ -335,6 +343,34 @@ function signedPoints(value: number) {
   return value > 0 ? `+${formatPoints(value)}` : formatPoints(value)
 }
 
+function couponDiscountText(rate: number) {
+  return `${Number(rate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
+}
+
+function couponStatusText(coupon: UserCoupon) {
+  if (coupon.usedAt)
+    return '已使用'
+  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() <= Date.now())
+    return '已过期'
+  return '可用'
+}
+
+function couponSourceText(source: string) {
+  if (source === 'manual')
+    return '管理员发放'
+  if (source === 'daily_streak_7')
+    return '连续签到 7 天'
+  return '连续签到 3 天'
+}
+
+function couponStatusTone(coupon: UserCoupon) {
+  if (coupon.usedAt)
+    return 'info'
+  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() <= Date.now())
+    return 'danger'
+  return 'success'
+}
+
 function llmBudgetText(application: WelfareApplication) {
   if (!application.llmApiBudgetUsd)
     return '-'
@@ -355,7 +391,7 @@ function roleText(role: string) {
   if (role === 'admin')
     return '管理员'
   if (role === 'reviewer')
-    return '众包审核'
+    return '协作处理员'
   return '普通用户'
 }
 
@@ -702,6 +738,9 @@ const selectedUserDetail = computed(() => {
   const transactions = [...adminTransactions.value]
     .filter(item => item.userId === user.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const coupons = [...state.coupons]
+    .filter(item => item.userId === user.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const spendTransactions = transactions.filter(item => item.delta < 0)
   const incomeTransactions = transactions.filter(item => item.delta > 0)
   const pipelineSpend = spendTransactions.filter(isPipelineSpendTransaction)
@@ -753,6 +792,7 @@ const selectedUserDetail = computed(() => {
     applications,
     studentVerifications,
     transactions,
+    coupons,
     spendTransactions,
     pipelineSpend,
     latestRecords,
@@ -781,6 +821,7 @@ const selectedUserDetail = computed(() => {
 const selectedUserRecentApplications = computed<WelfareApplication[]>(() => selectedUserDetail.value?.applications.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserRecentStudents = computed<StudentVerification[]>(() => selectedUserDetail.value?.studentVerifications.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserRecentTransactions = computed<CreditTransaction[]>(() => selectedUserDetail.value?.transactions.slice(0, USER_DETAIL_LIMIT) ?? [])
+const selectedUserRecentCoupons = computed<UserCoupon[]>(() => selectedUserDetail.value?.coupons.slice(0, USER_DETAIL_LIMIT) ?? [])
 
 const selectedUserConsumptionRows = computed(() => selectedUserDetail.value?.spendTransactions.slice(0, USER_DETAIL_LIMIT).map(item => ({
   transaction: item,
@@ -1323,7 +1364,15 @@ function onAdjustPoints(userId: string) {
 }
 
 function onToggleReviewer(userId: string, enabled: boolean) {
-  runSafely(() => setUserCrowdReviewer(userId, enabled), enabled ? '已授予众包审核权限' : '已收回众包审核权限')
+  runSafely(() => setUserCrowdReviewer(userId, enabled), enabled ? '已授予协作处理员权限' : '已收回协作处理员权限')
+}
+
+function onReviewCollaborationApplication(id: string, status: 'approved' | 'rejected') {
+  runSafely(() => reviewCollaborationApplication(id, status), status === 'approved' ? '已开通协作处理员权限' : '已退回协作处理员申请')
+}
+
+function onReviewDeliveryResult(applicationId: string, approved: boolean) {
+  runSafely(() => reviewDeliveryResult(applicationId, approved), approved ? '交付复核通过，奖励已发放' : '交付复核未通过，任务已重新开放')
 }
 
 function llmApiRegionLabel(region: string) {
@@ -1484,6 +1533,9 @@ function notificationChannelLabel(channel: string) {
 }
 
 onMounted(() => {
+  if (!isAdmin.value)
+    return
+
   refreshSiteBannerConfig()
   refreshSystemConfigForm()
   refreshRechargeConfig().catch(() => {})
@@ -1500,7 +1552,21 @@ onMounted(() => {
 
 <template>
   <section>
-    <TxCard class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
+    <TxCard v-if="!isAdmin" class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
+      <div class="flex flex-wrap gap-4 items-start justify-between">
+        <div>
+          <h2 class="text-3xl fw-900 tracking-tight">
+            无权访问
+          </h2>
+          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+            当前账号不能查看管理员后台数据。
+          </p>
+        </div>
+        <TxStatusBadge text="权限不足" status="warning" />
+      </div>
+    </TxCard>
+
+    <TxCard v-else class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
       <div class="flex flex-wrap gap-4 items-start justify-between">
         <div>
           <h2 class="text-3xl fw-900 tracking-tight">
@@ -1994,211 +2060,229 @@ onMounted(() => {
             AI 配置
           </template>
 
-          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
-              <span class="i-carbon-ai-status" />
-              AI Provider
-            </div>
-            <div class="text-sm mb-5 p-3 rounded-2xl" :class="aiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-              {{ aiConfigForm.configured ? `API Key 已配置：${aiConfigForm.apiKeyMasked}` : '尚未配置 OpenAI 兼容 API Key，AI 调用不可用。' }}
-            </div>
-            <p class="text-xs text-slate-500 leading-5 mb-5 dark:text-slate-400">
-              用户侧 NewAPI Key 管理复用这里的 NewAPI 管理 Key、管理地址、用户 ID、默认 TTL 与配额。
-            </p>
-            <div class="gap-5 grid lg:grid-cols-2">
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">接口基础地址</span>
-                <TxInput v-model="aiConfigForm.baseUrl" :disabled="!isAdmin || aiConfigForm.loading" placeholder="https://api.openai.com/v1" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">OpenAI / 兼容 API Key</span>
-                <TxInput v-model="aiConfigForm.apiKey" :disabled="!isAdmin || aiConfigForm.loading" type="password" :placeholder="aiConfigForm.apiKeyMasked || '保存到服务端加密配置'" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">NewAPI 管理 Key</span>
-                <TxInput v-model="aiConfigForm.newapiKey" :disabled="!isAdmin || aiConfigForm.loading" type="password" :placeholder="aiConfigForm.newapiKeyMasked || '用于生成临时 Key，可选'" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">图片模型</span>
-                <TxInput v-model="aiConfigForm.imageModel" :disabled="!isAdmin || aiConfigForm.loading" placeholder="gpt-image-1.5 或 image2" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">申请审核模型</span>
-                <TxInput v-model="aiConfigForm.reviewModel" :disabled="!isAdmin || aiConfigForm.loading" placeholder="gpt-4.1-mini" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">NewAPI 管理地址</span>
-                <TxInput v-model="aiConfigForm.newapiManagementBaseUrl" :disabled="!isAdmin || aiConfigForm.loading" placeholder="默认复用接口基础地址" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">NewAPI 用户 ID</span>
-                <TxInput v-model="aiConfigForm.newapiUserId" :disabled="!isAdmin || aiConfigForm.loading" placeholder="可选" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">临时 Key TTL（分钟）</span>
-                <TxInput v-model="aiConfigForm.temporaryKeyTtlMinutes" type="number" :disabled="!isAdmin || aiConfigForm.loading" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">临时 Key 配额</span>
-                <TxInput v-model="aiConfigForm.temporaryKeyQuota" type="number" :disabled="!isAdmin || aiConfigForm.loading" />
-              </label>
-            </div>
+          <TxTabs
+            class="admin-config-tabs mt-4"
+            default-value="ai-provider"
+            placement="top"
+            indicator-variant="block"
+            indicator-motion="glide"
+            :content-padding="0"
+            :content-scrollable="false"
+            auto-height
+            borderless
+          >
+            <TxTabItem name="ai-provider" icon-class="i-carbon-ai-status">
+              <template #name>
+                AI Provider
+              </template>
 
-            <div class="mt-6 p-4 border border-indigo-200 rounded-3xl bg-indigo-50/70 dark:border-indigo-400/20 dark:bg-indigo-950/20">
-              <div class="flex flex-wrap gap-3 items-start justify-between">
-                <div>
-                  <div class="text-sm text-indigo-950 fw-900 dark:text-indigo-100">
-                    LLMApi 模型价格
-                  </div>
-                  <p class="field-hint mt-1">
-                    用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。Codex 按 USD 额度配置，GPT PRO 复用额度字段表示对话轮次，默认 5 轮、7 天有效。
-                  </p>
+              <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+                  <span class="i-carbon-ai-status" />
+                  AI Provider
                 </div>
-                <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
-                  {{ aiConfigForm.llmApiModels.filter(model => model.enabled).length }} 个启用
-                </span>
-              </div>
-              <div class="mt-4 space-y-4">
-                <div v-for="model in aiConfigForm.llmApiModels" :key="model.key" class="p-4 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="text-sm mb-5 p-3 rounded-2xl" :class="aiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+                  {{ aiConfigForm.configured ? `API Key 已配置：${aiConfigForm.apiKeyMasked}` : '尚未配置 OpenAI 兼容 API Key，AI 调用不可用。' }}
+                </div>
+                <p class="text-xs text-slate-500 leading-5 mb-5 dark:text-slate-400">
+                  用户侧 NewAPI Key 管理复用这里的 NewAPI 管理 Key、管理地址、用户 ID、默认 TTL 与配额。
+                </p>
+                <div class="gap-5 grid lg:grid-cols-2">
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">接口基础地址</span>
+                    <TxInput v-model="aiConfigForm.baseUrl" :disabled="!isAdmin || aiConfigForm.loading" placeholder="https://api.openai.com/v1" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">OpenAI / 兼容 API Key</span>
+                    <TxInput v-model="aiConfigForm.apiKey" :disabled="!isAdmin || aiConfigForm.loading" type="password" :placeholder="aiConfigForm.apiKeyMasked || '保存到服务端加密配置'" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">NewAPI 管理 Key</span>
+                    <TxInput v-model="aiConfigForm.newapiKey" :disabled="!isAdmin || aiConfigForm.loading" type="password" :placeholder="aiConfigForm.newapiKeyMasked || '用于生成临时 Key，可选'" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">图片模型</span>
+                    <TxInput v-model="aiConfigForm.imageModel" :disabled="!isAdmin || aiConfigForm.loading" placeholder="gpt-image-1.5 或 image2" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">申请审核模型</span>
+                    <TxInput v-model="aiConfigForm.reviewModel" :disabled="!isAdmin || aiConfigForm.loading" placeholder="gpt-4.1-mini" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">NewAPI 管理地址</span>
+                    <TxInput v-model="aiConfigForm.newapiManagementBaseUrl" :disabled="!isAdmin || aiConfigForm.loading" placeholder="默认复用接口基础地址" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">NewAPI 用户 ID</span>
+                    <TxInput v-model="aiConfigForm.newapiUserId" :disabled="!isAdmin || aiConfigForm.loading" placeholder="可选" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">临时 Key TTL（分钟）</span>
+                    <TxInput v-model="aiConfigForm.temporaryKeyTtlMinutes" type="number" :disabled="!isAdmin || aiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">临时 Key 配额</span>
+                    <TxInput v-model="aiConfigForm.temporaryKeyQuota" type="number" :disabled="!isAdmin || aiConfigForm.loading" />
+                  </label>
+                </div>
+
+                <div class="mt-6 p-4 border border-indigo-200 rounded-3xl bg-indigo-50/70 dark:border-indigo-400/20 dark:bg-indigo-950/20">
                   <div class="flex flex-wrap gap-3 items-start justify-between">
                     <div>
-                      <div class="text-sm fw-900">
-                        {{ model.name }} · {{ model.provider }}
+                      <div class="text-sm text-indigo-950 fw-900 dark:text-indigo-100">
+                        LLMApi 模型价格
                       </div>
-                      <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
-                        {{ llmApiRegionLabel(model.region) }}模型 · {{ model.description }}
+                      <p class="field-hint mt-1">
+                        用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。Codex 按 USD 额度配置，GPT PRO 复用额度字段表示对话轮次，默认 5 轮、7 天有效。
+                      </p>
+                    </div>
+                    <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
+                      {{ aiConfigForm.llmApiModels.filter(model => model.enabled).length }} 个启用
+                    </span>
+                  </div>
+                  <div class="mt-4 space-y-4">
+                    <div v-for="model in aiConfigForm.llmApiModels" :key="model.key" class="p-4 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                      <div class="flex flex-wrap gap-3 items-start justify-between">
+                        <div>
+                          <div class="text-sm fw-900">
+                            {{ model.name }} · {{ model.provider }}
+                          </div>
+                          <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                            {{ llmApiRegionLabel(model.region) }}模型 · {{ model.description }}
+                          </div>
+                        </div>
+                        <TxCheckbox v-model="model.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" label="启用" />
+                      </div>
+                      <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-7">
+                        <label class="gap-2 grid">
+                          <span class="field-label">价格（积分/USD）</span>
+                          <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">{{ model.key === 'gpt-pro' ? '默认轮次' : '默认额度 USD' }}</span>
+                          <TxNumberInput v-model="model.defaultBudgetUsd" :min="model.minBudgetUsd" :max="model.maxBudgetUsd" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">{{ model.key === 'gpt-pro' ? '最小轮次' : '最小 USD' }}</span>
+                          <TxNumberInput v-model="model.minBudgetUsd" :min="1" :max="model.maxBudgetUsd" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">{{ model.key === 'gpt-pro' ? '最大轮次' : '最大 USD' }}</span>
+                          <TxNumberInput v-model="model.maxBudgetUsd" :min="model.minBudgetUsd" :max="100000" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">IP / RPM</span>
+                          <div class="gap-2 grid grid-cols-2">
+                            <TxNumberInput v-model="model.ipLimit" :min="1" :max="50" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                            <TxNumberInput v-model="model.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                          </div>
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">默认 TPM</span>
+                          <TxNumberInput v-model="model.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">并发</span>
+                          <TxNumberInput v-model="model.concurrencyLimit" :min="1" :max="100" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
+                        </label>
                       </div>
                     </div>
-                    <TxCheckbox v-model="model.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" label="启用" />
-                  </div>
-                  <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-7">
-                    <label class="gap-2 grid">
-                      <span class="field-label">价格（积分/USD）</span>
-                      <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">{{ model.key === 'gpt-pro' ? '默认轮次' : '默认额度 USD' }}</span>
-                      <TxNumberInput v-model="model.defaultBudgetUsd" :min="model.minBudgetUsd" :max="model.maxBudgetUsd" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">{{ model.key === 'gpt-pro' ? '最小轮次' : '最小 USD' }}</span>
-                      <TxNumberInput v-model="model.minBudgetUsd" :min="1" :max="model.maxBudgetUsd" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">{{ model.key === 'gpt-pro' ? '最大轮次' : '最大 USD' }}</span>
-                      <TxNumberInput v-model="model.maxBudgetUsd" :min="model.minBudgetUsd" :max="100000" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">IP / RPM</span>
-                      <div class="gap-2 grid grid-cols-2">
-                        <TxNumberInput v-model="model.ipLimit" :min="1" :max="50" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        <TxNumberInput v-model="model.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                      </div>
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">默认 TPM</span>
-                      <TxNumberInput v-model="model.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">并发</span>
-                      <TxNumberInput v-model="model.concurrencyLimit" :min="1" :max="100" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                    </label>
                   </div>
                 </div>
+
+                <div class="mt-5 flex flex-wrap gap-3 items-center">
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="aiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" aria-label="启用 AI Provider" />
+                    启用 AI Provider
+                  </label>
+                  <TxButton variant="primary" :disabled="!isAdmin || aiConfigForm.loading" @click="saveAiProviderConfig">
+                    {{ aiConfigForm.loading ? '读取 / 保存中...' : '保存 AI 配置' }}
+                  </TxButton>
+                </div>
+                <div v-if="aiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                  <div>{{ aiConfigForm.message }}</div>
+                  <pre v-if="aiConfigForm.envPreview" class="mt-2 whitespace-pre-wrap break-all">{{ JSON.stringify(aiConfigForm.envPreview, null, 2) }}</pre>
+                </div>
+                <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
+                  图片生成结果写入 AI_ASSETS R2；接口密钥保存到服务端加密配置。
+                </div>
               </div>
-            </div>
+            </TxTabItem>
 
-            <div class="mt-5 flex flex-wrap gap-3 items-center">
-              <label class="text-sm flex gap-2 items-center">
-                <TxCheckbox v-model="aiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" aria-label="启用 AI Provider" />
-                启用 AI Provider
-              </label>
-              <TxButton variant="primary" :disabled="!isAdmin || aiConfigForm.loading" @click="saveAiProviderConfig">
-                {{ aiConfigForm.loading ? '读取 / 保存中...' : '保存 AI 配置' }}
-              </TxButton>
-            </div>
-            <div v-if="aiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
-              <div>{{ aiConfigForm.message }}</div>
-              <pre v-if="aiConfigForm.envPreview" class="mt-2 whitespace-pre-wrap break-all">{{ JSON.stringify(aiConfigForm.envPreview, null, 2) }}</pre>
-            </div>
-            <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-              图片生成结果写入 AI_ASSETS R2；接口密钥保存到服务端加密配置。
-            </div>
-          </div>
-        </TxTabItem>
+            <TxTabItem name="sub2api" icon-class="i-carbon-api-1">
+              <template #name>
+                Sub2API
+              </template>
 
-        <TxTabItem :name="ADMIN_TABS.sub2api" icon-class="i-carbon-api-1">
-          <template #name>
-            Sub2API
-          </template>
-
-          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
-              <span class="i-carbon-api-1" />
-              Sub2API 直连配置
-            </div>
-            <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-              {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在个人信息页生成和删除 API Key。' : '尚未配置 Sub2API 地址或数据库连接。' }}
-            </div>
-            <div class="gap-5 grid lg:grid-cols-2">
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">Sub2API 基础地址</span>
-                <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="https://sub2api.example.com" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">Admin API Key</span>
-                <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
-                <span class="field-hint">用于查询/创建 Sub2API 用户；服务端加密保存。</span>
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">Sub2API 数据库连接</span>
-                <TxInput v-model="sub2ApiConfigForm.databaseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.databaseUrlMasked || 'postgresql://...'" />
-                <span class="field-hint">用于生成/删除 API Key 的受控兜底；只在 Worker 后端使用。</span>
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">默认分组 ID</span>
-                <TxInput v-model="sub2ApiConfigForm.defaultGroupId" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="可选" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">默认额度（USD）</span>
-                <TxInput v-model="sub2ApiConfigForm.defaultQuotaUsd" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">默认有效期（天）</span>
-                <TxInput v-model="sub2ApiConfigForm.defaultExpiresInDays" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">默认 5h 限额（USD）</span>
-                <TxInput v-model="sub2ApiConfigForm.defaultRateLimit5h" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">默认日限额（USD）</span>
-                <TxInput v-model="sub2ApiConfigForm.defaultRateLimit1d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">默认 7 日限额（USD）</span>
-                <TxInput v-model="sub2ApiConfigForm.defaultRateLimit7d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-              </label>
-            </div>
-            <div class="mt-5 flex flex-wrap gap-3 items-center">
-              <label class="text-sm flex gap-2 items-center">
-                <TxCheckbox v-model="sub2ApiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用 Sub2API" />
-                启用 Sub2API
-              </label>
-              <TxButton variant="primary" :disabled="!isAdmin || sub2ApiConfigForm.loading" @click="saveSub2ApiProviderConfig">
-                {{ sub2ApiConfigForm.loading ? '读取 / 保存中...' : '保存 Sub2API 配置' }}
-              </TxButton>
-              <TxButton variant="secondary" :disabled="!isAdmin || sub2ApiConfigForm.testing || sub2ApiConfigForm.loading" @click="testSub2ApiProviderConfig">
-                {{ sub2ApiConfigForm.testing ? '测试中...' : '测试连接' }}
-              </TxButton>
-            </div>
-            <div v-if="sub2ApiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
-              {{ sub2ApiConfigForm.message }}
-            </div>
-            <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-              用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。
-            </div>
-          </div>
+              <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+                  <span class="i-carbon-api-1" />
+                  Sub2API 直连配置
+                </div>
+                <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在个人信息页生成和删除 API Key。' : '尚未配置 Sub2API 地址或数据库连接。' }}
+                </div>
+                <div class="gap-5 grid lg:grid-cols-2">
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">Sub2API 基础地址</span>
+                    <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="https://sub2api.example.com" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">Admin API Key</span>
+                    <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
+                    <span class="field-hint">用于查询/创建 Sub2API 用户；服务端加密保存。</span>
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">Sub2API 数据库连接</span>
+                    <TxInput v-model="sub2ApiConfigForm.databaseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.databaseUrlMasked || 'postgresql://...'" />
+                    <span class="field-hint">用于生成/删除 API Key 的受控兜底；只在 Worker 后端使用。</span>
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认分组 ID</span>
+                    <TxInput v-model="sub2ApiConfigForm.defaultGroupId" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="可选" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认额度（USD）</span>
+                    <TxInput v-model="sub2ApiConfigForm.defaultQuotaUsd" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认有效期（天）</span>
+                    <TxInput v-model="sub2ApiConfigForm.defaultExpiresInDays" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认 5h 限额（USD）</span>
+                    <TxInput v-model="sub2ApiConfigForm.defaultRateLimit5h" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认日限额（USD）</span>
+                    <TxInput v-model="sub2ApiConfigForm.defaultRateLimit1d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认 7 日限额（USD）</span>
+                    <TxInput v-model="sub2ApiConfigForm.defaultRateLimit7d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+                  </label>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-3 items-center">
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="sub2ApiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用 Sub2API" />
+                    启用 Sub2API
+                  </label>
+                  <TxButton variant="primary" :disabled="!isAdmin || sub2ApiConfigForm.loading" @click="saveSub2ApiProviderConfig">
+                    {{ sub2ApiConfigForm.loading ? '读取 / 保存中...' : '保存 Sub2API 配置' }}
+                  </TxButton>
+                  <TxButton variant="secondary" :disabled="!isAdmin || sub2ApiConfigForm.testing || sub2ApiConfigForm.loading" @click="testSub2ApiProviderConfig">
+                    {{ sub2ApiConfigForm.testing ? '测试中...' : '测试连接' }}
+                  </TxButton>
+                </div>
+                <div v-if="sub2ApiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                  {{ sub2ApiConfigForm.message }}
+                </div>
+                <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
+                  用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。
+                </div>
+              </div>
+            </TxTabItem>
+          </TxTabs>
         </TxTabItem>
 
         <TxTabItem :name="ADMIN_TABS.educationMail" icon-class="i-carbon-email">
@@ -2497,6 +2581,113 @@ onMounted(() => {
           </template>
 
           <div class="space-y-5">
+            <div class="gap-5 grid xl:grid-cols-2">
+              <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-lg fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-user-certification" />
+                      协作处理员申请
+                    </div>
+                    <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                      审核通过后，用户将获得协作任务认领权限。
+                    </p>
+                  </div>
+                  <span class="admin-pill" :class="statusPillClass('pending')">
+                    {{ pendingCollaborationApplications.length }} 待审
+                  </span>
+                </div>
+                <div class="mt-4 space-y-4">
+                  <div v-if="!pendingCollaborationApplications.length" class="admin-empty">
+                    暂无协作处理员申请
+                  </div>
+                  <div v-for="item in pendingCollaborationApplications" :key="item.id" class="admin-review-card">
+                    <div class="flex flex-wrap gap-3 items-start justify-between">
+                      <div>
+                        <div class="fw-900">
+                          {{ userDisplayName(item.userId) }}
+                        </div>
+                        <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                          {{ formatDate(item.createdAt) }} 提交
+                        </div>
+                      </div>
+                      <span class="admin-pill" :class="statusPillClass(item.status)">
+                        待审核
+                      </span>
+                    </div>
+                    <RichTextView :content="item.reason" class="rich-text-preview mt-3" />
+                    <RichTextEditor v-model="collaborationReviewDraftFor(item.id).reply" :min-height="110" class="mt-3" placeholder="管理员回复，可说明通过原因或退回建议" />
+                    <div class="mt-3 flex flex-wrap gap-3 justify-end">
+                      <TxButton size="sm" variant="secondary" @click="onReviewCollaborationApplication(item.id, 'rejected')">
+                        退回
+                      </TxButton>
+                      <TxButton size="sm" variant="primary" @click="onReviewCollaborationApplication(item.id, 'approved')">
+                        通过并授权
+                      </TxButton>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-lg fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-review" />
+                      协作交付复核
+                    </div>
+                    <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                      复核通过时填写奖励积分，系统会写入积分流水并标记申请完成。
+                    </p>
+                  </div>
+                  <span class="admin-pill" :class="statusPillClass('pending')">
+                    {{ pendingDeliveryReviewApplications.length }} 待复核
+                  </span>
+                </div>
+                <div class="mt-4 space-y-4">
+                  <div v-if="!pendingDeliveryReviewApplications.length" class="admin-empty">
+                    暂无待复核交付
+                  </div>
+                  <div v-for="item in pendingDeliveryReviewApplications" :key="item.id" class="admin-review-card">
+                    <div class="flex flex-wrap gap-3 items-start justify-between">
+                      <div class="min-w-0">
+                        <div class="fw-900 truncate">
+                          {{ item.title }}
+                        </div>
+                        <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                          {{ item.type.toUpperCase() }} · 协作处理员 {{ userDisplayName(item.deliveryAssigneeId || '') }} · {{ formatDate(item.deliverySubmittedAt) }}
+                        </div>
+                      </div>
+                      <span class="admin-pill" :class="statusPillClass(item.deliveryReviewStatus || 'pending')">
+                        待复核
+                      </span>
+                    </div>
+                    <div v-for="message in (item.messages ?? []).filter(message => message.type === 'result_submission').slice(-1)" :key="message.id" class="mt-3">
+                      <RichTextView :content="message.content" class="rich-text-preview" />
+                    </div>
+                    <div class="mt-3 gap-3 grid md:grid-cols-[150px_1fr]">
+                      <label class="gap-2 grid">
+                        <span class="field-label">奖励积分</span>
+                        <TxInput v-model="deliveryReviewDraftFor(item.id).rewardPoints" type="number" placeholder="100" />
+                      </label>
+                      <label class="gap-2 grid">
+                        <span class="field-label">复核说明</span>
+                        <RichTextEditor v-model="deliveryReviewDraftFor(item.id).note" :min-height="100" placeholder="通过或退回原因，会写入申请沟通记录" />
+                      </label>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-3 justify-end">
+                      <TxButton size="sm" variant="secondary" @click="onReviewDeliveryResult(item.id, false)">
+                        复核不通过
+                      </TxButton>
+                      <TxButton size="sm" variant="primary" @click="onReviewDeliveryResult(item.id, true)">
+                        通过并发奖
+                      </TxButton>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
               <div class="flex flex-wrap gap-3 items-start justify-between">
                 <div>
@@ -2582,8 +2773,8 @@ onMounted(() => {
                       {{ roleText(row.user.role) }}
                     </span>
                     <label v-if="row.user.role !== 'admin'" class="text-xs text-slate-500 flex gap-2 items-center dark:text-slate-400" @click.stop>
-                      <TxCheckbox :model-value="row.user.role === 'reviewer'" variant="checkmark" :disabled="!isAdmin" aria-label="众包审核" @change="value => onToggleReviewer(row.user.id, value)" />
-                      众包审核
+                      <TxCheckbox :model-value="row.user.role === 'reviewer'" variant="checkmark" :disabled="!isAdmin" aria-label="协作处理员" @change="value => onToggleReviewer(row.user.id, value)" />
+                      协作处理员
                     </label>
                   </div>
                   <div class="text-xs text-slate-600 leading-5 dark:text-slate-300">
@@ -2727,6 +2918,48 @@ onMounted(() => {
                       </div>
                     </section>
 
+                    <section class="admin-detail-section mt-5">
+                      <div class="flex flex-wrap gap-3 items-start justify-between">
+                        <div>
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-percentage" />
+                            优惠券管理
+                          </div>
+                          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                            为当前用户手动发放可用于资源申请的优惠券，0 天有效期表示长期有效。
+                          </p>
+                        </div>
+                        <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">
+                          共 {{ selectedUserDetail.coupons.length }} 张
+                        </span>
+                      </div>
+                      <div class="mt-4 p-4 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5">
+                        <span class="text-sm text-slate-600 dark:text-slate-300">创建券种、生成兑换码和统一发放请前往独立优惠券中心。</span>
+                        <RouterLink class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30" to="/dashboard/coupons">
+                          打开优惠券中心
+                        </RouterLink>
+                      </div>
+                      <div class="mt-5 space-y-3">
+                        <div v-if="!selectedUserRecentCoupons.length" class="admin-empty">
+                          暂无优惠券记录
+                        </div>
+                        <div v-for="coupon in selectedUserRecentCoupons" :key="coupon.id" class="admin-history-row">
+                          <span class="admin-pill" :class="statusPillClass(couponStatusTone(coupon))">
+                            {{ couponStatusText(coupon) }}
+                          </span>
+                          <div class="flex-1 min-w-0">
+                            <div class="fw-900 truncate">
+                              {{ coupon.name }} · {{ couponDiscountText(coupon.discountRate) }}
+                            </div>
+                            <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                              {{ couponSourceText(coupon.source) }} · {{ coupon.expiresAt ? `有效至 ${formatDate(coupon.expiresAt)}` : '长期有效' }}
+                            </div>
+                          </div>
+                          <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(coupon.createdAt) }}</span>
+                        </div>
+                      </div>
+                    </section>
+
                     <div class="admin-user-account-grid mt-5">
                       <section class="admin-detail-section">
                         <div class="admin-detail-title">
@@ -2785,8 +3018,8 @@ onMounted(() => {
                         </div>
                         <div class="mt-4 flex flex-wrap gap-3 items-center">
                           <label v-if="selectedUserDetail.user.role !== 'admin'" class="admin-action-check">
-                            <TxCheckbox :model-value="selectedUserDetail.user.role === 'reviewer'" variant="checkmark" :disabled="!isAdmin" aria-label="众包审核权限" @change="value => selectedUserDetail && onToggleReviewer(selectedUserDetail.user.id, value)" />
-                            众包审核权限
+                            <TxCheckbox :model-value="selectedUserDetail.user.role === 'reviewer'" variant="checkmark" :disabled="!isAdmin" aria-label="协作处理员权限" @change="value => selectedUserDetail && onToggleReviewer(selectedUserDetail.user.id, value)" />
+                            协作处理员权限
                           </label>
                           <TxButton
                             size="sm"

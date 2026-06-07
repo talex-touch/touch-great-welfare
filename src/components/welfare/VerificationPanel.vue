@@ -4,7 +4,7 @@ import { TxButton, TxCard, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@tale
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailVerificationLabel, formatBytes, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -181,7 +181,7 @@ function onRejectStudent(id: string) {
             认证申请
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            选择需要提交或维护的认证类型；材料类认证共用人工审核和审核费返还规则。
+            选择需要提交或维护的认证类型；认证只用于提高申请通过率和审核优先级，不是提交资源申请的前置条件。
           </p>
         </div>
         <TxStatusBadge :text="currentUser ? '已登录' : '未登录'" :status="currentUser ? 'success' : 'warning'" />
@@ -192,6 +192,9 @@ function onRejectStudent(id: string) {
       </div>
 
       <div v-else class="mt-6 gap-4 grid lg:grid-cols-3">
+        <div class="verification-submit-warning lg:col-span-3">
+          认证是可选辅助材料。未完成学生认证、一线认证或开源认证也可以正常提交申请；管理员会结合申请内容、材料完整度和资源余量综合判断。
+        </div>
         <div
           v-for="card in verificationCards"
           :key="card.key"
@@ -373,6 +376,23 @@ function onRejectStudent(id: string) {
             <section class="verification-detail-section mt-4">
               <h3>材料说明</h3>
               <RichTextView :content="selectedVerification.notes" class="rich-text-preview" />
+            </section>
+
+            <section class="verification-detail-section mt-4">
+              <h3>附件材料</h3>
+              <div v-if="!selectedVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
+                暂无附件。
+              </div>
+              <div v-else class="mt-3 space-y-2">
+                <div
+                  v-for="file in selectedVerification.attachments"
+                  :key="file.id"
+                  class="p-3 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5"
+                >
+                  <span class="fw-800 break-all">{{ file.name }}</span>
+                  <span class="text-sm text-slate-500 dark:text-slate-400">{{ formatBytes(file.size) }} · {{ file.type || '未知类型' }}</span>
+                </div>
+              </div>
             </section>
 
             <section class="verification-detail-section mt-4">

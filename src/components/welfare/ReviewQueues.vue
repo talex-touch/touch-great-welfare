@@ -84,7 +84,7 @@ function onApproveApplication(id: string, type: string) {
       return
     }
 
-    answerApplication(id, reviewDrafts[id] ?? '')
+    await answerApplication(id, reviewDrafts[id] ?? '')
     delete reviewDrafts[id]
     delete rejectFraudulentDrafts[id]
   }, type === 'image' ? '图片申请已通过并开始生成' : '申请已通过并完成答复')
@@ -108,7 +108,7 @@ function onRequestSupplement(id: string) {
 
 function onReviewResourceItem(applicationId: string, itemId: string) {
   runSafely(() => {
-    approveResourceItem(applicationId, itemId)
+    return approveResourceItem(applicationId, itemId)
   }, '资源明细审批结果已保存')
 }
 
@@ -161,7 +161,7 @@ function crowdDecisionTone(decision: string) {
 function onSubmitCrowdReview(id: string) {
   runSafely(() => {
     submitCrowdReviewDraft(id)
-  }, '众包审核建议已提交')
+  }, '协作建议已提交')
 }
 
 function onApproveStudent(id: string) {
@@ -204,10 +204,10 @@ onMounted(() => {
   <div v-if="(isAdmin && (showPro || showStudent)) || (canCrowdReview && showPro)" class="gap-6 grid" :class="showPro && showStudent && isAdmin ? 'xl:grid-cols-2' : ''">
     <TxCard v-if="showPro && (isAdmin || canCrowdReview)" class="solid-panel" background="pure" :padding="22" :radius="28">
       <h3 class="text-2xl fw-900">
-        {{ isAdmin ? '申请审核队列' : '众包审核建议' }}
+        {{ isAdmin ? '申请审核队列' : '协作建议' }}
       </h3>
       <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-        {{ isAdmin ? '所有申请创建时均已完成预扣；管理员通过时完成答复，退回时返还申请预扣后按规则处理。只有明确判定造假或不实包装时，才勾选造假限制。' : '众包审核只开放 Pro 申请的 AI 初审摘要、等级和基础元数据；最终通过或退回仍由管理员处理。' }}
+        {{ isAdmin ? '所有申请创建时均已完成预扣；管理员通过时完成答复，退回时返还申请预扣后按规则处理。只有明确判定造假或不实包装时，才勾选造假限制。' : '协作建议只开放 Pro 申请的 AI 初审摘要、等级和基础元数据；最终通过或退回仍由管理员处理。' }}
       </p>
       <div class="mt-4 space-y-3">
         <div v-if="!visibleReviewApplications.length" class="text-sm text-slate-500 p-8 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
@@ -303,7 +303,7 @@ onMounted(() => {
             </div>
             <RichTextView v-if="isAdmin" :content="item.description" class="rich-text-preview mt-3" />
             <div v-else class="text-xs text-slate-500 leading-5 mt-3 p-3 rounded-2xl bg-slate-50 dark:text-slate-400 dark:bg-white/5">
-              众包审核不展示申请正文、邮箱、附件清单和学生材料；请基于标题、AI 初审摘要、等级和公开标签给出建议。
+              协作建议不展示申请正文、邮箱、附件清单和学生材料；请基于标题、AI 初审摘要、等级和公开标签给出建议。
             </div>
             <div v-if="isAdmin && item.type === 'resource'" class="mt-4 space-y-3">
               <div class="text-sm fw-900">

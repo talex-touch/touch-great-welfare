@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { RequestKind, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxFlipOverlay, TxStatusBadge } from '@talex-touch/tuffex'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatDate, formatPoints } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
@@ -127,8 +127,17 @@ const visibleMineRows = computed(() => visibleMineApplications.value.map(toAppli
 const visibleReviewRows = computed(() => visibleReviewApplicationsRows.value.map(toApplicationRow))
 const showReviewSection = computed(() => isAdmin.value || canCrowdReview.value)
 
+watch(showReviewSection, (canShowReview) => {
+  if (!canShowReview && activeSection.value === 'review')
+    activeSection.value = 'mine'
+})
+
 function goCreateApplication() {
   router.push('/dashboard/apply/create')
+}
+
+function editApplicationDraft(id: string) {
+  router.push(`/dashboard/apply/create?draft=${encodeURIComponent(id)}`)
 }
 
 function openApplicationDialog(id: string, event: MouseEvent) {
@@ -236,7 +245,7 @@ function applicationRowTags(item: WelfareApplication) {
 
 <template>
   <section class="application-dashboard space-y-6">
-    <div class="application-dashboard__hero">
+    <div v-if="showReviewSection" class="application-dashboard__hero">
       <div class="min-w-0">
         <div class="application-dashboard__tabs" role="tablist" aria-label="申请列表切换">
           <button
@@ -289,6 +298,9 @@ function applicationRowTags(item: WelfareApplication) {
               </option>
               <option value="pending_review">
                 待审核
+              </option>
+              <option value="draft">
+                草稿
               </option>
               <option value="in_review">
                 资源审批中
@@ -361,7 +373,17 @@ function applicationRowTags(item: WelfareApplication) {
             <span>消耗 {{ formatPoints(row.item.cost) }}</span>
             <span>{{ row.email }}</span>
             <span>{{ row.date }}</span>
-            <span class="application-row-arrow i-carbon-chevron-right" aria-hidden="true" />
+            <span>
+              <TxButton
+                v-if="row.item.status === 'draft' && row.item.type === 'resource'"
+                size="sm"
+                variant="secondary"
+                @click.stop="editApplicationDraft(row.item.id)"
+              >
+                编辑草稿
+              </TxButton>
+              <i v-else class="application-row-arrow i-carbon-chevron-right" aria-hidden="true" />
+            </span>
           </button>
           <button
             v-if="filteredMineApplications.length > 5"

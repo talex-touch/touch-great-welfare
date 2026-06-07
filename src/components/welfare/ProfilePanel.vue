@@ -21,7 +21,10 @@ const {
   invitationForm,
   rechargeForm,
   rechargeFeatureEnabled,
+  availableRechargeCoupons,
   systemConfig,
+  collaborationApplicationForm,
+  currentUserCollaborationApplication,
   notificationSettingsForm,
   pointTransactions,
   latestTransactions,
@@ -39,6 +42,7 @@ const {
   enableBrowserPush,
   refreshPointTransactions,
   startRecharge,
+  submitCollaborationApplicationFromForm,
   refreshRechargeStatus,
   reloadWelfareState,
   lastRechargeStatus,
@@ -94,8 +98,17 @@ const roleText = computed(() => {
   if (currentUser.value?.role === 'admin')
     return '管理员'
   if (currentUser.value?.role === 'reviewer')
-    return '众包审核'
+    return '协作处理员'
   return '用户'
+})
+const collaborationApplicationStatus = computed(() => {
+  if (currentUser.value?.role === 'reviewer' || currentUser.value?.role === 'admin')
+    return { text: '已开通', status: 'success' as const }
+  if (currentUserCollaborationApplication.value?.status === 'pending')
+    return { text: '审核中', status: 'warning' as const }
+  if (currentUserCollaborationApplication.value?.status === 'rejected')
+    return { text: '未通过', status: 'danger' as const }
+  return { text: '未申请', status: 'info' as const }
 })
 const levelProgress = computed(() => {
   if (!currentUserLevelCard.value)
@@ -264,8 +277,20 @@ function saveNotifications() {
   runSafely(() => persistNotificationSettings(), '通知设置已保存')
 }
 
+function submitCollaborationApplication() {
+  runSafely(() => submitCollaborationApplicationFromForm(), '协作处理员申请已提交')
+}
+
 function startBrowserPush() {
   runSafely(() => enableBrowserPush(), '浏览器 Push 已启用')
+}
+
+function couponDiscountText(coupon: { discountType?: string, discountRate: number, discountAmount?: number }) {
+  if (coupon.discountType === 'fixed_ldc')
+    return `抵扣 ${coupon.discountAmount ?? 0} LDC`
+  if (coupon.discountType === 'fixed_points')
+    return `抵扣 ${coupon.discountAmount ?? 0} 积分`
+  return `${Number(coupon.discountRate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
 }
 
 function recharge() {
@@ -610,6 +635,24 @@ onUnmounted(() => {
                   编辑资料
                 </TxButton>
               </div>
+
+              <div class="profile-setting-card profile-setting-card--profile">
+                <div class="profile-setting-title">
+                  <span class="i-carbon-task-add profile-setting-icon" />
+                  协作处理员
+                </div>
+                <p>通过后可认领已审核通过的 Codex / Pro 交付任务，完成后由管理员复核奖励。</p>
+                <div class="profile-setting-action">
+                  <TxStatusBadge :text="collaborationApplicationStatus.text" :status="collaborationApplicationStatus.status" size="sm" />
+                </div>
+                <div v-if="currentUser?.role !== 'reviewer' && currentUser?.role !== 'admin'" class="mt-3 gap-3 grid">
+                  <RichTextEditor v-model="collaborationApplicationForm.reason" :min-height="120" placeholder="说明你的可协作方向、技术栈、可处理任务类型和时间安排" />
+                  <TxButton size="sm" variant="primary" :disabled="collaborationApplicationForm.loading || currentUserCollaborationApplication?.status === 'pending'" @click="submitCollaborationApplication">
+                    {{ collaborationApplicationForm.loading ? '提交中...' : currentUserCollaborationApplication?.status === 'pending' ? '等待审核' : '提交申请' }}
+                  </TxButton>
+                </div>
+                <RichTextView v-if="currentUserCollaborationApplication?.reply" :content="currentUserCollaborationApplication.reply" class="rich-text-preview mt-3" />
+              </div>
             </div>
           </TxTabItem>
 
@@ -853,8 +896,20 @@ onUnmounted(() => {
                 />
               </label>
 
+              <label v-if="availableRechargeCoupons.length" class="profile-dialog-field">
+                <span class="profile-section-label">充值优惠券</span>
+                <select v-model="rechargeForm.selectedCouponId" class="form-select">
+                  <option value="">
+                    不使用优惠券
+                  </option>
+                  <option v-for="coupon in availableRechargeCoupons" :key="coupon.id" :value="coupon.id">
+                    {{ coupon.name }} · {{ couponDiscountText(coupon) }}
+                  </option>
+                </select>
+              </label>
+
               <p class="profile-form-hint">
-                {{ rechargePreviewPoints ? `预计到账约 ${rechargePreviewPoints.toLocaleString('zh-CN')} 积分` : '充值到账以异步通知验签为准' }}
+                {{ rechargePreviewPoints ? `预计到账约 ${rechargePreviewPoints.toLocaleString('zh-CN')} 积分，优惠券仅抵扣实付 LDC` : '充值到账以异步通知验签为准' }}
               </p>
 
               <p class="profile-dialog-rule">

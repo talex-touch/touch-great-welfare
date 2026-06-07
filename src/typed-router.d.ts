@@ -50,6 +50,8 @@ declare module 'vue-router/auto-routes' {
       | '/dashboard/apply'
       | '/dashboard/apply/[id]'
       | '/dashboard/apply/create'
+      | '/dashboard/collaboration'
+      | '/dashboard/coupons'
       | '/dashboard/notification-settings'
       | '/dashboard/notifications'
       | '/dashboard/open-source'
@@ -93,6 +95,20 @@ declare module 'vue-router/auto-routes' {
     '/dashboard/apply/create': RouteRecordInfo<
       '/dashboard/apply/create',
       '/dashboard/apply/create',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/collaboration': RouteRecordInfo<
+      '/dashboard/collaboration',
+      '/dashboard/collaboration',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard/coupons': RouteRecordInfo<
+      '/dashboard/coupons',
+      '/dashboard/coupons',
       Record<never, never>,
       Record<never, never>,
       | never
@@ -222,6 +238,8 @@ declare module 'vue-router/auto-routes' {
         | '/dashboard/apply'
         | '/dashboard/apply/[id]'
         | '/dashboard/apply/create'
+        | '/dashboard/collaboration'
+        | '/dashboard/coupons'
         | '/dashboard/notification-settings'
         | '/dashboard/notifications'
         | '/dashboard/open-source'
@@ -264,6 +282,18 @@ declare module 'vue-router/auto-routes' {
     'src/pages/dashboard/apply/create.vue': {
       routes:
         | '/dashboard/apply/create'
+      views:
+        | never
+    }
+    'src/pages/dashboard/collaboration.vue': {
+      routes:
+        | '/dashboard/collaboration'
+      views:
+        | never
+    }
+    'src/pages/dashboard/coupons.vue': {
+      routes:
+        | '/dashboard/coupons'
       views:
         | never
     }

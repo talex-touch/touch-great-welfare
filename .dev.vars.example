@@ -1,5 +1,9 @@
 # Copy this file to `.dev.vars` for `wrangler dev`.
 # Do not commit `.dev.vars`; it contains local Worker secrets.
 
-# Required for encrypting secrets saved from the admin console.
+# Required for encrypting admin-saved secrets and signing sessions.
+# Use a stable 32+ byte random value; rotating it invalidates sessions and encrypted configs.
 NOTIFY_SECRET_KEY=replace-with-32-byte-random-secret
+
+# Optional: required only when enabling /api/webhooks/:provider endpoints.
+WEBHOOK_SECRET=replace-with-provider-webhook-secret

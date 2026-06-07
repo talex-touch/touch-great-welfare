@@ -4,7 +4,7 @@ import { authenticatedUserId } from './session'
 import { readWelfareState } from './welfare-state'
 
 export interface AuthenticatedRequest {
-  state: Partial<WelfareState>
+  state: WelfareState
   user: User
 }
 
@@ -120,6 +120,58 @@ export function boolValue(value: unknown) {
   return value === true || value === 1 || value === '1' || value === 'true'
 }
 
-export function normalizeUrlBase(value: string) {
-  return value.trim().replace(/\/+$/, '')
+function isPrivateHost(hostname: string) {
+  const host = hostname.toLowerCase()
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local'))
+    return true
+  if (host === '0.0.0.0' || host === '::' || host === '::1')
+    return true
+
+  const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (!ipv4)
+    return false
+
+  const [, aText, bText] = ipv4
+  const a = Number(aText)
+  const b = Number(bText)
+  return a === 10
+    || a === 127
+    || a === 0
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+}
+
+export function assertSafeExternalUrl(value: string, options: { allowHttp?: boolean, allowLocalhost?: boolean } = {}) {
+  const text = value.trim()
+  if (!text)
+    throw new Error('URL 不能为空')
+
+  let url: URL
+  try {
+    url = new URL(text)
+  }
+  catch {
+    throw new Error('URL 格式无效')
+  }
+
+  const allowedProtocols = options.allowHttp ? ['https:', 'http:'] : ['https:']
+  if (!allowedProtocols.includes(url.protocol))
+    throw new Error('URL 必须使用 HTTPS')
+  if (!options.allowLocalhost && isPrivateHost(url.hostname))
+    throw new Error('URL 不能指向本地或内网地址')
+  url.username = ''
+  url.password = ''
+  return url
+}
+
+export function normalizeUrlBase(value: string, options: { allowHttp?: boolean, allowLocalhost?: boolean } = {}) {
+  const text = value.trim().replace(/\/+$/, '')
+  if (!text)
+    return ''
+  const url = assertSafeExternalUrl(text, options)
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  url.search = ''
+  url.hash = ''
+  return url.toString().replace(/\/+$/, '')
 }

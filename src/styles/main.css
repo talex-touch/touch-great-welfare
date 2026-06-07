@@ -75,6 +75,24 @@ select {
     linear-gradient(180deg, #f8f7f3 0%, #f3f1ea 100%);
 }
 
+.app-shell--login {
+  overflow: hidden;
+  background: linear-gradient(180deg, #fffefa 0%, #fbf7ee 100%);
+}
+
+.app-shell--login::before {
+  content: '';
+  position: absolute;
+  right: max(-6rem, -5vw);
+  bottom: 0;
+  z-index: 0;
+  width: clamp(58rem, 102vw, 150rem);
+  aspect-ratio: 2400 / 620;
+  background: url('/illustrations/login-bottom-ornament.png') right bottom / contain no-repeat;
+  opacity: 0.92;
+  pointer-events: none;
+}
+
 .app-main {
   flex: 1;
 }
@@ -136,6 +154,14 @@ select {
     radial-gradient(circle at 12% 10%, rgba(52, 211, 153, 0.08), transparent 28rem),
     radial-gradient(circle at 88% 0%, rgba(14, 165, 233, 0.08), transparent 26rem),
     linear-gradient(180deg, #08090b 0%, #0c0d10 100%);
+}
+
+.dark .app-shell--login {
+  background: linear-gradient(180deg, #0b0c0f 0%, #11100c 100%);
+}
+
+.dark .app-shell--login::before {
+  opacity: 0.2;
 }
 
 .tx-input,
@@ -1280,6 +1306,25 @@ select {
   justify-content: space-between;
 }
 
+.submit-ready-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 999px;
+  padding: 0.32rem 0.72rem;
+  color: #047857;
+  font-size: 0.82rem;
+  font-weight: 800;
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: 0 10px 22px rgba(16, 185, 129, 0.12);
+}
+
+.dark .submit-ready-pill {
+  border-color: rgba(52, 211, 153, 0.36);
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.16);
+}
+
 .resource-step-track {
   position: relative;
   display: grid;
@@ -2078,9 +2123,107 @@ select {
   background: rgba(120, 53, 15, 0.5);
 }
 
-.linuxdo-login-button {
-  min-height: 3.25rem;
+.login-hero {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+.login-hero-logo {
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: 0.7rem;
+}
+
+.login-hero-title {
+  margin: 0;
+  color: #111827;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.15;
+}
+
+.login-hero-subtitle {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  margin: 0.55rem 0 0;
+  color: #8a95a3;
+  font-size: 0.9rem;
   font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.login-hero-subtitle::before,
+.login-hero-subtitle::after {
+  width: 0.45rem;
+  height: 0.7rem;
+  border-radius: 999px 0;
+  background: #69b96f;
+  content: '';
+}
+
+.login-hero-subtitle::before {
+  transform: rotate(-58deg);
+}
+
+.login-hero-subtitle::after {
+  transform: rotate(122deg);
+}
+
+.login-input.tx-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 1rem;
+  border-color: rgba(148, 163, 184, 0.36);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.035);
+}
+
+.login-input .tx-input__icon {
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.login-input .tx-input__inner {
+  color: #111827;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.admin-login-button {
+  min-height: 44px;
+}
+
+.login-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.8rem;
+  align-items: center;
+  color: #6b7280;
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.login-divider span {
+  height: 1px;
+  background: rgba(148, 163, 184, 0.34);
+}
+
+.login-divider b {
+  font-weight: 900;
+}
+
+.linuxdo-login-button {
+  min-height: 44px;
+  border: 1px solid rgba(47, 143, 78, 0.28);
+  border-radius: 12px;
+  color: #2f8f4e;
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 0.95rem;
+  font-weight: 900;
 }
 
 .oauth-secondary-list {
@@ -2111,15 +2254,35 @@ select {
 
 .admin-login-form {
   display: grid;
-  gap: 1rem;
-  padding: 1rem;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 16px;
-  background: rgba(15, 23, 42, 0.035);
+  gap: 0.8rem;
 }
 
-.dark .admin-login-form {
-  background: rgba(255, 255, 255, 0.05);
+.dark .login-hero-title {
+  color: #f8fafc;
+}
+
+.dark .login-hero-subtitle {
+  color: #cbd5e1;
+}
+
+.dark .login-input.tx-input {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.dark .login-input .tx-input__icon,
+.dark .login-input .tx-input__inner {
+  color: #f8fafc;
+}
+
+.dark .login-divider {
+  color: #cbd5e1;
+}
+
+.dark .linuxdo-login-button {
+  border-color: rgba(134, 239, 172, 0.24);
+  color: #86efac;
+  background: rgba(6, 78, 59, 0.22);
 }
 
 .summary-stat {
@@ -3619,6 +3782,13 @@ select {
   padding-left: 0.75rem;
 }
 
+.admin-review-card {
+  padding: 1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 1.1rem;
+  background: rgb(248 250 252);
+}
+
 .admin-table-row {
   min-width: 760px;
   display: grid;
@@ -3895,6 +4065,11 @@ select {
 
 .dark .admin-table-row {
   border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.dark .admin-review-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .dark .admin-date-input {

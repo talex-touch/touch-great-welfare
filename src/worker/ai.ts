@@ -3,6 +3,7 @@ import type { AiApplicationReview, LlmApiModelPricing, WelfareApplication, Welfa
 import { calculateActivityPrice, DEFAULT_LLM_API_MODELS, normalizeLlmApiModelPricings, REQUEST_COST } from '~/composables/welfare'
 import {
   assertAdminRequest,
+  assertSafeExternalUrl,
   assertWelfareState,
   boolValue,
   createId,
@@ -18,6 +19,7 @@ import {
 import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createAndDispatchNotification, ensureNotificationSchema } from './notifications'
 import { appendPointTransaction, pointTransactionExistsByRef } from './points'
+import { createSub2ApiKeyForUser } from './sub2api'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type AiImageJobStatus = 'pending' | 'succeeded' | 'failed'
@@ -98,6 +100,10 @@ interface CreateImagePayload {
 
 interface CreateReviewPayload {
   applicationId?: string
+}
+
+interface ProvisionApplicationPayload {
+  itemId?: string
 }
 
 interface OpenAiImageResponse {
@@ -407,7 +413,7 @@ async function callNewApi<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const baseUrl = config.newapiManagementBaseUrl || config.baseUrl
+  const baseUrl = assertSafeExternalUrl(config.newapiManagementBaseUrl || config.baseUrl).toString().replace(/\/+$/, '')
   if (!baseUrl)
     throw new Error('NewAPI 管理地址未配置')
   if (!config.newapiKey)
@@ -527,17 +533,26 @@ async function insertTemporaryKey(
 async function createTemporaryKey(request: Request, env: WorkerEnv) {
   const auth = await getAuthenticatedRequest(request, env)
   const payload = await readJson<CreateTemporaryKeyPayload>(request)
+
+  const targetUserId = auth.user.role === 'admin' && payload.userId?.trim()
+    ? payload.userId.trim()
+    : auth.user.id
+  return await createNewApiTemporaryKeyForUser(env, targetUserId, payload)
+}
+
+async function createNewApiTemporaryKeyForUser(
+  env: WorkerEnv,
+  userId: string,
+  payload: CreateTemporaryKeyPayload,
+) {
   const config = await getEffectiveAiConfig(env)
   if (!config.enabled)
     throw new Error('AI Provider 未启用')
   if (!config.newapiKey)
     throw new Error('NewAPI 管理 Key 未配置，无法生成临时 Key')
 
-  const targetUserId = auth.user.role === 'admin' && payload.userId?.trim()
-    ? payload.userId.trim()
-    : auth.user.id
   const displayName = normalizeTemporaryKeyName(payload.name) || 'Touch Great Welfare NewAPI Key'
-  const upstreamName = normalizeTemporaryKeyName(`${displayName.slice(0, 24)}-${targetUserId.slice(-8)}-${Date.now()}`)
+  const upstreamName = normalizeTemporaryKeyName(`${displayName.slice(0, 24)}-${userId.slice(-8)}-${Date.now()}`)
   const ttlMinutes = normalizeTemporaryKeyTtl(payload.ttlMinutes, config.temporaryKeyTtlMinutes)
   const quota = normalizeTemporaryKeyQuota(payload.quota, config.temporaryKeyQuota)
   const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString()
@@ -560,7 +575,7 @@ async function createTemporaryKey(request: Request, env: WorkerEnv) {
   if (!key)
     throw new Error('NewAPI 未返回临时 Key')
 
-  const id = await insertTemporaryKey(env, targetUserId, key, upstreamTokenId, displayName, quota, expiresAt)
+  const id = await insertTemporaryKey(env, userId, key, upstreamTokenId, displayName, quota, expiresAt)
   return {
     id,
     key,
@@ -568,7 +583,7 @@ async function createTemporaryKey(request: Request, env: WorkerEnv) {
     name: displayName,
     expiresAt,
     quota,
-    status: 'active',
+    status: 'active' as const,
     createdAt: now(),
     revokedAt: undefined,
   }
@@ -810,7 +825,8 @@ async function callReviewProvider(env: WorkerEnv, config: Awaited<ReturnType<typ
   if (!key)
     throw new Error('AI Provider API Key 未配置')
 
-  const response = await fetchWithTimeout(`${config.baseUrl}/chat/completions`, {
+  const baseUrl = assertSafeExternalUrl(config.baseUrl).toString().replace(/\/+$/, '')
+  const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${key}`,
@@ -865,6 +881,156 @@ function reviewToAnswer(review: AiApplicationReview) {
   return `<p><strong>AI 初审：</strong>${escapeHtml(resultText)} · 风险 ${escapeHtml(review.risk)}</p><p>${escapeHtml(review.summary)}</p>${review.reason ? `<p>${escapeHtml(review.reason)}</p>` : ''}`
 }
 
+function appendProvisionMessage(application: WelfareApplication, adminUserId: string, content: string) {
+  application.messages ??= []
+  application.messages.push({
+    id: createId('msg'),
+    applicationId: application.id,
+    userId: adminUserId,
+    type: 'system',
+    content,
+    attachments: [],
+    createdAt: now(),
+  })
+  application.answer = application.answer
+    ? `${application.answer}${content}`
+    : content
+}
+
+function findApplicationUser(state: WelfareState, userId: string) {
+  const user = state.users.find(item => item.id === userId)
+  if (!user)
+    throw new Error('申请用户不存在')
+  return user
+}
+
+function quotaFromResourceItem(item: NonNullable<WelfareApplication['resourceItems']>[number]) {
+  const budget = Number(item.approvedPayload?.budgetLimit ?? item.payload?.budgetLimit)
+  return Number.isFinite(budget) && budget > 0 ? budget : undefined
+}
+
+async function provisionCodeApplication(
+  env: WorkerEnv,
+  state: WelfareState,
+  application: WelfareApplication,
+  adminUserId: string,
+) {
+  if (!['answered', 'completed', 'closed'].includes(application.status))
+    throw new Error('LLMApi 申请尚未通过')
+  if ((application.messages ?? []).some(item => item.type === 'system' && item.content.includes('NewAPI 自动发放')))
+    return { status: 'skipped' as const, provider: 'newapi' as const, applicationId: application.id, reason: '该申请已自动发放' }
+
+  const key = await createNewApiTemporaryKeyForUser(env, application.userId, {
+    name: `TGW ${application.id}`,
+    quota: application.llmApiBudgetUsd,
+  })
+  const content = `<p><strong>NewAPI 自动发放：</strong>${escapeHtml(key.keyMasked)}，额度 ${key.quota}，有效期至 ${escapeHtml(key.expiresAt)}。明文 Key 已在本次发放响应中返回，请及时保存。</p>`
+  appendProvisionMessage(application, adminUserId, content)
+  await writeWelfareState(env, state)
+  return {
+    status: 'provisioned' as const,
+    provider: 'newapi' as const,
+    applicationId: application.id,
+    key,
+  }
+}
+
+async function provisionResourceApplication(
+  env: WorkerEnv,
+  state: WelfareState,
+  application: WelfareApplication,
+  adminUserId: string,
+  itemId?: string,
+) {
+  const user = findApplicationUser(state, application.userId)
+  const items = (application.resourceItems ?? []).filter(item =>
+    item.resourceType === 'llm_api_quota'
+    && ['approved', 'adjusted_approved'].includes(item.approvalStatus)
+    && item.provisionStatus !== 'completed'
+    && (!itemId || item.id === itemId),
+  )
+  if (!items.length)
+    return { status: 'skipped' as const, provider: 'sub2api' as const, applicationId: application.id, items: [] }
+
+  const results = []
+  for (const item of items) {
+    const quotaUsd = quotaFromResourceItem(item)
+    const key = await createSub2ApiKeyForUser(env, user, {
+      name: `TGW ${application.id}-${item.id}`,
+      quotaUsd,
+      expiresInDays: undefined,
+      groupId: undefined,
+    })
+    item.provisionStatus = 'completed'
+    item.provisionCompletedAt = now()
+    item.provisionNote = `Sub2API 自动发放：${key.keyMasked}，额度 $${key.quotaUsd}，有效期 ${key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`
+    item.updatedAt = item.provisionCompletedAt
+    results.push({ itemId: item.id, key })
+  }
+
+  appendProvisionMessage(application, adminUserId, `<p><strong>Sub2API 自动发放：</strong>已完成 ${results.length} 个 LLM API 额度资源明细。</p>`)
+  await writeWelfareState(env, state)
+  return {
+    status: 'provisioned' as const,
+    provider: 'sub2api' as const,
+    applicationId: application.id,
+    items: results,
+  }
+}
+
+async function markProvisionPending(
+  env: WorkerEnv,
+  state: WelfareState,
+  application: WelfareApplication,
+  adminUserId: string,
+  error: unknown,
+  itemId?: string,
+) {
+  const message = error instanceof Error ? error.message : '自动发放失败'
+  if (application.type === 'resource') {
+    for (const item of application.resourceItems ?? []) {
+      if (item.resourceType === 'llm_api_quota' && (!itemId || item.id === itemId) && item.provisionStatus !== 'completed') {
+        item.provisionStatus = 'pending'
+        item.provisionNote = `自动发放失败，待人工处理：${message}`
+        item.updatedAt = now()
+      }
+    }
+  }
+  appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(message)}</p>`)
+  await writeWelfareState(env, state)
+}
+
+async function provisionApplicationReward(request: Request, env: WorkerEnv) {
+  const { user: admin } = await assertAdminRequest(request, env)
+  const payload = await readJson<ProvisionApplicationPayload>(request).catch((): ProvisionApplicationPayload => ({}))
+  const applicationId = new URL(request.url).pathname.split('/').at(-2)?.trim() || ''
+  if (!applicationId)
+    throw new Error('申请 ID 不能为空')
+
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  assertWelfareState(state)
+  const application = state.applications.find(item => item.id === applicationId)
+  if (!application)
+    throw new Error('申请不存在')
+
+  if (application.type !== 'code' && application.type !== 'resource')
+    return { status: 'skipped' as const, applicationId: application.id, reason: '该申请类型不需要自动发放' }
+
+  try {
+    if (application.type === 'code')
+      return await provisionCodeApplication(env, state, application, admin.id)
+    return await provisionResourceApplication(env, state, application, admin.id, payload.itemId?.trim())
+  }
+  catch (error) {
+    await markProvisionPending(env, state, application, admin.id, error, payload.itemId?.trim())
+    return {
+      status: 'pending_manual' as const,
+      applicationId: application.id,
+      error: error instanceof Error ? error.message : '自动发放失败',
+    }
+  }
+}
+
 async function createApplicationReview(request: Request, env: WorkerEnv) {
   const auth = await getAuthenticatedRequest(request, env)
   const payload = await readJson<CreateReviewPayload>(request)
@@ -911,7 +1077,8 @@ async function callImageProvider(env: WorkerEnv, config: Awaited<ReturnType<type
   if (!key)
     throw new Error('AI Provider API Key 未配置')
 
-  const response = await fetchWithTimeout(`${config.baseUrl}/images/generations`, {
+  const baseUrl = assertSafeExternalUrl(config.baseUrl).toString().replace(/\/+$/, '')
+  const response = await fetchWithTimeout(`${baseUrl}/images/generations`, {
     method: 'POST',
     headers: {
       'authorization': `Bearer ${key}`,
@@ -933,7 +1100,8 @@ async function callImageProvider(env: WorkerEnv, config: Awaited<ReturnType<type
   if (first?.b64_json)
     return { bytes: decodeBase64(first.b64_json), contentType: 'image/png' }
   if (first?.url) {
-    const image = await fetchWithTimeout(first.url, {}, 60000)
+    const imageUrl = assertSafeExternalUrl(first.url).toString()
+    const image = await fetchWithTimeout(imageUrl, {}, 60000)
     if (!image.ok)
       throw new Error(`图片下载失败：${image.status}`)
     return {
@@ -1159,6 +1327,9 @@ export async function handleAiRequest(request: Request, env: WorkerEnv) {
 
     if (path === '/reviews' && request.method === 'POST')
       return json(await createApplicationReview(request, env))
+
+    if (path.startsWith('/applications/') && path.endsWith('/provision') && request.method === 'POST')
+      return json(await provisionApplicationReward(request, env))
 
     if (path === '/images' && request.method === 'POST')
       return json(await createImage(request, env))

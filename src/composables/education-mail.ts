@@ -29,6 +29,15 @@ export interface EducationMailSyncResult {
   }>
 }
 
+export interface VerifyEducationMailChallengeResult {
+  verified: boolean
+  challengeId: string
+  email: string
+  verifiedAt?: string
+  mailId?: string
+  receivedAt?: string
+}
+
 async function readErrorMessage(response: Response) {
   const fallback = '教育邮箱收件接口请求失败'
   const text = await response.text()
@@ -82,5 +91,12 @@ export function syncEducationMailChallenges(adminUserId: string) {
   return requestEducationMail<EducationMailSyncResult>('/api/education-mail/sync', adminUserId, {
     method: 'POST',
     body: JSON.stringify({}),
+  })
+}
+
+export function verifyEducationMailChallenge(userId: string, challengeId: string) {
+  return requestEducationMail<VerifyEducationMailChallengeResult>('/api/education-mail/verify', userId, {
+    method: 'POST',
+    body: JSON.stringify({ challengeId }),
   })
 }

@@ -1,4 +1,4 @@
-import type { CreateAdminPayload, LoginAdminPayload, WelfareState } from './welfare'
+import type { CreateAdminPayload, LoginAdminPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, WelfareState } from './welfare'
 
 const STATE_ENDPOINT = '/api/welfare-state'
 
@@ -82,4 +82,38 @@ export async function endSession() {
       'x-welfare-action': 'logout',
     },
   })
+}
+
+async function postWelfareAction<T>(action: string, payload: unknown) {
+  return requestState<T>({
+    method: 'POST',
+    body: JSON.stringify(payload ?? {}),
+    headers: {
+      'x-welfare-action': action,
+    },
+  })
+}
+
+export async function submitCollaborationApplicationAction(payload: SubmitCollaborationApplicationPayload) {
+  return postWelfareAction<{ ok: true }>('submit-collaboration-application', payload)
+}
+
+export async function reviewCollaborationApplicationAction(payload: ReviewCollaborationApplicationPayload) {
+  return postWelfareAction<{ ok: true }>('review-collaboration-application', payload)
+}
+
+export async function claimDeliveryApplicationAction(applicationId: string) {
+  return postWelfareAction<{ ok: true }>('claim-delivery-application', { applicationId })
+}
+
+export async function cancelDeliveryClaimAction(applicationId: string) {
+  return postWelfareAction<{ ok: true }>('cancel-delivery-claim', { applicationId })
+}
+
+export async function submitDeliveryResultAction(payload: SubmitDeliveryPayload) {
+  return postWelfareAction<{ ok: true }>('submit-delivery-result', payload)
+}
+
+export async function reviewDeliveryResultAction(payload: ReviewDeliveryPayload) {
+  return postWelfareAction<{ ok: true }>('review-delivery-result', payload)
 }

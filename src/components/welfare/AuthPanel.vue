@@ -42,7 +42,6 @@ const {
 const { runSafely } = useWelfareFeedback()
 const isUserConsentDialogOpen = ref(false)
 const hasUserConsent = ref(false)
-const isAdminLoginOpen = ref(false)
 const pendingLoginSource = ref<PublicOAuthProvider | undefined>()
 const linuxDoProvider = computed(() => publicOAuthProviders.value.find(provider => provider.id === 'linux-do'))
 const otherOAuthProviders = computed(() => publicOAuthProviders.value.filter(provider => provider.id !== 'linux-do'))
@@ -61,7 +60,7 @@ function onCreateAdmin() {
 function onOauthLogin(source = pendingLoginSource.value) {
   runSafely(async () => {
     if (!source)
-      throw new Error('LINUX DO 登录源未配置')
+      throw new Error('登录方式不可用')
 
     await startOAuthLogin(source.id, redirectPath.value ?? '/dashboard/apply')
   }, `正在跳转 ${source?.name ?? 'LINUX DO'} 授权`)
@@ -130,17 +129,15 @@ onMounted(() => {
       </TxButton>
     </div>
 
-    <div v-else-if="!currentUser" class="space-y-5">
-      <div>
+    <div v-else-if="!currentUser" class="space-y-4">
+      <div class="login-hero">
         <TxStatusBadge v-if="isBootstrapRoute" text="已完成初始化" status="success" class="mb-3" />
-        <div class="flex gap-3 items-center justify-between">
-          <div class="text-2xl fw-900">
-            账号登录
-          </div>
-          <TxStatusBadge :text="linuxDoProvider ? 'LINUX DO 已配置' : 'LINUX DO 未配置'" :status="linuxDoProvider ? 'success' : 'warning'" />
-        </div>
-        <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-          普通用户使用 LINUX DO 授权登录；管理员使用账号密码进入后台。
+        <img src="/brand/icon.svg" alt="领益 Link Welfare" class="login-hero-logo">
+        <h1 class="login-hero-title">
+          登录领益
+        </h1>
+        <p class="login-hero-subtitle">
+          <span>让公益更透明，让信任更有力量</span>
         </p>
       </div>
       <div v-if="!loginFeatureEnabled" class="auth-warning">
@@ -149,14 +146,21 @@ onMounted(() => {
       <div v-else-if="!registrationFeatureEnabled" class="auth-warning">
         {{ registrationClosedReason }} 已有账号仍可继续登录。
       </div>
-      <div v-else-if="!linuxDoProvider" class="auth-warning">
-        LINUX DO 登录源尚未启用。请管理员登录后台，在 OAuth/OIDC 登录源中配置并启用 LINUX DO。
-      </div>
-      <DataNotice mode="compact" title="注册登录前请确认" />
       <div class="space-y-4">
-        <TxButton class="linuxdo-login-button" block variant="primary" size="lg" :disabled="!linuxDoProvider || !loginFeatureEnabled || !!oauthLoginForm.loadingProviderId" @click="openUserConsentDialog(linuxDoProvider)">
-          <span class="i-carbon-login" />
-          使用 LINUX DO 授权登录
+        <div class="admin-login-form">
+          <TxInput v-model="adminLoginForm.email" class="login-input" type="email" placeholder="请输入账号" prefix-icon="i-carbon-user" />
+          <TxInput v-model="adminLoginForm.password" class="login-input" type="password" placeholder="请输入密码" prefix-icon="i-carbon-locked" />
+          <TxButton class="admin-login-button" block variant="primary" icon="i-carbon-login" @click="onLoginAsAdmin">
+            登录
+          </TxButton>
+        </div>
+        <div class="login-divider" aria-hidden="true">
+          <span />
+          <b>或</b>
+          <span />
+        </div>
+        <TxButton class="linuxdo-login-button" block variant="secondary" icon="i-carbon-login" :disabled="!linuxDoProvider || !loginFeatureEnabled || !!oauthLoginForm.loadingProviderId" @click="openUserConsentDialog(linuxDoProvider)">
+          使用 Linux DO 登录
         </TxButton>
         <div v-if="otherOAuthProviders.length" class="oauth-secondary-list">
           <TxButton
@@ -171,23 +175,6 @@ onMounted(() => {
               <span v-else class="i-carbon-login" />
             </span>
             {{ provider.name }}
-          </TxButton>
-        </div>
-        <button class="admin-login-toggle" type="button" @click="isAdminLoginOpen = !isAdminLoginOpen">
-          <span class="i-carbon-user-admin" />
-          管理员账号密码登录
-        </button>
-        <div v-if="isAdminLoginOpen" class="admin-login-form">
-          <label class="gap-2 grid">
-            <span class="field-label">管理员邮箱</span>
-            <TxInput v-model="adminLoginForm.email" type="email" placeholder="admin@example.com" />
-          </label>
-          <label class="gap-2 grid">
-            <span class="field-label">管理员密码</span>
-            <TxInput v-model="adminLoginForm.password" type="password" placeholder="管理员密码" />
-          </label>
-          <TxButton block variant="secondary" @click="onLoginAsAdmin">
-            进入管理员后台
           </TxButton>
         </div>
       </div>
@@ -243,8 +230,10 @@ onMounted(() => {
                   注册登录确认
                 </h3>
                 <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-                  首次 {{ pendingLoginSource?.name ?? 'LINUX DO' }} 授权会创建账号并同步公开资料；再次登录会更新最后登录时间。
-                  <template v-if="!registrationFeatureEnabled">当前新用户注册关闭，未注册账号会被拦截。</template>
+                  首次 {{ pendingLoginSource?.name ?? 'Linux DO' }} 授权会创建账号并同步公开资料；再次登录会更新最后登录时间。
+                  <template v-if="!registrationFeatureEnabled">
+                    当前新用户注册关闭，未注册账号会被拦截。
+                  </template>
                 </p>
               </div>
               <button class="icon-btn shrink-0" title="关闭" @click="closeUserConsentDialog">
@@ -262,8 +251,11 @@ onMounted(() => {
                 <TxButton variant="ghost" @click="closeUserConsentDialog">
                   取消
                 </TxButton>
-                <TxButton variant="primary" :disabled="!hasUserConsent" @click="confirmOauthLogin">
-                  确认并跳转 {{ pendingLoginSource?.name ?? 'LINUX DO' }}
+                <TxButton v-if="pendingLoginSource" variant="primary" :disabled="!hasUserConsent" @click="confirmOauthLogin">
+                  确认并跳转 {{ pendingLoginSource.name }}
+                </TxButton>
+                <TxButton v-else variant="primary" @click="closeUserConsentDialog">
+                  我知道了
                 </TxButton>
               </div>
             </div>

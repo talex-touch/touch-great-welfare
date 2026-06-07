@@ -50,7 +50,10 @@ const application = computed(() => state.applications.find((item) => {
   if (item.id !== applicationId.value)
     return false
 
-  return isAdmin.value || item.userId === currentUser.value?.id || (canCrowdReview.value && item.type === 'pro' && item.userId !== currentUser.value?.id)
+  return isAdmin.value
+    || item.userId === currentUser.value?.id
+    || (canCrowdReview.value && item.type === 'pro' && item.userId !== currentUser.value?.id)
+    || (currentUser.value?.role === 'reviewer' && ['code', 'pro'].includes(item.type) && item.status === 'answered' && (!item.deliveryAssigneeId || item.deliveryAssigneeId === currentUser.value.id))
 }))
 
 const messages = computed(() => application.value?.messages ?? [])
@@ -87,6 +90,15 @@ function backToList() {
   }
 
   router.push('/dashboard/apply')
+}
+
+function editDraft() {
+  if (!application.value || application.value.type !== 'resource' || application.value.status !== 'draft')
+    return
+
+  if (props.drawer)
+    emit('close')
+  router.push(`/dashboard/apply/create?draft=${encodeURIComponent(application.value.id)}`)
 }
 
 function handleSendMessage(type: 'comment' | 'supplement' | 'result_submission', content: string) {
@@ -152,6 +164,14 @@ function handleComplete() {
               </div>
             </div>
             <div class="flex flex-wrap gap-2 items-center">
+              <TxButton
+                v-if="application.type === 'resource' && application.status === 'draft' && application.userId === currentUser?.id"
+                size="sm"
+                variant="secondary"
+                @click="editDraft"
+              >
+                编辑草稿
+              </TxButton>
               <TxStatusBadge :text="statusText(application.status)" :status="statusTone(application.status)" />
               <TxStatusBadge :text="prepaidStateText" :status="prepaidStateTone" />
             </div>

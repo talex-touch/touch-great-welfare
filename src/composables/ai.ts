@@ -93,6 +93,45 @@ export interface CreateApplicationReviewResult {
   }
 }
 
+export type ProvisionApplicationRewardResult
+  = | {
+    status: 'provisioned'
+    provider: 'newapi'
+    applicationId: string
+    key: TemporaryKeyResult
+  }
+  | {
+    status: 'provisioned'
+    provider: 'sub2api'
+    applicationId: string
+    items: Array<{
+      itemId: string
+      key: {
+        id: string
+        key: string
+        keyMasked: string
+        name: string
+        quotaUsd: number
+        expiresAt?: string
+        status: 'active' | 'revoked'
+        sub2apiUserId: string
+        sub2apiKeyId: string
+      }
+    }>
+  }
+  | {
+    status: 'pending_manual'
+    applicationId: string
+    error: string
+  }
+  | {
+    status: 'skipped'
+    applicationId: string
+    reason?: string
+    provider?: 'newapi' | 'sub2api'
+    items?: unknown[]
+  }
+
 async function readErrorMessage(response: Response) {
   const fallback = 'AI 接口请求失败'
   const text = await response.text()
@@ -163,5 +202,12 @@ export function createApplicationReview(userId: string, applicationId: string) {
   return requestAi<CreateApplicationReviewResult>('/api/ai/reviews', userId, {
     method: 'POST',
     body: JSON.stringify({ applicationId }),
+  })
+}
+
+export function provisionApplicationReward(adminUserId: string, applicationId: string, itemId?: string) {
+  return requestAi<ProvisionApplicationRewardResult>(`/api/ai/applications/${encodeURIComponent(applicationId)}/provision`, adminUserId, {
+    method: 'POST',
+    body: JSON.stringify({ itemId }),
   })
 }

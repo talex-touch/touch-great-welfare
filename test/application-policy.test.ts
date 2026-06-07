@@ -206,6 +206,43 @@ describe('application policy', () => {
     })).toThrow('申请内容不得少于 200 字')
   })
 
+  it('applies formal submission policy when a resource draft is submitted', () => {
+    const store = useWelfareStore()
+    store.state.applicationPolicy.minDescriptionChars = 200
+
+    const draft = store.submitResourceApplication({
+      title: '资源草稿',
+      reason: '',
+      businessBackground: '',
+      urgency: 'normal',
+      duration: RESOURCE_DEFAULT_DURATION,
+      selectedResourceTypes: ['database'],
+      resourceItems: [{
+        resourceType: 'database',
+        resourceSubtype: 'mysql',
+        payload: {},
+      }],
+      acceptedTermIds: [],
+      saveAsDraft: true,
+    })
+
+    expect(() => store.updateResourceDraft(draft.id, {
+      title: '资源草稿',
+      reason: '<p>说明不足</p>',
+      businessBackground: '',
+      urgency: 'normal',
+      duration: RESOURCE_DEFAULT_DURATION,
+      selectedResourceTypes: ['database'],
+      resourceItems: [{
+        resourceType: 'database',
+        resourceSubtype: 'mysql',
+        payload: {},
+      }],
+      acceptedTermIds: [],
+      saveAsDraft: false,
+    })).toThrow('申请内容不得少于 200 字')
+  })
+
   it('requires a real name for student verification', () => {
     const store = useWelfareStore()
 
@@ -272,11 +309,15 @@ describe('application policy', () => {
         studentVerified: false,
       },
     }))
+    const challenge = store.createEducationEmailChallenge('student@pku.edu.cn', '公益同学')
+    challenge.verifiedAt = '2026-06-02T08:55:00.000Z'
 
     store.submitStudentVerification({
       realName: '公益同学',
       category: '大学生',
       educationEmail: 'student@pku.edu.cn',
+      educationEmailChallengeId: challenge.id,
+      educationEmailVerified: true,
       notes: '<p>已上传学生证和校园材料。</p>',
     })
     const verificationId = store.state.studentVerifications[0].id
@@ -285,15 +326,28 @@ describe('application policy', () => {
     store.approveStudentVerification(verificationId, '通过')
 
     expect(store.state.studentVerifications[0].educationEmailVerified).toBe(true)
-    expect(store.state.studentVerifications[0].educationEmailVerifiedAt).toBe('2026-06-02T09:00:00.000Z')
-    expect(store.state.studentVerifications[0].educationEmailVerificationSource).toBe('admin_approved')
+    expect(store.state.studentVerifications[0].educationEmailVerifiedAt).toBe('2026-06-02T08:55:00.000Z')
+    expect(store.state.studentVerifications[0].educationEmailVerificationSource).toBe('mail_auto')
   })
 
-  it('keeps user confirmed education email verification on student submission', () => {
+  it('requires API verified education email before student submission', () => {
     const store = useWelfareStore()
     const challenge = store.createEducationEmailChallenge('student@pku.edu.cn', '公益同学')
 
     store.confirmEducationEmailChallengeSent(challenge.id)
+    expect(challenge.submittedAt).toBe('2026-06-02T09:00:00.000Z')
+    expect(challenge.verifiedAt).toBeUndefined()
+
+    expect(() => store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      educationEmail: 'student@pku.edu.cn',
+      educationEmailChallengeId: challenge.id,
+      educationEmailVerified: true,
+      notes: '<p>已上传学生证和校园邮箱邮件证明。</p>',
+    })).toThrow('教育邮箱尚未通过收件 API 验证')
+
+    challenge.verifiedAt = '2026-06-02T08:55:00.000Z'
     store.submitStudentVerification({
       realName: '公益同学',
       category: '大学生',
@@ -303,10 +357,10 @@ describe('application policy', () => {
       notes: '<p>已上传学生证和校园邮箱邮件证明。</p>',
     })
 
-    expect(store.state.educationEmailChallenges[0].verifiedAt).toBe('2026-06-02T09:00:00.000Z')
+    expect(store.state.educationEmailChallenges[0].verifiedAt).toBe('2026-06-02T08:55:00.000Z')
     expect(store.state.studentVerifications[0].educationEmailVerified).toBe(true)
-    expect(store.state.studentVerifications[0].educationEmailVerifiedAt).toBe('2026-06-02T09:00:00.000Z')
-    expect(store.state.studentVerifications[0].educationEmailVerificationSource).toBe('user_confirmed_sent')
+    expect(store.state.studentVerifications[0].educationEmailVerifiedAt).toBe('2026-06-02T08:55:00.000Z')
+    expect(store.state.studentVerifications[0].educationEmailVerificationSource).toBe('mail_auto')
   })
 
   it('lets admins request student supplements and users resubmit without another review fee', () => {
@@ -326,7 +380,6 @@ describe('application policy', () => {
       category: '大学生',
       school: '北京航空航天大学',
       grade: '2026 级',
-      educationEmail: 'old@buaa.edu.cn',
       notes: '<p>已上传学生证和校园邮箱截图。</p>',
     })
     const verificationId = store.state.studentVerifications[0].id
@@ -338,7 +391,7 @@ describe('application policy', () => {
 
     store.state.currentUserId = 'user_1'
     const challenge = store.createEducationEmailChallenge('new@buaa.edu.cn', '公益同学')
-    store.confirmEducationEmailChallengeSent(challenge.id)
+    challenge.verifiedAt = '2026-06-02T08:55:00.000Z'
     store.supplementStudentVerification({
       verificationId,
       realName: '公益同学',

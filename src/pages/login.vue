@@ -4,8 +4,8 @@ import PageShell from '~/components/welfare/PageShell.vue'
 </script>
 
 <template>
-  <PageShell>
-    <section class="mx-auto max-w-xl">
+  <PageShell class="app-shell--login">
+    <section class="mx-auto flex flex-1 max-w-sm w-full items-center">
       <AuthPanel />
     </section>
   </PageShell>

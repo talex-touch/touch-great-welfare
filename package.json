@@ -5,7 +5,7 @@
   "scripts": {
     "build": "vite build",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "deploy": "pnpm run build && pnpm exec wrangler deploy",
+    "deploy": "pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc",
     "dev": "node scripts/dev.mjs",
     "dev:api": "wrangler d1 migrations apply touch-great-welfare-local --local --config wrangler.local.jsonc && wrangler dev --config wrangler.local.jsonc --port 8787",
     "dev:worker": "vite build && wrangler d1 migrations apply touch-great-welfare-local --local --config wrangler.local.jsonc && wrangler dev --config wrangler.local.jsonc --port 8787",

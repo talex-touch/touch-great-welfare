@@ -12,10 +12,11 @@ interface SessionPayload {
 }
 
 function sessionSecret(env: WorkerEnv) {
-  return env.WELFARE_STATE_SECRET_KEY?.trim()
+  const secret = env.WELFARE_STATE_SECRET_KEY?.trim()
     || env.NOTIFY_SECRET_KEY?.trim()
-    || env.HYPERDRIVE?.connectionString?.trim()
-    || 'touch-great-welfare-local-session'
+  if (!secret)
+    throw new Error('SESSION_SECRET 未配置：请设置 WELFARE_STATE_SECRET_KEY 或 NOTIFY_SECRET_KEY')
+  return secret
 }
 
 async function sign(value: string, env: WorkerEnv) {
@@ -73,7 +74,14 @@ export async function readSessionUserId(request: Request, env: WorkerEnv) {
   if (!payloadText || !signature)
     return ''
 
-  if (await sign(payloadText, env) !== signature)
+  let expectedSignature = ''
+  try {
+    expectedSignature = await sign(payloadText, env)
+  }
+  catch {
+    return ''
+  }
+  if (expectedSignature !== signature)
     return ''
 
   const payload = decodePayload(payloadText)

@@ -4,12 +4,12 @@ import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-ap
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
-import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, StudentVerification, VerificationType } from './welfare'
+import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, StudentVerification, VerificationType, WelfareApplication } from './welfare'
 import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
-import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, saveAiConfig } from './ai'
-import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig } from './education-mail'
+import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from './ai'
+import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig, verifyEducationMailChallenge } from './education-mail'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
   createAdminAnnouncement,
@@ -68,7 +68,15 @@ import {
   termsForResourceTypes,
   useWelfareStore,
 } from './welfare'
-import { saveWelfareState } from './welfare-persistence'
+import {
+  cancelDeliveryClaimAction,
+  claimDeliveryApplicationAction,
+  reviewCollaborationApplicationAction,
+  reviewDeliveryResultAction,
+  saveWelfareState,
+  submitCollaborationApplicationAction,
+  submitDeliveryResultAction,
+} from './welfare-persistence'
 
 export interface UploadLikeFile {
   id: string
@@ -87,7 +95,7 @@ export const adminForm = reactive({
 })
 
 export const adminLoginForm = reactive({
-  email: 'admin@welfare.dev',
+  email: '',
   password: '',
 })
 
@@ -104,8 +112,41 @@ export const invitationForm = reactive({
   message: '',
 })
 
+export const couponRedeemForm = reactive({
+  code: '',
+  message: '',
+})
+
+export const couponTemplateForm = reactive({
+  name: '资源通用八折券',
+  description: '',
+  scope: 'resource' as CouponScope,
+  discountType: 'rate' as CouponDiscountType,
+  discountFold: 8,
+  discountAmount: 100,
+  resourceTypes: [] as ResourceType[],
+  minSpend: 0,
+  maxDiscount: 0,
+  ttlDays: 30,
+  totalGrantLimit: 0,
+})
+
+export const couponCodeForm = reactive({
+  templateId: '',
+  code: '',
+  maxRedemptions: 1,
+  perUserLimit: 1,
+  expiresAt: '',
+})
+
+export const couponGrantForm = reactive({
+  templateId: '',
+  userIds: [] as string[],
+})
+
 export const rechargeForm = reactive({
   amount: 100,
+  selectedCouponId: '',
   loading: false,
   statusMessage: '',
 })
@@ -416,6 +457,7 @@ export const educationEmailVerificationForm = reactive({
   sentTo: '',
   expiresAt: '',
   loading: false,
+  verifying: false,
   verified: false,
   message: '',
 })
@@ -483,14 +525,27 @@ export const crowdReviewDrafts = reactive<Record<string, {
   decision: CrowdReviewDecision
   note: string
 }>>({})
+export const collaborationApplicationForm = reactive({
+  reason: '',
+  loading: false,
+  message: '',
+})
+export const collaborationReviewDrafts = reactive<Record<string, {
+  reply: string
+}>>({})
+export const deliveryResultDrafts = reactive<Record<string, string>>({})
+export const deliveryReviewDrafts = reactive<Record<string, {
+  approved: boolean
+  rewardPoints: number
+  note: string
+}>>({})
 export const pointDrafts = reactive<Record<string, number>>({})
-export const selectedSection = ref<'home' | 'apply' | 'square' | 'verification' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'admin'>('home')
+export const selectedSection = ref<'home' | 'apply' | 'square' | 'verification' | 'student' | 'openSource' | 'notifications' | 'notificationSettings' | 'profile' | 'wallet' | 'collaboration' | 'admin'>('home')
 export const ADMIN_TABS = {
   login: '登录配置',
   policy: '申请策略',
   github: 'GitHub 应用',
   ai: 'AI 配置',
-  sub2api: 'Sub2API',
   educationMail: '教育邮箱',
   notifications: '通知配置',
   ldc: '充值配置',
@@ -504,7 +559,6 @@ export const adminTabItems = [
   { key: 'policy', name: ADMIN_TABS.policy, icon: 'i-carbon-rule' },
   { key: 'github', name: ADMIN_TABS.github, icon: 'i-carbon-logo-github' },
   { key: 'ai', name: ADMIN_TABS.ai, icon: 'i-carbon-ai-status' },
-  { key: 'sub2api', name: ADMIN_TABS.sub2api, icon: 'i-carbon-api-1' },
   { key: 'educationMail', name: ADMIN_TABS.educationMail, icon: 'i-carbon-email' },
   { key: 'notifications', name: ADMIN_TABS.notifications, icon: 'i-carbon-notification' },
   { key: 'ldc', name: ADMIN_TABS.ldc, icon: 'i-carbon-wallet' },
@@ -610,6 +664,18 @@ export function useWelfareUiState() {
     const user = welfare.currentUser.value
     return user ? welfare.availableCouponsForUser(user.id) : []
   })
+  const availableResourceCoupons = computed(() => {
+    const user = welfare.currentUser.value
+    return user ? welfare.availableCouponsForTarget(user.id, 'resource', 0, resourceApplicationForm.selectedResourceTypes) : []
+  })
+  const availableRechargeCoupons = computed(() => {
+    const user = welfare.currentUser.value
+    const amount = Number(rechargeForm.amount)
+    return user ? welfare.availableCouponsForTarget(user.id, 'recharge', Number.isFinite(amount) ? amount : 0) : []
+  })
+  const couponTemplates = computed(() => welfare.state.couponTemplates)
+  const couponCodes = computed(() => welfare.state.couponCodes)
+  const couponRedemptions = computed(() => welfare.state.couponRedemptions)
   const currentUserDailyCheckIns = computed(() => welfare.currentUserDailyCheckIns.value)
   const currentUserInviteCode = computed(() => welfare.currentUser.value?.profile.inviteCode ?? '')
   const currentUserInvitationBinding = computed(() => welfare.currentUserInvitationBinding.value)
@@ -737,6 +803,7 @@ export function useWelfareUiState() {
     educationEmailVerificationForm.sentTo = ''
     educationEmailVerificationForm.expiresAt = ''
     educationEmailVerificationForm.verified = false
+    educationEmailVerificationForm.verifying = false
     educationEmailVerificationForm.message = ''
   })
 
@@ -749,6 +816,7 @@ export function useWelfareUiState() {
     educationEmailVerificationForm.sentTo = ''
     educationEmailVerificationForm.expiresAt = ''
     educationEmailVerificationForm.verified = false
+    educationEmailVerificationForm.verifying = false
     educationEmailVerificationForm.message = ''
   }
 
@@ -763,6 +831,20 @@ export function useWelfareUiState() {
     studentForm.educationEmail = verification.educationEmail ?? ''
     studentForm.notes = verification.notes
     resetEducationEmailVerificationForm()
+    const challenge = verification.educationEmailChallengeId
+      ? welfare.state.educationEmailChallenges.find(item => item.id === verification.educationEmailChallengeId)
+      : undefined
+    if (verification.educationEmail && verification.educationEmailVerified && challenge?.verifiedAt) {
+      educationEmailVerificationForm.challengeId = challenge.id
+      educationEmailVerificationForm.code = challenge.code
+      educationEmailVerificationForm.subject = challenge.subject
+      educationEmailVerificationForm.body = challenge.body
+      educationEmailVerificationForm.mailto = challenge.mailto
+      educationEmailVerificationForm.sentTo = challenge.email
+      educationEmailVerificationForm.expiresAt = challenge.expiresAt
+      educationEmailVerificationForm.verified = true
+      educationEmailVerificationForm.message = '该教育邮箱已通过收件 API 验证'
+    }
   }
 
   function statusText(status: string) {
@@ -966,23 +1048,43 @@ export function useWelfareUiState() {
     addResourceApplicationItem('database')
   }
 
-  async function submitResourceApplication(saveAsDraft = false) {
-    welfare.assertPersistenceReady()
+  function fillResourceApplicationFormFromDraft(application: WelfareApplication) {
+    if (application.type !== 'resource' || application.status !== 'draft')
+      throw new Error('只能编辑资源申请草稿')
+
+    resourceApplicationForm.title = application.title
+    resourceApplicationForm.departmentId = application.departmentId ?? ''
+    resourceApplicationForm.projectId = application.projectId ?? ''
+    resourceApplicationForm.reason = application.reason ?? application.description
+    resourceApplicationForm.businessBackground = application.businessBackground ?? ''
+    resourceApplicationForm.urgency = application.urgency ?? 'normal'
+    resourceApplicationForm.expectedEffectiveAt = application.expectedEffectiveAt ?? ''
+    resourceApplicationForm.costCenter = application.costCenter ?? ''
+    resourceApplicationForm.ownerId = application.ownerId ?? welfare.currentUser.value?.id ?? ''
+    resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
+    resourceApplicationForm.selectedResourceTypes = [...(application.selectedResourceTypes?.length ? application.selectedResourceTypes : ['database' as ResourceType])]
+    resourceApplicationForm.acceptedTermIds = application.termsAcceptances?.map(item => item.termId) ?? []
+    resourceApplicationForm.selectedCouponId = ''
+    resourceApplicationForm.shareToSquare = false
+    resourceApplicationForm.squarePostContent = ''
+    resourceApplicationItems.value = (application.resourceItems ?? []).map(item => ({
+      id: item.id,
+      resourceType: item.resourceType,
+      resourceSubtype: item.resourceSubtype,
+      payload: { ...item.payload },
+      requestedQuota: item.requestedQuota,
+      requestedPermission: item.requestedPermission,
+      duration: item.duration,
+    }))
+    applicationFiles.value = application.attachments.map(item => ({ ...item })) as UploadLikeFile[]
+    ensureSelectedResourceItems()
+  }
+
+  function resourceApplicationPayload(saveAsDraft: boolean, security: Record<string, unknown> = {}) {
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
-    ensureSelectedResourceItems()
-    if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
-      throw new Error('请确认所有自动合并的条款')
 
-    const security = saveAsDraft
-      ? {}
-      : await prepareApplicationSecurity({
-          type: 'resource',
-          title: resourceApplicationForm.title,
-          description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
-        })
-
-    welfare.submitResourceApplication({
+    return {
       title: resourceApplicationForm.title,
       departmentId: resourceApplicationForm.departmentId,
       projectId: resourceApplicationForm.projectId,
@@ -1002,7 +1104,48 @@ export function useWelfareUiState() {
       shareToSquare: !saveAsDraft && resourceApplicationForm.shareToSquare,
       squarePostContent: resourceApplicationForm.squarePostContent,
       ...security,
-    })
+    }
+  }
+
+  async function submitResourceApplication(saveAsDraft = false) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+    ensureSelectedResourceItems()
+    if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
+      throw new Error('请确认所有自动合并的条款')
+
+    const security = saveAsDraft
+      ? {}
+      : await prepareApplicationSecurity({
+          type: 'resource',
+          title: resourceApplicationForm.title,
+          description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
+        })
+
+    welfare.submitResourceApplication(resourceApplicationPayload(saveAsDraft, security))
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    await refreshPointTransactions()
+  }
+
+  async function updateResourceDraft(applicationId: string, saveAsDraft = false) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+    ensureSelectedResourceItems()
+    if (!saveAsDraft && resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
+      throw new Error('请确认所有自动合并的条款')
+
+    const security = saveAsDraft
+      ? {}
+      : await prepareApplicationSecurity({
+          type: 'resource',
+          title: resourceApplicationForm.title,
+          description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
+        })
+
+    welfare.updateResourceDraft(applicationId, resourceApplicationPayload(saveAsDraft, security))
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
@@ -1017,7 +1160,7 @@ export function useWelfareUiState() {
     return resourceReviewDrafts[itemId]
   }
 
-  function approveResourceItem(applicationId: string, itemId: string) {
+  async function approveResourceItem(applicationId: string, itemId: string) {
     const draft = resourceReviewDraftFor(itemId)
     let approvedPayload: Record<string, unknown> | undefined
     if (draft.status === 'adjusted_approved') {
@@ -1036,6 +1179,10 @@ export function useWelfareUiState() {
       rejectReason: draft.note,
     })
     delete resourceReviewDrafts[itemId]
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    if (['approved', 'adjusted_approved'].includes(draft.status))
+      await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId)
+    await welfare.reloadWelfareState()
   }
 
   function completeResourceProvision(applicationId: string, itemId: string) {
@@ -1109,11 +1256,28 @@ export function useWelfareUiState() {
 
   async function confirmEducationEmailSent() {
     await ensureEducationEmailChallenge()
-    const challenge = welfare.confirmEducationEmailChallengeSent(educationEmailVerificationForm.challengeId)
-    educationEmailVerificationForm.verified = true
-    educationEmailVerificationForm.message = '已标记为已验证教育邮箱真实性，管理员仍会结合材料审核'
-    await saveWelfareState(welfare.state)
-    return challenge
+    const userId = welfare.currentUser.value?.id
+    if (!userId)
+      throw new Error('请先登录')
+
+    educationEmailVerificationForm.verifying = true
+    educationEmailVerificationForm.message = '正在通过收件 API 验证教育邮箱邮件...'
+    try {
+      const result = await verifyEducationMailChallenge(userId, educationEmailVerificationForm.challengeId)
+      if (!result.verified) {
+        educationEmailVerificationForm.verified = false
+        educationEmailVerificationForm.message = '暂未在平台收件箱匹配到该教育邮箱发送的证明码，请确认发件邮箱和邮件内容后重试'
+        throw new Error(educationEmailVerificationForm.message)
+      }
+
+      await welfare.reloadWelfareState()
+      educationEmailVerificationForm.verified = true
+      educationEmailVerificationForm.message = '已通过收件 API 验证教育邮箱真实性，管理员仍会结合材料审核'
+      return result
+    }
+    finally {
+      educationEmailVerificationForm.verifying = false
+    }
   }
 
   function refreshSystemConfigForm() {
@@ -1208,9 +1372,94 @@ export function useWelfareUiState() {
     return review
   }
 
+  function collaborationReviewDraftFor(applicationId: string) {
+    collaborationReviewDrafts[applicationId] ??= {
+      reply: '',
+    }
+    return collaborationReviewDrafts[applicationId]
+  }
+
+  function deliveryReviewDraftFor(applicationId: string) {
+    deliveryReviewDrafts[applicationId] ??= {
+      approved: true,
+      rewardPoints: 100,
+      note: '',
+    }
+    return deliveryReviewDrafts[applicationId]
+  }
+
+  async function submitCollaborationApplicationFromForm() {
+    collaborationApplicationForm.loading = true
+    collaborationApplicationForm.message = ''
+    try {
+      await submitCollaborationApplicationAction({
+        reason: collaborationApplicationForm.reason,
+      })
+      collaborationApplicationForm.reason = ''
+      collaborationApplicationForm.message = '协作处理员申请已提交'
+      await welfare.reloadWelfareState()
+    }
+    finally {
+      collaborationApplicationForm.loading = false
+    }
+  }
+
+  async function reviewCollaborationApplication(id: string, status: 'approved' | 'rejected') {
+    const draft = collaborationReviewDraftFor(id)
+    await reviewCollaborationApplicationAction({
+      id,
+      status,
+      reply: draft.reply,
+    })
+    delete collaborationReviewDrafts[id]
+    await welfare.reloadWelfareState()
+  }
+
+  async function claimDeliveryApplication(applicationId: string) {
+    await claimDeliveryApplicationAction(applicationId)
+    await welfare.reloadWelfareState()
+  }
+
+  async function cancelDeliveryClaim(applicationId: string) {
+    await cancelDeliveryClaimAction(applicationId)
+    delete deliveryResultDrafts[applicationId]
+    await welfare.reloadWelfareState()
+  }
+
+  async function submitDeliveryResult(applicationId: string) {
+    await submitDeliveryResultAction({
+      applicationId,
+      content: deliveryResultDrafts[applicationId] || '',
+      attachments: [],
+    })
+    delete deliveryResultDrafts[applicationId]
+    await welfare.reloadWelfareState()
+  }
+
+  async function reviewDeliveryResult(applicationId: string, approved: boolean) {
+    const draft = deliveryReviewDraftFor(applicationId)
+    await reviewDeliveryResultAction({
+      applicationId,
+      approved,
+      rewardPoints: draft.rewardPoints,
+      note: draft.note,
+    })
+    delete deliveryReviewDrafts[applicationId]
+    await welfare.reloadWelfareState()
+    await refreshPointTransactions()
+  }
+
   function rejectApplicationWithOptions(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
     welfare.rejectApplication(applicationId, reason, options)
     delete rejectFraudulentDrafts[applicationId]
+  }
+
+  async function answerApplication(applicationId: string, answer: string) {
+    welfare.answerApplication(applicationId, answer)
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await provisionApplicationReward(welfare.currentUser.value!.id, applicationId)
+    await welfare.reloadWelfareState()
+    await refreshPointTransactions()
   }
 
   function completeApplication(applicationId: string) {
@@ -2136,7 +2385,7 @@ export function useWelfareUiState() {
     rechargeForm.loading = true
     rechargeForm.statusMessage = '正在创建 LINUX DO Credit 充值订单...'
     try {
-      const result = await createRechargeOrder(amount, welfare.currentUser.value.id)
+      const result = await createRechargeOrder(amount, welfare.currentUser.value.id, rechargeForm.selectedCouponId || undefined)
       rechargeForm.statusMessage = '订单已创建，正在跳转到 LINUX DO Credit...'
       globalThis.location.href = result.redirectUrl
     }
@@ -2222,6 +2471,61 @@ export function useWelfareUiState() {
     return result
   }
 
+  async function redeemCouponCodeFromForm() {
+    const result = welfare.redeemCouponCode(couponRedeemForm.code)
+    couponRedeemForm.code = ''
+    couponRedeemForm.message = `已兑换：${result.name}`
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
+  async function createCouponTemplateFromForm() {
+    const template = welfare.createCouponTemplate({
+      name: couponTemplateForm.name,
+      description: couponTemplateForm.description,
+      enabled: true,
+      ttlDays: Number(couponTemplateForm.ttlDays),
+      totalGrantLimit: Number(couponTemplateForm.totalGrantLimit) || undefined,
+      rule: {
+        scope: couponTemplateForm.scope,
+        discountType: couponTemplateForm.discountType,
+        discountRate: Number(couponTemplateForm.discountFold) / 10,
+        discountAmount: Number(couponTemplateForm.discountAmount),
+        resourceTypes: couponTemplateForm.resourceTypes,
+        minSpend: Number(couponTemplateForm.minSpend),
+        maxDiscount: Number(couponTemplateForm.maxDiscount),
+      },
+    })
+    couponCodeForm.templateId = template.id
+    couponGrantForm.templateId = template.id
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return template
+  }
+
+  async function createCouponCodeFromForm() {
+    const code = welfare.createCouponRedemptionCode({
+      templateId: couponCodeForm.templateId,
+      code: couponCodeForm.code || undefined,
+      maxRedemptions: Number(couponCodeForm.maxRedemptions),
+      perUserLimit: Number(couponCodeForm.perUserLimit),
+      expiresAt: couponCodeForm.expiresAt || undefined,
+    })
+    couponCodeForm.code = ''
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return code
+  }
+
+  async function grantCouponFromTemplateForm() {
+    const coupons = welfare.grantCouponFromTemplate(couponGrantForm.userIds, couponGrantForm.templateId)
+    couponGrantForm.userIds = []
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    return coupons
+  }
+
   async function createSquarePost() {
     const postType = squarePostForm.applicationId ? 'application_template' : squarePostForm.postType
     const result = welfare.createSquarePost({
@@ -2300,6 +2604,10 @@ export function useWelfareUiState() {
     adminLoginForm,
     profileForm,
     invitationForm,
+    couponRedeemForm,
+    couponTemplateForm,
+    couponCodeForm,
+    couponGrantForm,
     rechargeForm,
     rechargeConfigForm,
     pointTransactions,
@@ -2360,6 +2668,10 @@ export function useWelfareUiState() {
     supplementDrafts,
     rejectFraudulentDrafts,
     crowdReviewDrafts,
+    collaborationApplicationForm,
+    collaborationReviewDrafts,
+    deliveryResultDrafts,
+    deliveryReviewDrafts,
     pointDrafts,
     selectedSection,
     activeAdminTab,
@@ -2394,6 +2706,11 @@ export function useWelfareUiState() {
     latestTransactions,
     currentUserCoupons,
     availableCurrentUserCoupons,
+    availableResourceCoupons,
+    availableRechargeCoupons,
+    couponTemplates,
+    couponCodes,
+    couponRedemptions,
     currentUserDailyCheckIns,
     currentUserInviteCode,
     currentUserInvitationBinding,
@@ -2416,7 +2733,9 @@ export function useWelfareUiState() {
     removeResourceApplicationItem,
     ensureSelectedResourceItems,
     resetResourceApplicationForm,
+    fillResourceApplicationFormFromDraft,
     submitResourceApplication,
+    updateResourceDraft,
     resourceReviewDraftFor,
     approveResourceItem,
     completeResourceProvision,
@@ -2433,12 +2752,25 @@ export function useWelfareUiState() {
     checkInToday,
     bindInvitationCode,
     vouchInvitation,
+    redeemCouponCodeFromForm,
+    createCouponTemplateFromForm,
+    createCouponCodeFromForm,
+    grantCouponFromTemplateForm,
     refreshSystemConfigForm,
     persistSystemConfig,
     persistApplicationPolicy,
     crowdReviewDraftFor,
     submitCrowdReviewDraft,
+    collaborationReviewDraftFor,
+    deliveryReviewDraftFor,
+    submitCollaborationApplicationFromForm,
+    reviewCollaborationApplication,
+    claimDeliveryApplication,
+    cancelDeliveryClaim,
+    submitDeliveryResult,
+    reviewDeliveryResult,
     rejectApplicationWithOptions,
+    answerApplication,
     completeApplication,
     requestApplicationSupplement,
     submitApplicationSupplement,

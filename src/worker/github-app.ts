@@ -1,6 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
 import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfare'
+import { assertSafeExternalUrl } from './auth'
 import { bytesToHex, decryptSecret, encryptSecret } from './crypto'
 import { authenticatedUserId, createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
@@ -485,9 +486,9 @@ async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {
       clientId,
       clientSecret: clientSecretForStorage,
       callbackUrl: payload.callbackUrl?.trim() || stored?.callback_url || defaultCallbackUrl(request),
-      authorizeUrl: payload.authorizeUrl?.trim() || stored?.authorize_url || DEFAULT_AUTHORIZE_URL,
-      tokenUrl: payload.tokenUrl?.trim() || stored?.token_url || DEFAULT_TOKEN_URL,
-      apiBaseUrl: payload.apiBaseUrl?.trim() || stored?.api_base_url || DEFAULT_API_BASE_URL,
+      authorizeUrl: payload.authorizeUrl?.trim() ? assertSafeExternalUrl(payload.authorizeUrl).toString() : stored?.authorize_url || DEFAULT_AUTHORIZE_URL,
+      tokenUrl: payload.tokenUrl?.trim() ? assertSafeExternalUrl(payload.tokenUrl).toString() : stored?.token_url || DEFAULT_TOKEN_URL,
+      apiBaseUrl: payload.apiBaseUrl?.trim() ? assertSafeExternalUrl(payload.apiBaseUrl).toString().replace(/\/+$/, '') : stored?.api_base_url || DEFAULT_API_BASE_URL,
       scopes: payload.scopes?.trim() || stored?.scopes || DEFAULT_SCOPES,
     }
 
@@ -551,7 +552,7 @@ async function handleGitHubAuthorize(request: Request, env: WorkerEnv) {
 }
 
 async function exchangeCodeForToken(settings: Awaited<ReturnType<typeof getEffectiveGitHubAppSettings>>, code: string) {
-  const response = await fetch(settings.tokenUrl, {
+  const response = await fetch(assertSafeExternalUrl(settings.tokenUrl).toString(), {
     method: 'POST',
     headers: {
       'accept': 'application/json',
@@ -574,7 +575,7 @@ async function exchangeCodeForToken(settings: Awaited<ReturnType<typeof getEffec
 }
 
 async function githubApi<T>(settings: Awaited<ReturnType<typeof getEffectiveGitHubAppSettings>>, token: string, path: string) {
-  const response = await fetch(new URL(path, settings.apiBaseUrl).toString(), {
+  const response = await fetch(new URL(path, assertSafeExternalUrl(settings.apiBaseUrl).toString()).toString(), {
     headers: {
       'accept': 'application/vnd.github+json',
       'authorization': `Bearer ${token}`,

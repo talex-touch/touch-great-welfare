@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
 import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfare'
-import { assertAdminRequest, errorResponse, json, maskSecret, now, readJson } from './auth'
+import { assertAdminRequest, assertSafeExternalUrl, errorResponse, json, maskSecret, now, readJson } from './auth'
 import { bytesToHex, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
@@ -498,10 +498,10 @@ async function handleProviderConfigs(request: Request, env: WorkerEnv) {
         client_id: item.clientId?.trim() || existing?.client_id || '',
         client_secret: item.clientSecret?.trim() || existingClientSecret,
         callback_url: item.callbackUrl?.trim() || existing?.callback_url || defaultCallbackUrl(request),
-        authorize_url: item.authorizeUrl?.trim() || existing?.authorize_url || '',
-        token_url: item.tokenUrl?.trim() || existing?.token_url || '',
-        userinfo_url: item.userInfoUrl?.trim() || existing?.userinfo_url || '',
-        issuer_url: item.issuerUrl?.trim() || existing?.issuer_url || '',
+        authorize_url: item.authorizeUrl?.trim() ? assertSafeExternalUrl(item.authorizeUrl).toString() : existing?.authorize_url || '',
+        token_url: item.tokenUrl?.trim() ? assertSafeExternalUrl(item.tokenUrl).toString() : existing?.token_url || '',
+        userinfo_url: item.userInfoUrl?.trim() ? assertSafeExternalUrl(item.userInfoUrl).toString() : existing?.userinfo_url || '',
+        issuer_url: item.issuerUrl?.trim() ? assertSafeExternalUrl(item.issuerUrl).toString() : existing?.issuer_url || '',
         scopes: item.scopes === undefined ? (existing?.scopes ?? DEFAULT_SCOPES) : item.scopes.trim(),
       }
       if (provider.enabled) {
@@ -551,7 +551,7 @@ async function handleAuthorize(request: Request, env: WorkerEnv) {
     providerId: provider.id,
     redirect: normalizeRedirect(payload.redirect),
   })
-  const authorizeUrl = new URL(provider.authorize_url)
+  const authorizeUrl = assertSafeExternalUrl(provider.authorize_url)
   authorizeUrl.searchParams.set('client_id', provider.client_id)
   authorizeUrl.searchParams.set('redirect_uri', runtimeUrl(request, provider.callback_url))
   authorizeUrl.searchParams.set('response_type', 'code')
@@ -570,7 +570,7 @@ async function exchangeCodeForToken(request: Request, provider: OAuthProviderRec
     code,
     redirect_uri: runtimeUrl(request, provider.callback_url),
   })
-  const response = await fetch(provider.token_url, {
+  const response = await fetch(assertSafeExternalUrl(provider.token_url).toString(), {
     method: 'POST',
     headers: {
       'accept': 'application/json',
@@ -586,7 +586,7 @@ async function exchangeCodeForToken(request: Request, provider: OAuthProviderRec
 }
 
 async function fetchUserInfo(provider: OAuthProviderRecord, token: string) {
-  const response = await fetch(provider.userinfo_url, {
+  const response = await fetch(assertSafeExternalUrl(provider.userinfo_url).toString(), {
     headers: {
       'accept': 'application/json',
       'authorization': `Bearer ${token}`,
@@ -620,7 +620,7 @@ function resolveUserAvatar(provider: OAuthProviderRecord, userInfo: UserInfoResp
     return `https:${sizedAvatar}`
   if (sizedAvatar.startsWith('/')) {
     const baseUrl = provider.id === LINUX_DO_PROVIDER_ID ? 'https://linux.do' : provider.issuer_url || provider.userinfo_url
-    return new URL(sizedAvatar, baseUrl).toString()
+    return new URL(sizedAvatar, assertSafeExternalUrl(baseUrl).toString()).toString()
   }
   return sizedAvatar
 }

@@ -83,13 +83,13 @@ export function saveRechargeConfig(payload: SaveRechargeConfigPayload, adminUser
   })
 }
 
-export function createRechargeOrder(amount: number, userId: string) {
+export function createRechargeOrder(amount: number, userId: string, couponId?: string) {
   return requestRecharge<CreateRechargeResult>('/api/recharge/create', {
     method: 'POST',
     headers: {
       'x-welfare-user-id': userId,
     },
-    body: JSON.stringify({ amount, userId }),
+    body: JSON.stringify({ amount, userId, couponId }),
   })
 }
 

@@ -14,6 +14,8 @@ export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustmen
 export type AiReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_human' | 'failed'
 export type CrowdReviewTargetType = 'pro_application'
 export type CrowdReviewDecision = 'approve' | 'reject' | 'needs_admin'
+export type CollaborationApplicationStatus = 'pending' | 'approved' | 'rejected'
+export type DeliveryReviewStatus = 'pending_review' | 'approved' | 'rejected'
 export type UserLevelKey = 'starter' | 'steady' | 'trusted' | 'priority' | 'guardian'
 export type LlmApiModelRegion = 'domestic' | 'global' | 'custom'
 export type SquarePostType = 'application_template' | 'review'
@@ -222,6 +224,13 @@ export interface WelfareApplication {
   cooldownUntil?: string
   answer?: string
   messages?: ApplicationMessage[]
+  deliveryAssigneeId?: string
+  deliveryClaimedAt?: string
+  deliverySubmittedAt?: string
+  deliveryReviewStatus?: DeliveryReviewStatus
+  deliveryRewardPoints?: number
+  deliveryRewardedAt?: string
+  deliveryRewardedBy?: string
   createdAt: string
   reviewedAt?: string
   /** Resource application platform fields. Present when type === 'resource'. */
@@ -290,7 +299,56 @@ export interface EducationEmailChallenge {
   createdAt: string
 }
 
-export type CouponSource = 'daily_streak_3' | 'daily_streak_7' | 'manual'
+export type CouponSource = 'daily_streak_3' | 'daily_streak_7' | 'manual' | 'redemption_code' | 'bulk_grant'
+export type CouponScope = 'resource' | 'recharge' | 'general'
+export type CouponDiscountType = 'rate' | 'fixed_points' | 'fixed_ldc'
+export type CouponUseTarget = 'resource_application' | 'recharge_order'
+
+export interface CouponRule {
+  scope: CouponScope
+  discountType: CouponDiscountType
+  discountRate?: number
+  discountAmount?: number
+  resourceTypes?: ResourceType[]
+  minSpend?: number
+  maxDiscount?: number
+}
+
+export interface CouponTemplate {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  rule: CouponRule
+  ttlDays: number
+  totalGrantLimit?: number
+  grantedCount: number
+  createdAt: string
+  updatedAt: string
+  createdBy?: string
+}
+
+export interface CouponRedemptionCode {
+  id: string
+  code: string
+  templateId: string
+  enabled: boolean
+  maxRedemptions: number
+  redeemedCount: number
+  perUserLimit: number
+  expiresAt?: string
+  createdAt: string
+  createdBy?: string
+}
+
+export interface CouponRedemptionRecord {
+  id: string
+  codeId: string
+  templateId: string
+  userId: string
+  couponId: string
+  redeemedAt: string
+}
 
 export interface UserCoupon {
   id: string
@@ -298,9 +356,19 @@ export interface UserCoupon {
   name: string
   discountRate: number
   source: CouponSource
+  scope?: CouponScope
+  discountType?: CouponDiscountType
+  discountAmount?: number
+  resourceTypes?: ResourceType[]
+  minSpend?: number
+  maxDiscount?: number
+  templateId?: string
+  codeId?: string
   createdAt: string
   expiresAt?: string
   usedAt?: string
+  usedFor?: CouponUseTarget
+  usedRefId?: string
   usedApplicationId?: string
 }
 
@@ -331,6 +399,17 @@ export interface CrowdReview {
   reviewerId: string
   decision: CrowdReviewDecision
   note: string
+  createdAt: string
+}
+
+export interface CollaborationApplication {
+  id: string
+  userId: string
+  reason: string
+  status: CollaborationApplicationStatus
+  reply?: string
+  reviewedBy?: string
+  reviewedAt?: string
   createdAt: string
 }
 
@@ -442,10 +521,14 @@ export interface WelfareState {
   applications: WelfareApplication[]
   studentVerifications: StudentVerification[]
   educationEmailChallenges: EducationEmailChallenge[]
+  couponTemplates: CouponTemplate[]
+  couponCodes: CouponRedemptionCode[]
+  couponRedemptions: CouponRedemptionRecord[]
   coupons: UserCoupon[]
   dailyCheckIns: DailyCheckIn[]
   invitationBindings: InvitationBinding[]
   crowdReviews: CrowdReview[]
+  collaborationApplications: CollaborationApplication[]
   squarePosts: SquarePost[]
   squareBoosts: SquareBoost[]
   squareReports: SquareReport[]
@@ -570,6 +653,29 @@ export interface RejectApplicationOptions {
   fraudulent?: boolean
 }
 
+export interface SubmitCollaborationApplicationPayload {
+  reason: string
+}
+
+export interface ReviewCollaborationApplicationPayload {
+  id: string
+  status: Exclude<CollaborationApplicationStatus, 'pending'>
+  reply?: string
+}
+
+export interface SubmitDeliveryPayload {
+  applicationId: string
+  content: string
+  attachments?: FileLike[]
+}
+
+export interface ReviewDeliveryPayload {
+  applicationId: string
+  approved: boolean
+  rewardPoints?: number
+  note?: string
+}
+
 export interface UserReviewStats {
   submitted: number
   approved: number
@@ -592,7 +698,11 @@ export function verificationOrganizationLabel(type?: string) {
 }
 
 export function educationEmailVerificationLabel(source?: EducationEmailVerificationSource) {
-  return source === 'user_confirmed_sent' ? '已验证教育邮箱真实性' : '已自动验证'
+  if (source === 'admin_approved')
+    return '管理员已核验'
+  if (source === 'mail_auto')
+    return '收件 API 已验证'
+  return '已声明发送'
 }
 
 export interface UserLevelRule {
@@ -900,6 +1010,9 @@ export const SQUARE_BOOST_REWARD_POINTS = 5
 export const SQUARE_DAILY_BOOST_LIMIT = 10
 export const SQUARE_BOOST_REPORT_PENALTY_POINTS = 10
 export const SQUARE_BOOST_REPORT_COOLDOWN_DAYS = 3
+export const COLLABORATION_APPLICATION_MIN_REASON_CHARS = 20
+export const COLLABORATION_DELIVERY_REWARD_MIN = 1
+export const COLLABORATION_DELIVERY_REWARD_MAX = 100000
 export { DATA_RETENTION_DAYS }
 
 const DEFAULT_KIND_POLICY: ApplicationKindPolicy = {
@@ -1296,6 +1409,10 @@ function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+function createCouponCode() {
+  return Math.random().toString(36).slice(2, 10).toUpperCase()
+}
+
 function defaultOauth(): OauthConfig {
   return {
     enabled: false,
@@ -1323,10 +1440,14 @@ function defaultState(): WelfareState {
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
+    couponTemplates: [],
+    couponCodes: [],
+    couponRedemptions: [],
     coupons: [],
     dailyCheckIns: [],
     invitationBindings: [],
     crowdReviews: [],
+    collaborationApplications: [],
     squarePosts: [],
     squareBoosts: [],
     squareReports: [],
@@ -1421,6 +1542,38 @@ export function normalizeSystemConfig(input?: Partial<SystemConfig>): SystemConf
   }
 }
 
+function normalizeCouponScope(value: unknown): CouponScope {
+  return value === 'resource' || value === 'recharge' || value === 'general' ? value : 'resource'
+}
+
+function normalizeCouponDiscountType(value: unknown, scope: CouponScope): CouponDiscountType {
+  if (value === 'fixed_points' || value === 'fixed_ldc' || value === 'rate')
+    return value
+  return scope === 'recharge' ? 'fixed_ldc' : 'rate'
+}
+
+function normalizeCouponResourceTypes(value: unknown) {
+  if (!Array.isArray(value))
+    return []
+
+  const known = new Set(RESOURCE_TYPE_CONFIGS.map(item => item.resourceType))
+  return Array.from(new Set(value.filter((item): item is ResourceType => known.has(item as ResourceType))))
+}
+
+function normalizeCouponRule(input: Partial<CouponRule> | undefined): CouponRule {
+  const scope = normalizeCouponScope(input?.scope)
+  const discountType = normalizeCouponDiscountType(input?.discountType, scope)
+  return {
+    scope,
+    discountType,
+    discountRate: Math.max(0.01, Math.min(1, Number(input?.discountRate || 1))),
+    discountAmount: Math.max(0, Math.trunc(Number(input?.discountAmount || 0))),
+    resourceTypes: normalizeCouponResourceTypes(input?.resourceTypes),
+    minSpend: Math.max(0, Math.trunc(Number(input?.minSpend || 0))),
+    maxDiscount: Math.max(0, Math.trunc(Number(input?.maxDiscount || 0))),
+  }
+}
+
 function normalizeState(input: Partial<WelfareState>): WelfareState {
   const fallback = defaultState()
   const normalized = {
@@ -1437,10 +1590,14 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     applications: input.applications ?? [],
     studentVerifications: input.studentVerifications ?? [],
     educationEmailChallenges: input.educationEmailChallenges ?? [],
+    couponTemplates: input.couponTemplates ?? [],
+    couponCodes: input.couponCodes ?? [],
+    couponRedemptions: input.couponRedemptions ?? [],
     coupons: input.coupons ?? [],
     dailyCheckIns: input.dailyCheckIns ?? [],
     invitationBindings: input.invitationBindings ?? [],
     crowdReviews: input.crowdReviews ?? [],
+    collaborationApplications: input.collaborationApplications ?? [],
     squarePosts: input.squarePosts ?? [],
     squareBoosts: input.squareBoosts ?? [],
     squareReports: input.squareReports ?? [],
@@ -1531,6 +1688,23 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       contextAppendUntil: application.contextAppendUntil ?? application.retentionExpiresAt ?? createRetentionExpiresAt(createdAt, storageExtended),
       postApprovalSupplementLimit: proPostApprovalSupplementLimit(application),
       postApprovalSupplementCount: proPostApprovalSupplementCount(application),
+      deliveryReviewStatus: ['pending_review', 'approved', 'rejected'].includes(application.deliveryReviewStatus ?? '')
+        ? application.deliveryReviewStatus
+        : undefined,
+      deliveryRewardPoints: application.deliveryRewardPoints !== undefined
+        ? Math.max(0, Math.trunc(Number(application.deliveryRewardPoints || 0)))
+        : undefined,
+    }
+  })
+
+  normalized.collaborationApplications = normalized.collaborationApplications.map((application) => {
+    const status = ['pending', 'approved', 'rejected'].includes(application.status) ? application.status : 'pending'
+    return {
+      ...application,
+      reason: sanitizeRichText(application.reason),
+      status,
+      reply: application.reply ? sanitizeRichText(application.reply) : undefined,
+      createdAt: application.createdAt || now(),
     }
   })
 
@@ -1552,12 +1726,55 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       mailto: item.mailto || `mailto:${EDUCATION_EMAIL_REVIEW_INBOX}`,
     }))
 
-  normalized.coupons = normalized.coupons
+  normalized.couponTemplates = normalized.couponTemplates
+    .filter(item => item && typeof item === 'object')
+    .map((item) => {
+      const rule = normalizeCouponRule(item.rule)
+      return {
+        ...item,
+        name: item.name?.trim() || '未命名优惠券',
+        description: item.description?.trim() || undefined,
+        enabled: item.enabled !== false,
+        rule,
+        ttlDays: Math.max(0, Math.min(3650, Math.trunc(Number(item.ttlDays ?? DAILY_CHECK_IN_COUPON_TTL_DAYS)))),
+        totalGrantLimit: item.totalGrantLimit ? Math.max(1, Math.trunc(Number(item.totalGrantLimit))) : undefined,
+        grantedCount: Math.max(0, Math.trunc(Number(item.grantedCount || 0))),
+        createdAt: item.createdAt || now(),
+        updatedAt: item.updatedAt || item.createdAt || now(),
+      }
+    })
+
+  normalized.couponCodes = normalized.couponCodes
     .filter(item => item && typeof item === 'object')
     .map(item => ({
       ...item,
-      discountRate: Math.max(0.01, Math.min(1, Number(item.discountRate || 1))),
+      code: item.code?.trim().toUpperCase() || createCouponCode(),
+      enabled: item.enabled !== false,
+      maxRedemptions: Math.max(1, Math.trunc(Number(item.maxRedemptions || 1))),
+      redeemedCount: Math.max(0, Math.trunc(Number(item.redeemedCount || 0))),
+      perUserLimit: Math.max(1, Math.trunc(Number(item.perUserLimit || 1))),
+      createdAt: item.createdAt || now(),
     }))
+
+  normalized.couponRedemptions = normalized.couponRedemptions
+    .filter(item => item && typeof item === 'object')
+
+  normalized.coupons = normalized.coupons
+    .filter(item => item && typeof item === 'object')
+    .map((item) => {
+      const scope = normalizeCouponScope(item.scope)
+      const discountType = normalizeCouponDiscountType(item.discountType, scope)
+      return {
+        ...item,
+        scope,
+        discountType,
+        discountRate: Math.max(0.01, Math.min(1, Number(item.discountRate || 1))),
+        discountAmount: Math.max(0, Math.trunc(Number(item.discountAmount || 0))),
+        resourceTypes: normalizeCouponResourceTypes(item.resourceTypes),
+        minSpend: Math.max(0, Math.trunc(Number(item.minSpend || 0))),
+        maxDiscount: Math.max(0, Math.trunc(Number(item.maxDiscount || 0))),
+      }
+    })
 
   normalized.dailyCheckIns = normalized.dailyCheckIns
     .filter(item => item && typeof item === 'object')
@@ -1619,7 +1836,7 @@ function assertAdmin(user?: User): asserts user is User {
 function assertCrowdReviewer(user?: User): asserts user is User {
   assertUserActive(user)
   if (!user || !['admin', 'reviewer'].includes(user.role))
-    throw new Error('需要众包审核权限')
+    throw new Error('需要协作处理员权限')
 }
 
 function emptyUserReviewStats(): UserReviewStats {
@@ -1730,7 +1947,7 @@ export function buildUserLevelCard(user: User, source: Pick<WelfareState, 'appli
   if (user.profile.githubAuthorized)
     reasons.push('GitHub 授权')
   if (user.role === 'reviewer')
-    reasons.push('众包审核员')
+    reasons.push('协作处理员')
 
   return {
     ...rule,
@@ -2178,6 +2395,31 @@ export function useWelfareStore() {
   const pendingStudentVerifications = computed(() => state.studentVerifications
     .filter(item => item.status === 'pending' || item.status === 'needs_supplement')
     .sort(compareReviewPriority))
+  const pendingCollaborationApplications = computed(() => state.collaborationApplications
+    .filter(item => item.status === 'pending')
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
+  const currentUserCollaborationApplication = computed(() => {
+    if (!currentUser.value)
+      return undefined
+
+    return state.collaborationApplications
+      .filter(item => item.userId === currentUser.value?.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+  })
+  const claimableDeliveryApplications = computed(() => state.applications
+    .filter(item => canClaimDeliveryApplication(item, currentUser.value))
+    .sort(compareReviewPriority))
+  const currentUserDeliveryApplications = computed(() => {
+    if (!currentUser.value)
+      return []
+
+    return state.applications
+      .filter(item => item.deliveryAssigneeId === currentUser.value?.id && item.status !== 'completed')
+      .sort((a, b) => (b.deliveryClaimedAt ?? b.createdAt).localeCompare(a.deliveryClaimedAt ?? a.createdAt))
+  })
+  const pendingDeliveryReviewApplications = computed(() => state.applications
+    .filter(item => item.deliveryReviewStatus === 'pending_review')
+    .sort((a, b) => (b.deliverySubmittedAt ?? b.createdAt).localeCompare(a.deliverySubmittedAt ?? a.createdAt)))
   const totalReservedApplications = computed(() => state.applications
     .filter(item => item.status === 'reserved')
     .length)
@@ -2404,32 +2646,261 @@ export function useWelfareStore() {
     return Number.isFinite(expiresAt) && Number.isFinite(currentTime) && expiresAt > currentTime
   }
 
+  function couponAppliesToResourceTypes(coupon: UserCoupon, resourceTypes: ResourceType[]) {
+    if (coupon.scope !== 'resource' && coupon.scope !== 'general')
+      return false
+    if (!coupon.resourceTypes?.length)
+      return true
+    return resourceTypes.some(resourceType => coupon.resourceTypes?.includes(resourceType))
+  }
+
+  function couponAppliesToTarget(coupon: UserCoupon, target: CouponScope, cost: number, resourceTypes: ResourceType[] = []) {
+    if (!isCouponAvailable(coupon, coupon.userId))
+      return false
+    if (coupon.minSpend && cost < coupon.minSpend)
+      return false
+    if (target === 'resource')
+      return couponAppliesToResourceTypes(coupon, resourceTypes)
+    if (target === 'recharge')
+      return coupon.scope === 'recharge' || coupon.scope === 'general'
+    return coupon.scope === 'general'
+  }
+
   function availableCouponsForUser(userId: string, referenceTime = now()) {
     return state.coupons
       .filter(coupon => isCouponAvailable(coupon, userId, referenceTime))
       .sort((left, right) => left.discountRate - right.discountRate || left.createdAt.localeCompare(right.createdAt))
   }
 
-  function createUserCoupon(userId: string, source: CouponSource, discountRate: number, createdAt = now()) {
-    const name = discountRate <= 0.5 ? '连续签到 7 天五折券' : '连续签到 3 天八折券'
+  function availableCouponsForTarget(userId: string, target: CouponScope, cost = 0, resourceTypes: ResourceType[] = [], referenceTime = now()) {
+    return state.coupons
+      .filter(coupon => isCouponAvailable(coupon, userId, referenceTime))
+      .filter(coupon => couponAppliesToTarget(coupon, target, cost, resourceTypes))
+      .sort((left, right) => left.discountRate - right.discountRate || left.createdAt.localeCompare(right.createdAt))
+  }
+
+  function createCouponFromRule(userId: string, source: CouponSource, template: Pick<CouponTemplate, 'id' | 'name' | 'rule' | 'ttlDays'>, createdAt = now(), codeId?: string) {
     const coupon: UserCoupon = {
       id: createId('coupon'),
       userId,
-      name,
-      discountRate,
+      name: template.name,
+      discountRate: template.rule.discountRate ?? 1,
       source,
+      scope: template.rule.scope,
+      discountType: template.rule.discountType,
+      discountAmount: template.rule.discountAmount,
+      resourceTypes: template.rule.resourceTypes,
+      minSpend: template.rule.minSpend,
+      maxDiscount: template.rule.maxDiscount,
+      templateId: template.id,
+      codeId,
       createdAt,
-      expiresAt: addDays(createdAt, DAILY_CHECK_IN_COUPON_TTL_DAYS),
+      expiresAt: template.ttlDays > 0 ? addDays(createdAt, template.ttlDays) : undefined,
     }
     state.coupons.unshift(coupon)
     return coupon
+  }
+
+  function createUserCoupon(userId: string, source: CouponSource, discountRate: number, createdAt = now(), name?: string, ttlDays = DAILY_CHECK_IN_COUPON_TTL_DAYS) {
+    const rawDiscountRate = Number(discountRate)
+    const normalizedDiscountRate = Number.isFinite(rawDiscountRate) ? Math.max(0.01, Math.min(1, rawDiscountRate)) : 1
+    const couponName = name?.trim() || (normalizedDiscountRate <= 0.5 ? '连续签到 7 天五折券' : '连续签到 3 天八折券')
+    const coupon: UserCoupon = {
+      id: createId('coupon'),
+      userId,
+      name: couponName,
+      discountRate: normalizedDiscountRate,
+      source,
+      createdAt,
+      expiresAt: ttlDays > 0 ? addDays(createdAt, ttlDays) : undefined,
+    }
+    state.coupons.unshift(coupon)
+    return coupon
+  }
+
+  function createCouponTemplate(payload: { name: string, description?: string, enabled?: boolean, rule: Partial<CouponRule>, ttlDays?: number, totalGrantLimit?: number }) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const name = payload.name.trim()
+    if (!name)
+      throw new Error('请填写优惠券名称')
+
+    const rule = normalizeCouponRule(payload.rule)
+    if (rule.discountType === 'rate' && (!rule.discountRate || rule.discountRate <= 0 || rule.discountRate > 1))
+      throw new Error('折扣倍率需在 0.01 到 1 之间')
+    if (rule.discountType !== 'rate' && !rule.discountAmount)
+      throw new Error('固定抵扣金额需大于 0')
+
+    const createdAt = now()
+    const template: CouponTemplate = {
+      id: createId('cpt'),
+      name,
+      description: payload.description?.trim() || undefined,
+      enabled: payload.enabled !== false,
+      rule,
+      ttlDays: Math.max(0, Math.min(3650, Math.trunc(Number(payload.ttlDays ?? DAILY_CHECK_IN_COUPON_TTL_DAYS)))),
+      totalGrantLimit: payload.totalGrantLimit ? Math.max(1, Math.trunc(Number(payload.totalGrantLimit))) : undefined,
+      grantedCount: 0,
+      createdAt,
+      updatedAt: createdAt,
+      createdBy: currentUser.value.id,
+    }
+    state.couponTemplates.unshift(template)
+    return template
+  }
+
+  function updateCouponTemplate(templateId: string, payload: { name?: string, description?: string, enabled?: boolean, rule?: Partial<CouponRule>, ttlDays?: number, totalGrantLimit?: number }) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const template = state.couponTemplates.find(item => item.id === templateId)
+    if (!template)
+      throw new Error('优惠券模板不存在')
+
+    if (payload.name !== undefined) {
+      const name = payload.name.trim()
+      if (!name)
+        throw new Error('请填写优惠券名称')
+      template.name = name
+    }
+    template.description = payload.description?.trim() || template.description
+    template.enabled = payload.enabled ?? template.enabled
+    if (payload.rule)
+      template.rule = normalizeCouponRule({ ...template.rule, ...payload.rule })
+    if (payload.ttlDays !== undefined)
+      template.ttlDays = Math.max(0, Math.min(3650, Math.trunc(Number(payload.ttlDays))))
+    if (payload.totalGrantLimit !== undefined)
+      template.totalGrantLimit = payload.totalGrantLimit > 0 ? Math.max(1, Math.trunc(Number(payload.totalGrantLimit))) : undefined
+    template.updatedAt = now()
+    return template
+  }
+
+  function createCouponRedemptionCode(payload: { templateId: string, code?: string, maxRedemptions?: number, perUserLimit?: number, expiresAt?: string }) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const template = state.couponTemplates.find(item => item.id === payload.templateId)
+    if (!template)
+      throw new Error('优惠券模板不存在')
+
+    const codeText = (payload.code?.trim() || createCouponCode()).toUpperCase()
+    if (state.couponCodes.some(item => item.code === codeText))
+      throw new Error('兑换码已存在')
+
+    const code: CouponRedemptionCode = {
+      id: createId('ccd'),
+      code: codeText,
+      templateId: template.id,
+      enabled: true,
+      maxRedemptions: Math.max(1, Math.trunc(Number(payload.maxRedemptions || 1))),
+      redeemedCount: 0,
+      perUserLimit: Math.max(1, Math.trunc(Number(payload.perUserLimit || 1))),
+      expiresAt: payload.expiresAt || undefined,
+      createdAt: now(),
+      createdBy: currentUser.value.id,
+    }
+    state.couponCodes.unshift(code)
+    return code
+  }
+
+  function redeemCouponCode(codeValue: string) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    const codeText = codeValue.trim().toUpperCase()
+    if (!codeText)
+      throw new Error('请输入兑换码')
+
+    const code = state.couponCodes.find(item => item.code === codeText)
+    if (!code || !code.enabled)
+      throw new Error('兑换码无效')
+    if (code.expiresAt && new Date(code.expiresAt).getTime() <= Date.now())
+      throw new Error('兑换码已过期')
+    if (code.redeemedCount >= code.maxRedemptions)
+      throw new Error('兑换码次数已用完')
+
+    const template = state.couponTemplates.find(item => item.id === code.templateId)
+    if (!template || !template.enabled)
+      throw new Error('优惠券已停用')
+
+    const userRedeemedCount = state.couponRedemptions.filter(item => item.codeId === code.id && item.userId === currentUser.value?.id).length
+    if (userRedeemedCount >= code.perUserLimit)
+      throw new Error('该兑换码已达到你的兑换上限')
+
+    const coupon = createCouponFromRule(currentUser.value.id, 'redemption_code', template, now(), code.id)
+    code.redeemedCount += 1
+    template.grantedCount += 1
+    state.couponRedemptions.unshift({
+      id: createId('cdr'),
+      codeId: code.id,
+      templateId: template.id,
+      userId: currentUser.value.id,
+      couponId: coupon.id,
+      redeemedAt: coupon.createdAt,
+    })
+    return coupon
+  }
+
+  function grantCouponFromTemplate(userIds: string[], templateId: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const template = state.couponTemplates.find(item => item.id === templateId)
+    if (!template || !template.enabled)
+      throw new Error('优惠券模板不存在或已停用')
+
+    const uniqueUserIds = Array.from(new Set(userIds)).filter(userId => state.users.some(user => user.id === userId))
+    if (!uniqueUserIds.length)
+      throw new Error('请选择要发放的用户')
+    if (template.totalGrantLimit && template.grantedCount + uniqueUserIds.length > template.totalGrantLimit)
+      throw new Error('发放数量超过模板总发放上限')
+
+    const createdAt = now()
+    const coupons = uniqueUserIds.map(userId => createCouponFromRule(userId, 'bulk_grant', template, createdAt))
+    template.grantedCount += coupons.length
+    template.updatedAt = createdAt
+    return coupons
+  }
+
+  function grantUserCoupon(userId: string, payload: { name?: string, discountRate: number, ttlDays?: number }) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const user = state.users.find(item => item.id === userId)
+    if (!user)
+      throw new Error('用户不存在')
+
+    const discountRate = Number(payload.discountRate)
+    if (!Number.isFinite(discountRate) || discountRate <= 0 || discountRate > 1)
+      throw new Error('请输入 0.01 到 1 之间的优惠倍率')
+
+    const ttlDays = payload.ttlDays === undefined
+      ? DAILY_CHECK_IN_COUPON_TTL_DAYS
+      : Math.trunc(Number(payload.ttlDays))
+    if (!Number.isFinite(ttlDays) || ttlDays < 0 || ttlDays > 3650)
+      throw new Error('有效期天数需在 0 到 3650 之间')
+
+    return createUserCoupon(userId, 'manual', discountRate, now(), payload.name || '管理员手动发放优惠券', ttlDays)
   }
 
   function applyCouponDiscount(cost: number, coupon?: UserCoupon) {
     if (!coupon)
       return { payableCost: cost, discountAmount: 0 }
 
-    const payableCost = applyRateDiscount(cost, coupon.discountRate)
+    let discountAmount = 0
+    if (coupon.discountType === 'fixed_points' || coupon.discountType === 'fixed_ldc') {
+      discountAmount = coupon.discountAmount ?? 0
+    }
+    else {
+      const payableCost = applyRateDiscount(cost, coupon.discountRate)
+      discountAmount = Math.max(0, cost - payableCost)
+    }
+
+    if (coupon.maxDiscount)
+      discountAmount = Math.min(discountAmount, coupon.maxDiscount)
+
+    const payableCost = Math.max(0, cost - Math.min(cost, discountAmount))
     return {
       payableCost,
       discountAmount: Math.max(0, cost - payableCost),
@@ -2451,11 +2922,12 @@ export function useWelfareStore() {
   function resourceCheckoutSnapshot(userId: string, items: SubmitResourceApplicationPayload['resourceItems'], couponId: string | undefined, createdAt: string, shareToSquare = false) {
     const baseCost = items.reduce((sum, item) => sum + estimatedResourceItemCost(item), 0)
     const activityCost = items.reduce((sum, item) => sum + discountedResourceItemCost(item, createdAt), 0)
+    const resourceTypes = Array.from(new Set(items.map(item => item.resourceType)))
     const coupon = couponId
-      ? availableCouponsForUser(userId, createdAt).find(item => item.id === couponId)
+      ? availableCouponsForTarget(userId, 'resource', activityCost, resourceTypes, createdAt).find(item => item.id === couponId)
       : undefined
     if (couponId && !coupon)
-      throw new Error('优惠券不可用或已过期')
+      throw new Error('优惠券不可用、不适用于当前资源或已过期')
 
     const couponResult = applyCouponDiscount(activityCost, coupon)
     const squareResult = squareDiscountSnapshot(couponResult.payableCost, shareToSquare)
@@ -3081,6 +3553,8 @@ export function useWelfareStore() {
         addTransaction(currentUser.value.id, -application.cost, 'spend', '资源申请订单预扣', application.id)
       if (checkout?.coupon) {
         checkout.coupon.usedAt = createdAt
+        checkout.coupon.usedFor = 'resource_application'
+        checkout.coupon.usedRefId = application.id
         checkout.coupon.usedApplicationId = application.id
       }
       if (squarePostId) {
@@ -3104,8 +3578,28 @@ export function useWelfareStore() {
     if (application.status !== 'draft')
       throw new Error('提交后申请内容不可修改')
 
+    const title = payload.title.trim()
     const updatedAt = now()
     const resourceTypes = Array.from(new Set(payload.selectedResourceTypes))
+    const isDraft = !!payload.saveAsDraft
+    if (!title)
+      throw new Error('请填写申请标题')
+    if (!isDraft && !payload.reason.trim())
+      throw new Error('请填写申请说明')
+    if (!isDraft) {
+      assertCanCreateRequest(currentUser.value.id)
+      assertApplicationPolicy({
+        userId: currentUser.value.id,
+        type: 'resource',
+        title,
+        description: buildResourceDescription(payload),
+        createdAt: updatedAt,
+        powNonce: payload.powNonce,
+        turnstileVerified: payload.turnstileVerified,
+      })
+    }
+    if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('附件总大小不能超过 200MB')
     if (!resourceTypes.length)
       throw new Error('请至少选择一种资源类型')
     for (const resourceType of resourceTypes)
@@ -3115,7 +3609,6 @@ export function useWelfareStore() {
     if (!payload.resourceItems.length)
       throw new Error('请至少添加一条资源明细')
 
-    const isDraft = !!payload.saveAsDraft
     const resourceItems = normalizeResourceItems(application.id, payload.resourceItems, updatedAt, !isDraft)
     const actualResourceTypes = Array.from(new Set(resourceItems.map(item => item.resourceType)))
     const checkout = isDraft
@@ -3125,7 +3618,7 @@ export function useWelfareStore() {
     if (checkout && currentUser.value.points < checkout.cost)
       throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
     const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
-    application.title = payload.title.trim()
+    application.title = title
     application.description = buildResourceDescription(payload)
     application.attachments = toAttachmentMeta(payload.attachments)
     application.departmentId = payload.departmentId?.trim() || undefined
@@ -3161,6 +3654,8 @@ export function useWelfareStore() {
         addTransaction(currentUser.value.id, -application.cost, 'spend', '资源申请订单预扣', application.id)
       if (checkout?.coupon) {
         checkout.coupon.usedAt = updatedAt
+        checkout.coupon.usedFor = 'resource_application'
+        checkout.coupon.usedRefId = application.id
         checkout.coupon.usedApplicationId = application.id
       }
       if (squarePostId)
@@ -3539,6 +4034,13 @@ export function useWelfareStore() {
     }
   }
 
+  function assertVerifiedEducationEmailChallenge(challenge: EducationEmailChallenge | undefined, wantsVerified: boolean) {
+    if (!wantsVerified)
+      throw new Error('教育邮箱需要先通过收件 API 验证后才能提交')
+    if (!challenge?.verifiedAt)
+      throw new Error('教育邮箱尚未通过收件 API 验证，请先发送证明邮件并完成验证')
+  }
+
   function createEducationEmailChallenge(email: string, realName = '') {
     assertPersistenceReady()
     assertUserActive(currentUser.value)
@@ -3611,6 +4113,8 @@ export function useWelfareStore() {
         && item.email === educationEmail,
       ) ?? latestEducationEmailChallenge(currentUser.value.id, educationEmail)
       : undefined
+    if (educationEmail)
+      assertVerifiedEducationEmailChallenge(emailChallenge, !!payload.educationEmailVerified)
     const createdAt = now()
 
     const verification: StudentVerification = {
@@ -3624,9 +4128,9 @@ export function useWelfareStore() {
       grade: payload.grade?.trim(),
       educationLevel: payload.educationLevel?.trim(),
       educationEmail,
-      educationEmailVerified: !!(emailChallenge && payload.educationEmailVerified),
-      educationEmailVerifiedAt: emailChallenge && payload.educationEmailVerified ? createdAt : undefined,
-      educationEmailVerificationSource: emailChallenge && payload.educationEmailVerified ? 'user_confirmed_sent' : undefined,
+      educationEmailVerified: !!emailChallenge?.verifiedAt,
+      educationEmailVerifiedAt: emailChallenge?.verifiedAt,
+      educationEmailVerificationSource: emailChallenge?.verifiedAt ? 'mail_auto' : undefined,
       educationEmailChallengeId: emailChallenge?.id,
       notes,
       attachments: toAttachmentMeta(payload.attachments),
@@ -3637,8 +4141,6 @@ export function useWelfareStore() {
     }
     if (emailChallenge) {
       emailChallenge.submittedAt = verification.createdAt
-      if (verification.educationEmailVerified)
-        emailChallenge.verifiedAt = verification.educationEmailVerifiedAt
     }
 
     addTransaction(currentUser.value.id, -STUDENT_REVIEW_FEE, 'spend', `${verificationTypeLabel(verificationType)}审核费`, verification.id)
@@ -3653,17 +4155,7 @@ export function useWelfareStore() {
     if (!challenge)
       throw new Error('教育邮箱证明码不存在')
 
-    const verifiedAt = now()
-    challenge.submittedAt = challenge.submittedAt || verifiedAt
-    challenge.verifiedAt = challenge.verifiedAt || verifiedAt
-
-    const verification = state.studentVerifications.find(item =>
-      item.userId === currentUser.value?.id
-      && item.educationEmailChallengeId === challenge.id
-      && item.educationEmail === challenge.email,
-    )
-    if (verification)
-      markEducationEmailVerified(verification, verifiedAt, 'user_confirmed_sent')
+    challenge.submittedAt = challenge.submittedAt || now()
 
     return challenge
   }
@@ -3710,6 +4202,8 @@ export function useWelfareStore() {
         && item.email === educationEmail,
       ) ?? latestEducationEmailChallenge(currentUser.value.id, educationEmail)
       : undefined
+    if (educationEmail)
+      assertVerifiedEducationEmailChallenge(emailChallenge, !!payload.educationEmailVerified)
 
     const supplementedAt = now()
     verification.verificationType = verificationType
@@ -3720,9 +4214,9 @@ export function useWelfareStore() {
     verification.grade = payload.grade?.trim()
     verification.educationLevel = payload.educationLevel?.trim()
     verification.educationEmail = educationEmail
-    verification.educationEmailVerified = !!(emailChallenge && payload.educationEmailVerified)
-    verification.educationEmailVerifiedAt = emailChallenge && payload.educationEmailVerified ? supplementedAt : undefined
-    verification.educationEmailVerificationSource = emailChallenge && payload.educationEmailVerified ? 'user_confirmed_sent' : undefined
+    verification.educationEmailVerified = !!emailChallenge?.verifiedAt
+    verification.educationEmailVerifiedAt = emailChallenge?.verifiedAt
+    verification.educationEmailVerificationSource = emailChallenge?.verifiedAt ? 'mail_auto' : undefined
     verification.educationEmailChallengeId = emailChallenge?.id
     verification.notes = notes
     verification.attachments = [...existingAttachments, ...newAttachments]
@@ -3732,8 +4226,6 @@ export function useWelfareStore() {
 
     if (emailChallenge) {
       emailChallenge.submittedAt = supplementedAt
-      if (verification.educationEmailVerified)
-        emailChallenge.verifiedAt = verification.educationEmailVerifiedAt
     }
   }
 
@@ -3790,6 +4282,182 @@ export function useWelfareStore() {
     verification.reviewedAt = now()
   }
 
+  function isDeliveryApplication(application: WelfareApplication) {
+    return ['code', 'pro'].includes(application.type)
+      && application.status === 'answered'
+      && !application.deliveryRewardedAt
+  }
+
+  function canClaimDeliveryApplication(application: WelfareApplication, user?: User) {
+    return !!user
+      && user.role === 'reviewer'
+      && user.accountStatus !== 'suspended'
+      && isDeliveryApplication(application)
+      && !application.deliveryAssigneeId
+      && application.userId !== user.id
+  }
+
+  function assertDeliveryApplicationCanSubmit(application: WelfareApplication, user: User) {
+    if (!isDeliveryApplication(application))
+      throw new Error('该申请不在可交付状态')
+    if (application.deliveryAssigneeId !== user.id)
+      throw new Error('只能处理自己认领的任务')
+    if (application.deliveryReviewStatus === 'pending_review')
+      throw new Error('交付结果正在等待管理员复核')
+    if (application.deliveryRewardedAt)
+      throw new Error('该任务已发放奖励')
+  }
+
+  function submitCollaborationApplication(payload: SubmitCollaborationApplicationPayload) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    if (currentUser.value.role === 'admin' || currentUser.value.role === 'reviewer')
+      throw new Error('当前账号已经具备协作处理权限')
+
+    const existingPending = state.collaborationApplications.find(item => item.userId === currentUser.value?.id && item.status === 'pending')
+    if (existingPending)
+      throw new Error('已有待审核的协作处理员申请')
+
+    const reason = sanitizeRichText(payload.reason)
+    if (richTextToPlainText(reason).length < COLLABORATION_APPLICATION_MIN_REASON_CHARS)
+      throw new Error(`申请说明不得少于 ${COLLABORATION_APPLICATION_MIN_REASON_CHARS} 字`)
+
+    const application: CollaborationApplication = {
+      id: createId('coa'),
+      userId: currentUser.value.id,
+      reason,
+      status: 'pending',
+      createdAt: now(),
+    }
+    state.collaborationApplications.unshift(application)
+    return application
+  }
+
+  function reviewCollaborationApplication(payload: ReviewCollaborationApplicationPayload) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.collaborationApplications.find(item => item.id === payload.id)
+    if (!application)
+      throw new Error('协作处理员申请不存在')
+    if (application.status !== 'pending')
+      throw new Error('该协作处理员申请已经处理')
+
+    const reply = payload.reply ? sanitizeRichText(payload.reply) : ''
+    application.status = payload.status
+    application.reply = reply || (payload.status === 'approved' ? '申请已通过，已开通协作处理员权限。' : '申请未通过，请完善资料后再试。')
+    application.reviewedBy = currentUser.value.id
+    application.reviewedAt = now()
+
+    if (payload.status === 'approved') {
+      const user = state.users.find(item => item.id === application.userId)
+      if (!user)
+        throw new Error('申请用户不存在')
+      if (user.role !== 'admin')
+        user.role = 'reviewer'
+    }
+    return application
+  }
+
+  function claimDeliveryApplication(applicationId: string) {
+    assertPersistenceReady()
+    assertCrowdReviewer(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (!canClaimDeliveryApplication(application, currentUser.value))
+      throw new Error('该任务当前不可认领')
+
+    application.deliveryAssigneeId = currentUser.value.id
+    application.deliveryClaimedAt = now()
+    application.deliveryReviewStatus = undefined
+    return application
+  }
+
+  function cancelDeliveryClaim(applicationId: string) {
+    assertPersistenceReady()
+    assertCrowdReviewer(currentUser.value)
+
+    const application = state.applications.find(item => item.id === applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (application.deliveryAssigneeId !== currentUser.value.id && currentUser.value.role !== 'admin')
+      throw new Error('只能取消自己认领的任务')
+    if (application.deliveryReviewStatus === 'pending_review')
+      throw new Error('交付结果正在复核，不能取消认领')
+    if (application.deliveryRewardedAt)
+      throw new Error('该任务已发放奖励')
+
+    application.deliveryAssigneeId = undefined
+    application.deliveryClaimedAt = undefined
+    application.deliverySubmittedAt = undefined
+    application.deliveryReviewStatus = undefined
+    return application
+  }
+
+  function submitDeliveryResult(payload: SubmitDeliveryPayload) {
+    assertPersistenceReady()
+    assertCrowdReviewer(currentUser.value)
+
+    const application = state.applications.find(item => item.id === payload.applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    assertDeliveryApplicationCanSubmit(application, currentUser.value)
+
+    const content = sanitizeRichText(payload.content)
+    if (isRichTextEmpty(content))
+      throw new Error('请填写交付结果')
+    if (totalBytes(payload.attachments ?? []) > MAX_ATTACHMENT_BYTES)
+      throw new Error('附件总大小不能超过 200MB')
+
+    pushApplicationMessage(application, 'result_submission', content, payload.attachments ?? [])
+    application.deliverySubmittedAt = now()
+    application.deliveryReviewStatus = 'pending_review'
+    return application
+  }
+
+  function reviewDeliveryResult(payload: ReviewDeliveryPayload) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.applications.find(item => item.id === payload.applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (application.deliveryReviewStatus !== 'pending_review')
+      throw new Error('该任务没有待复核的交付结果')
+    if (!application.deliveryAssigneeId)
+      throw new Error('该任务没有协作处理员')
+    if (application.deliveryRewardedAt)
+      throw new Error('该任务已发放奖励')
+
+    const reviewedAt = now()
+    const note = payload.note ? sanitizeRichText(payload.note) : ''
+    if (!payload.approved) {
+      application.deliveryAssigneeId = undefined
+      application.deliveryClaimedAt = undefined
+      application.deliverySubmittedAt = undefined
+      application.deliveryReviewStatus = 'rejected'
+      pushApplicationMessage(application, 'system', note || '<p>管理员复核未通过，任务已重新开放认领。</p>')
+      return application
+    }
+
+    const rewardPoints = Math.trunc(Number(payload.rewardPoints))
+    if (!Number.isFinite(rewardPoints) || rewardPoints < COLLABORATION_DELIVERY_REWARD_MIN || rewardPoints > COLLABORATION_DELIVERY_REWARD_MAX)
+      throw new Error(`奖励积分必须是 ${COLLABORATION_DELIVERY_REWARD_MIN} 到 ${COLLABORATION_DELIVERY_REWARD_MAX} 的整数`)
+
+    application.deliveryReviewStatus = 'approved'
+    application.deliveryRewardPoints = rewardPoints
+    application.deliveryRewardedAt = reviewedAt
+    application.deliveryRewardedBy = currentUser.value.id
+    application.status = 'completed'
+    application.completedAt = reviewedAt
+    addTransaction(application.deliveryAssigneeId, rewardPoints, 'grant', `${application.type.toUpperCase()} 协作交付奖励`, application.id)
+    pushApplicationMessage(application, 'system', note || `<p>管理员已复核通过协作交付，发放 ${rewardPoints} 积分奖励。</p>`)
+    return application
+  }
+
   function crowdReviewsFor(targetType: CrowdReviewTargetType, targetId: string) {
     return state.crowdReviews
       .filter(item => item.targetType === targetType && item.targetId === targetId)
@@ -3801,7 +4469,7 @@ export function useWelfareStore() {
     assertCrowdReviewer(currentUser.value)
 
     if (targetType !== 'pro_application')
-      throw new Error('众包审核当前只开放 Pro 申请摘要')
+      throw new Error('协作建议当前只开放 Pro 申请摘要')
 
     const application = state.applications.find(item => item.id === targetId && item.type === 'pro')
     if (!application)
@@ -3815,7 +4483,7 @@ export function useWelfareStore() {
 
     const normalizedNote = sanitizeRichText(note)
     if (isRichTextEmpty(normalizedNote))
-      throw new Error('请填写众包审核建议')
+      throw new Error('请填写协作建议')
 
     const existing = state.crowdReviews.find(item =>
       item.targetType === targetType
@@ -3979,6 +4647,11 @@ export function useWelfareStore() {
     pendingApplications,
     pendingProApplications,
     pendingStudentVerifications,
+    pendingCollaborationApplications,
+    currentUserCollaborationApplication,
+    claimableDeliveryApplications,
+    currentUserDeliveryApplications,
+    pendingDeliveryReviewApplications,
     totalReservedApplications,
     activeRequestCount,
     applicationPolicyStatus,
@@ -3989,6 +4662,13 @@ export function useWelfareStore() {
     userEmail,
     userLevelCard,
     availableCouponsForUser,
+    availableCouponsForTarget,
+    createCouponFromRule,
+    createCouponTemplate,
+    updateCouponTemplate,
+    createCouponRedemptionCode,
+    redeemCouponCode,
+    grantCouponFromTemplate,
     squarePostBoosts,
     squarePostValidBoosts,
     squarePostDiscountRate,
@@ -4025,6 +4705,13 @@ export function useWelfareStore() {
     approveStudentVerification,
     requestStudentSupplement,
     rejectStudentVerification,
+    submitCollaborationApplication,
+    reviewCollaborationApplication,
+    claimDeliveryApplication,
+    cancelDeliveryClaim,
+    submitDeliveryResult,
+    reviewDeliveryResult,
+    canClaimDeliveryApplication,
     createSquarePost,
     boostSquarePost,
     reportSquareBoost,
@@ -4035,6 +4722,7 @@ export function useWelfareStore() {
     setUserStudentVerified,
     unbindUserGitHub,
     adjustUserPoints,
+    grantUserCoupon,
     updateSiteBanner,
     updateSystemConfig,
     ensureWelfareStateLoaded,

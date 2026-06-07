@@ -1,18 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 
 const route = useRoute()
 const router = useRouter()
-const { selectedSection, activeAdminTab, adminTabItems } = useWelfareUiState()
+const { selectedSection, activeAdminTab, adminTabItems, isAdmin, currentUser } = useWelfareUiState()
 
-const navItems = [
+interface NavItem {
+  key: 'apply' | 'verification' | 'collaboration' | 'profile'
+  path: string
+  icon: string
+  label: string
+  roleRequired?: boolean
+}
+
+const navItems: readonly NavItem[] = [
   { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
   { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
+  { key: 'collaboration', path: '/dashboard/collaboration', icon: 'i-carbon-task-add', label: '协作任务', roleRequired: true },
   { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人中心' },
 ] as const
 
-function go(item: typeof navItems[number]) {
+const visibleNavItems = computed(() => navItems.filter(item => !item.roleRequired || currentUser.value?.role === 'reviewer' || isAdmin.value))
+
+function go(item: typeof visibleNavItems.value[number]) {
   selectedSection.value = item.key
   router.push(item.path)
 }
@@ -34,7 +46,7 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
     <div class="cms-side-nav__scroll">
       <div class="cms-side-nav__section">
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           class="cms-side-nav__item"
           :class="isActive(item.path) ? 'is-active' : ''"
@@ -45,10 +57,18 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
         </button>
       </div>
 
-      <div class="cms-side-nav__section">
+      <div v-if="isAdmin" class="cms-side-nav__section">
         <div class="cms-side-nav__label">
           管理员 NAV
         </div>
+        <button
+          class="cms-side-nav__item cms-side-nav__item--admin"
+          :class="isActive('/dashboard/coupons') ? 'is-active' : ''"
+          @click="router.push('/dashboard/coupons')"
+        >
+          <span class="cms-side-nav__icon i-carbon-percentage" />
+          <span class="flex-1 truncate">优惠券中心</span>
+        </button>
         <button
           v-for="tab in adminTabItems"
           :key="tab.key"

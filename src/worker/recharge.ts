@@ -1,6 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
-import type { WelfareState } from '~/composables/welfare'
+import type { UserCoupon, WelfareState } from '~/composables/welfare'
 import { normalizeSystemConfig } from '~/composables/welfare'
+import { assertSafeExternalUrl, normalizeUrlBase } from './auth'
 import { decryptSecret, encryptSecret } from './crypto'
 import {
   buildEpaySubmitUrl,
@@ -53,6 +54,7 @@ interface RechargeConfigPayload {
 interface RechargeCreatePayload {
   amount?: number
   userId?: string
+  couponId?: string
 }
 
 const ORDER_PREFIX = 'TGW'
@@ -129,6 +131,7 @@ async function getStoredRechargeConfig(env: WorkerEnv) {
 
 async function upsertStoredRechargeConfig(env: WorkerEnv, payload: Required<RechargeConfigPayload>) {
   await ensureRechargeSchema(env)
+  const gatewayBaseUrl = normalizeUrlBase(payload.gatewayBaseUrl)
   const keyEncrypted = await encryptSecret(payload.key, encryptionSecret(env))
 
   if (shouldUseD1(env)) {
@@ -139,7 +142,7 @@ async function upsertStoredRechargeConfig(env: WorkerEnv, payload: Required<Rech
         on conflict (id)
         do update set enabled = excluded.enabled, gateway_base_url = excluded.gateway_base_url, pid = excluded.pid, key = '', key_encrypted = excluded.key_encrypted, points_per_ldc = excluded.points_per_ldc, updated_at = current_timestamp
       `)
-      .bind(payload.enabled ? 1 : 0, payload.gatewayBaseUrl, payload.pid, keyEncrypted, payload.pointsPerLdc)
+      .bind(payload.enabled ? 1 : 0, gatewayBaseUrl, payload.pid, keyEncrypted, payload.pointsPerLdc)
       .run()
     return
   }
@@ -149,7 +152,7 @@ async function upsertStoredRechargeConfig(env: WorkerEnv, payload: Required<Rech
     values ('default', $1, $2, $3, '', $4, $5, now())
     on conflict (id)
     do update set enabled = excluded.enabled, gateway_base_url = excluded.gateway_base_url, pid = excluded.pid, key = '', key_encrypted = excluded.key_encrypted, points_per_ldc = excluded.points_per_ldc, updated_at = now()
-  `, [payload.enabled, payload.gatewayBaseUrl, payload.pid, keyEncrypted, payload.pointsPerLdc])
+  `, [payload.enabled, gatewayBaseUrl, payload.pid, keyEncrypted, payload.pointsPerLdc])
 }
 
 function normalizePointsPerLdc(value: unknown) {
@@ -160,13 +163,47 @@ function normalizePointsPerLdc(value: unknown) {
   return Math.max(1, Math.min(1000, Math.trunc(rate)))
 }
 
+function isRechargeCouponAvailable(coupon: UserCoupon, userId: string) {
+  if (coupon.userId !== userId || coupon.usedAt)
+    return false
+  if (coupon.scope !== 'recharge' && coupon.scope !== 'general')
+    return false
+  if (!coupon.expiresAt)
+    return true
+  const expiresAt = new Date(coupon.expiresAt).getTime()
+  return Number.isFinite(expiresAt) && expiresAt > Date.now()
+}
+
+function applyRechargeCouponDiscount(amount: number, coupon?: UserCoupon) {
+  if (!coupon)
+    return { payableAmount: amount, discountAmount: 0 }
+
+  if (coupon.minSpend && amount < coupon.minSpend)
+    throw new Error('该充值优惠券未达到最低使用金额')
+
+  let discountAmount = 0
+  if (coupon.discountType === 'rate')
+    discountAmount = Math.max(0, amount - Math.max(0.01, Math.ceil(amount * coupon.discountRate * 100) / 100))
+  else
+    discountAmount = coupon.discountAmount ?? 0
+
+  if (coupon.maxDiscount)
+    discountAmount = Math.min(discountAmount, coupon.maxDiscount)
+
+  const payableAmount = Math.max(0.01, Math.ceil((amount - Math.min(amount, discountAmount)) * 100) / 100)
+  return {
+    payableAmount,
+    discountAmount: Math.max(0, amount - payableAmount),
+  }
+}
+
 async function getEffectiveRechargeSettings(env: WorkerEnv) {
   const stored = await getStoredRechargeConfig(env)
   return {
     enabled: stored
       ? !!stored.enabled
       : false,
-    gatewayBaseUrl: stored?.gateway_base_url || 'https://credit.linux.do/epay',
+    gatewayBaseUrl: normalizeUrlBase(stored?.gateway_base_url || 'https://credit.linux.do/epay'),
     pid: stored?.pid || '',
     key: await resolveStoredRechargeKey(stored, env),
     pointsPerLdc: normalizePointsPerLdc(stored?.points_per_ldc),
@@ -502,7 +539,6 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   if (!Number.isInteger(amount))
     throw new Error('当前积分充值仅支持整数')
 
-  const amountText = formatLdcMoney(amount)
   const config = await getLdcConfig(env)
   const settings = await getEffectiveRechargeSettings(env)
   const state = await readWelfareState(env) as Partial<WelfareState>
@@ -518,8 +554,18 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   if (!user)
     throw new Error('请先登录后再充值')
 
+  const coupon = payload.couponId
+    ? state.coupons.find(item => item.id === payload.couponId)
+    : undefined
+  if (payload.couponId && (!coupon || !isRechargeCouponAvailable(coupon, user.id)))
+    throw new Error('充值优惠券不可用或已过期')
+
+  const rechargeDiscount = applyRechargeCouponDiscount(amount, coupon)
+  const amountText = formatLdcMoney(rechargeDiscount.payableAmount)
   const outTradeNo = createOutTradeNo()
-  const orderName = `Touch Great Welfare 积分充值 ${amountText}`
+  const orderName = rechargeDiscount.discountAmount > 0
+    ? `Touch Great Welfare 积分充值 ${formatLdcMoney(amount)}（优惠 ${formatLdcMoney(rechargeDiscount.discountAmount)} LDC）`
+    : `Touch Great Welfare 积分充值 ${amountText}`
   const creditedPoints = amount * settings.pointsPerLdc
   const baseUrl = getRuntimeBaseUrl(request)
   const notifyUrl = createEpayNotifyUrl(baseUrl)
@@ -539,6 +585,12 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   }
 
   await createOrder(env, order)
+  if (coupon) {
+    coupon.usedAt = new Date().toISOString()
+    coupon.usedFor = 'recharge_order'
+    coupon.usedRefId = outTradeNo
+    await writeWelfareState(env, state)
+  }
 
   const params = createEpayOrderParams(config, {
     outTradeNo,
@@ -550,7 +602,7 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
 
   let response: Response
   try {
-    response = await fetchWithTimeout(buildEpaySubmitUrl(config), {
+    response = await fetchWithTimeout(assertSafeExternalUrl(buildEpaySubmitUrl(config)).toString(), {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',

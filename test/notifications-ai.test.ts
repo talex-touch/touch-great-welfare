@@ -1,6 +1,13 @@
 import type { ApplicationPolicyConfig, User, WelfareState } from '../src/composables/welfare'
 import { describe, expect, it, vi } from 'vitest'
-import { dispatchWelfareStateChangeNotifications } from '../src/worker/notifications'
+
+vi.stubGlobal('fetch', vi.fn(async () =>
+  new Response(JSON.stringify({ state: {} }), {
+    headers: { 'content-type': 'application/json' },
+  }),
+))
+
+const { dispatchWelfareStateChangeNotifications } = await import('../src/worker/notifications')
 
 function user(points = 120, id = 'user_1', role: User['role'] = 'user'): User {
   return {

@@ -3,6 +3,7 @@ import type { User } from '~/composables/welfare'
 import { Pool } from 'pg'
 import {
   assertAdminRequest,
+  assertSafeExternalUrl,
   boolValue,
   createId,
   errorResponse,
@@ -351,7 +352,8 @@ async function callSub2Api<T>(
   if (!config.adminApiKey)
     throw new Error('Sub2API Admin API Key 未配置')
 
-  const response = await fetchWithTimeout(`${config.baseUrl}${path}`, {
+  const baseUrl = assertSafeExternalUrl(config.baseUrl).toString().replace(/\/+$/, '')
+  const response = await fetchWithTimeout(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'content-type': 'application/json',
@@ -655,17 +657,21 @@ async function deleteSub2ApiKeyByDatabase(config: Awaited<ReturnType<typeof getE
 async function createKey(request: Request, env: WorkerEnv) {
   const auth = await getAuthenticatedRequest(request, env)
   const payload = await readJson<CreateSub2ApiKeyPayload>(request)
+  return await createSub2ApiKeyForUser(env, auth.user, payload)
+}
+
+export async function createSub2ApiKeyForUser(env: WorkerEnv, user: User, payload: CreateSub2ApiKeyPayload) {
   const config = await getEffectiveSub2ApiConfig(env)
   if (!config.enabled)
     throw new Error('Sub2API 未启用')
   if (!config.configured)
     throw new Error('Sub2API 尚未配置完成')
 
-  const sub2apiUserId = await ensureSub2ApiUser(config, auth.user)
+  const sub2apiUserId = await ensureSub2ApiUser(config, user)
   const quotaUsd = normalizeQuota(payload.quotaUsd, config.defaultQuotaUsd)
   const upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
 
-  return await insertBinding(env, auth.user.id, sub2apiUserId, upstreamKey, quotaUsd)
+  return await insertBinding(env, user.id, sub2apiUserId, upstreamKey, quotaUsd)
 }
 
 async function deleteKey(request: Request, env: WorkerEnv) {

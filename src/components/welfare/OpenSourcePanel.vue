@@ -87,7 +87,7 @@ onMounted(() => {
             开源认证
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            通过后台配置的 GitHub App 授权账号并同步公开仓库，提交申请时携带开源认证标签。
+            通过后台配置的 GitHub App 授权账号并同步公开仓库，提交申请时携带开源认证标签；该标签只提高通过率，不是申请门槛。
           </p>
         </div>
         <div class="flex flex-wrap gap-3 items-center">
@@ -111,6 +111,10 @@ onMounted(() => {
         </TxSteps>
 
         <DataNotice mode="compact" title="开源认证数据提示" />
+
+        <div class="verification-submit-warning">
+          开源认证是可选辅助信息。未授权 GitHub 或未选择仓库也可以正常提交申请；管理员会结合申请说明、附件和资源余量综合审核。
+        </div>
 
         <div v-if="!githubAppConfigForm.configured || !githubAppConfigForm.enabled" class="text-sm text-amber-700 leading-6 p-6 border border-amber-400/30 rounded-2xl bg-amber-50 dark:text-amber-200 dark:bg-amber-950/20">
           管理员尚未启用 GitHub App。请先在管理后台填写 GitHub App Client ID / Secret，并将 Callback URL 配置到 GitHub App。

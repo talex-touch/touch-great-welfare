@@ -16,10 +16,13 @@ const {
   systemConfig,
   latestTransactions,
   currentUserCoupons,
+  availableRechargeCoupons,
+  couponRedeemForm,
   currentUserDailyCheckIns,
   todayCheckIn,
   currentCheckInStreak,
   checkInToday,
+  redeemCouponCodeFromForm,
   lastRechargeStatus,
   startRecharge,
   refreshRechargeStatus,
@@ -111,6 +114,13 @@ function closePricingDialog() {
   isPricingDialogOpen.value = false
 }
 
+function redeemCoupon() {
+  runSafely(async () => {
+    const coupon = await redeemCouponCodeFromForm()
+    notify(`兑换成功：${coupon.name}`)
+  }, '优惠券已兑换')
+}
+
 function recharge() {
   runSafely(async () => {
     if (!isRechargeAmountValid.value)
@@ -127,8 +137,12 @@ function dailyCheckIn() {
   }, '签到已完成')
 }
 
-function couponDiscountText(rate: number) {
-  return `${Number(rate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
+function couponDiscountText(coupon: { discountType?: string, discountRate: number, discountAmount?: number }) {
+  if (coupon.discountType === 'fixed_points')
+    return `抵扣 ${coupon.discountAmount ?? 0} 积分`
+  if (coupon.discountType === 'fixed_ldc')
+    return `抵扣 ${coupon.discountAmount ?? 0} LDC`
+  return `${Number(coupon.discountRate * 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 折`
 }
 
 function couponStatusText(coupon: { usedAt?: string, expiresAt?: string }) {
@@ -285,13 +299,30 @@ onMounted(async () => {
           </template>
 
           <div class="wallet-tab-content wallet-coupon-grid">
+            <div class="wallet-coupon-card wallet-coupon-card--redeem">
+              <div class="wallet-coupon-top">
+                <div>
+                  <span class="wallet-overline">兑换码</span>
+                  <h3>输入兑换码领取优惠券</h3>
+                </div>
+              </div>
+              <div class="gap-3 grid sm:grid-cols-[1fr_auto]">
+                <TxInput v-model="couponRedeemForm.code" placeholder="输入兑换码" />
+                <TxButton variant="primary" :disabled="!couponRedeemForm.code.trim()" @click="redeemCoupon">
+                  立即兑换
+                </TxButton>
+              </div>
+              <p v-if="couponRedeemForm.message">
+                {{ couponRedeemForm.message }}
+              </p>
+            </div>
             <div v-if="!currentUserCoupons.length" class="wallet-empty wallet-empty--wide">
               暂无优惠券
             </div>
             <div v-for="coupon in currentUserCoupons" :key="coupon.id" class="wallet-coupon-card">
               <div class="wallet-coupon-top">
                 <div>
-                  <span class="wallet-overline">{{ couponDiscountText(coupon.discountRate) }}</span>
+                  <span class="wallet-overline">{{ couponDiscountText(coupon) }}</span>
                   <h3>{{ coupon.name }}</h3>
                 </div>
                 <span class="wallet-chip" :class="couponStatusClass(coupon)">
@@ -406,8 +437,20 @@ onMounted(async () => {
               />
             </label>
 
+            <label v-if="availableRechargeCoupons.length" class="wallet-dialog-field">
+              <span class="wallet-section-label">充值优惠券</span>
+              <select v-model="rechargeForm.selectedCouponId" class="form-select">
+                <option value="">
+                  不使用优惠券
+                </option>
+                <option v-for="coupon in availableRechargeCoupons" :key="coupon.id" :value="coupon.id">
+                  {{ coupon.name }} · {{ couponDiscountText(coupon) }}
+                </option>
+              </select>
+            </label>
+
             <p class="wallet-form-hint">
-              {{ rechargePreviewPoints ? `预计到账约 ${rechargePreviewPoints.toLocaleString('zh-CN')} 积分` : '充值到账以异步通知验签为准' }}
+              {{ rechargePreviewPoints ? `预计到账约 ${rechargePreviewPoints.toLocaleString('zh-CN')} 积分，优惠券仅抵扣实付 LDC` : '充值到账以异步通知验签为准' }}
             </p>
 
             <p class="wallet-dialog-rule">

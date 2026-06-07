@@ -17,10 +17,7 @@ function sanitizeUrl(value: string, allowMailto = true) {
 
 function sanitizeImageUrl(value: string) {
   const trimmed = value.trim()
-  if (/^https?:/i.test(trimmed))
-    return trimmed
-
-  if (/^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(trimmed))
+  if (/^https:\/\//i.test(trimmed))
     return trimmed
 
   return ''
@@ -52,11 +49,11 @@ function renderInline(value: string) {
     }
     else if (imageMarker) {
       const src = sanitizeImageUrl(url)
-      output += src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label)}">` : renderBasicInline(source)
+      output += src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label)}">` : `<strong>🖼️ 图片链接已移除：</strong>${escapeHtml(label)}`
     }
     else {
       const href = sanitizeUrl(url)
-      output += href ? `<a href="${escapeHtml(href)}">${renderBasicInline(label)}</a>` : renderBasicInline(source)
+      output += href ? `<a href="${escapeHtml(href)}">${renderBasicInline(label)}</a>` : renderBasicInline(label)
     }
 
     lastIndex = match.index + source.length

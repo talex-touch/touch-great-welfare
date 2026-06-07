@@ -22,6 +22,7 @@ interface PointTransactionInput {
   reason: string
   refId?: string
   createdAt?: string
+  allowDebt?: boolean
 }
 
 interface PointTransactionQuery {
@@ -59,6 +60,10 @@ function json(payload: unknown, status = 200) {
 
 function errorResponse(error: unknown, status = 500) {
   return json({ error: error instanceof Error ? error.message : '服务端错误' }, status)
+}
+
+function forbidden(message = '需要管理员权限') {
+  return json({ error: message }, 403)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -328,12 +333,27 @@ export async function appendPointTransaction(env: WorkerEnv, input: PointTransac
     throw new Error('积分变动必须是非零整数')
 
   const currentPoints = Number(user.points)
-  const balanceAfter = (Number.isFinite(currentPoints) ? currentPoints : 0) + delta
-  if (balanceAfter < 0)
+  const currentBalance = Number.isFinite(currentPoints) ? currentPoints : 0
+  const txId = input.id || createTransactionId()
+  if (input.id && await transactionExists(env, input.id)) {
+    return {
+      id: txId,
+      userId: input.userId,
+      delta,
+      type: input.type,
+      reason: input.reason.trim() || '积分变动',
+      refId: input.refId || undefined,
+      balanceAfter: currentBalance,
+      createdAt: input.createdAt || now(),
+    } satisfies CreditTransaction
+  }
+
+  const balanceAfter = currentBalance + delta
+  if (balanceAfter < 0 && !input.allowDebt)
     throw new Error('积分不足')
 
   const tx = {
-    id: input.id || createTransactionId(),
+    id: txId,
     userId: input.userId,
     delta,
     type: input.type,
@@ -507,10 +527,14 @@ export async function handlePointRequest(request: Request, env: WorkerEnv) {
     if (!user)
       throw new Error('用户不存在')
 
+    const requestedUserId = url.searchParams.get('userId')?.trim() || ''
+    if (user.role !== 'admin' && requestedUserId && requestedUserId !== user.id)
+      return forbidden('无权读取其他用户的积分流水')
+
     const result = await queryPointTransactions(env, {
       currentUserId: user.id,
       isAdmin: user.role === 'admin',
-      userId: url.searchParams.get('userId') || undefined,
+      userId: requestedUserId || undefined,
       type: url.searchParams.get('type') || undefined,
       direction: url.searchParams.get('direction') || undefined,
       from: url.searchParams.get('from') || undefined,
@@ -520,7 +544,6 @@ export async function handlePointRequest(request: Request, env: WorkerEnv) {
       cursor: url.searchParams.get('cursor') || undefined,
     })
 
-    const requestedUserId = url.searchParams.get('userId') || ''
     const targetUserId = user.role === 'admin' ? requestedUserId : user.id
     const balance = targetUserId
       ? await currentBalanceForUser(env, users, targetUserId)
