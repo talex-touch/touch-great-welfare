@@ -30,6 +30,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 const { handleAiRequest } = await import('../src/worker/ai')
 const { createDatabaseForResourceItem, handleDatabaseProvisionRequest } = await import('../src/worker/database-provisioning')
 const { md5Hex } = await import('../src/worker/ldc-credit')
+const { ensureNotificationSchema } = await import('../src/worker/notifications')
 const { createSessionCookie } = await import('../src/worker/session')
 const { readWelfareState } = await import('../src/worker/welfare-state')
 
@@ -255,6 +256,20 @@ describe('database resource provisioning', () => {
     poolQueries.length = 0
     onAdvisoryLock = undefined
     vi.mocked(fetch).mockImplementation(async () => Response.json({ state: {} }))
+  })
+
+  it('keeps PostgreSQL runtime schema DDL free of bind placeholders', async () => {
+    await ensureNotificationSchema({
+      HYPERDRIVE: { connectionString: 'postgresql://app:secret@db.example.com:5432/app' },
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+    })
+
+    const onePanelBaseUrlColumn = poolQueries.find(item =>
+      item.sql.includes('alter table database_provision_config add column if not exists onepanel_base_url'),
+    )
+    expect(onePanelBaseUrlColumn?.sql).toContain('default \'\'')
+    expect(onePanelBaseUrlColumn?.sql).not.toContain('$1')
+    expect(onePanelBaseUrlColumn?.values).toBeUndefined()
   })
 
   it('reads OnePanel status snapshots with signed API key headers', async () => {

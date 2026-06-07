@@ -692,7 +692,7 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       updated_at timestamptz not null default now()
     )
   `)
-  await pool.query('alter table database_provision_config add column if not exists onepanel_base_url text not null default $1', [''])
+  await pool.query('alter table database_provision_config add column if not exists onepanel_base_url text not null default \'\'')
   await pool.query('alter table database_provision_config add column if not exists onepanel_api_key_encrypted text')
   await pool.query(`
     create table if not exists database_resource_bindings (
