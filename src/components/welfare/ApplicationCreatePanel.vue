@@ -45,7 +45,7 @@ const {
 
 const route = useRoute()
 const router = useRouter()
-const { runSafely } = useWelfareFeedback()
+const { notify, runSafely } = useWelfareFeedback()
 type ApplicationCreateMode = Extract<RequestKind, 'image' | 'pro' | 'resource'>
 const applicationMode = ref<ApplicationCreateMode>('resource')
 const currentStep = ref<'types' | 'materials' | 'terms'>('types')
@@ -77,12 +77,26 @@ const editingDraftApplication = computed(() => {
 const isEditingDraft = computed(() => !!editingDraftApplication.value)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
 const visibleResourceTypeConfigs = computed(() => resourceTypeConfigs.value.filter(config => isResourceTypeAvailable(config.resourceType)))
-const applicationModeItems: Array<{ type: ApplicationCreateMode, label: string, icon: string }> = [
-  { type: 'image', label: 'Image', icon: 'i-carbon-image' },
-  { type: 'pro', label: 'Pro', icon: 'i-carbon-star' },
-  { type: 'resource', label: '资源', icon: 'i-carbon-assembly-cluster' },
+const applicationModeItems: Array<{ type: ApplicationCreateMode, label: string, title: string, description: string, icon: string }> = [
+  { type: 'image', label: 'Image', title: 'Image 图片资源', description: '用于素材图、海报生成', icon: 'i-carbon-image' },
+  { type: 'pro', label: 'Pro', title: 'Pro 高级权益', description: '用于高级协作与高级能力', icon: 'i-carbon-star' },
+  { type: 'resource', label: '资源', title: '资源 API / 配额资源', description: '用于模型调用、接口配置、批量任务', icon: 'i-carbon-data-base' },
 ]
 const currentModeTitle = computed(() => applicationModeItems.find(item => item.type === applicationMode.value)?.label ?? '资源')
+const currentCreateTitle = computed(() => {
+  if (isEditingDraft.value)
+    return '编辑资源草稿'
+
+  return applicationMode.value === 'resource' ? '资源申请' : `${currentModeTitle.value} 申请`
+})
+const currentModeBadge = computed(() => applicationMode.value === 'resource' ? '公益资源支持' : applicationMode.value === 'image' ? '图片资源' : '高级权益')
+const currentModeTagline = computed(() => {
+  if (applicationMode.value === 'resource')
+    return '为公益项目申请科技资源，助力更高效地创造社会价值。'
+  if (applicationMode.value === 'image')
+    return '提交图片生成需求，补充用途、风格、尺寸与限制说明。'
+  return '提交 Pro 能力申请，说明协作场景、目标产出和时效要求。'
+})
 const activeResourceTerm = computed(() =>
   selectedResourceTerms.value.find(term => term.id === activeResourceTermTab.value)
   ?? selectedResourceTerms.value[0],
@@ -461,22 +475,7 @@ const resourceCheckoutRows = computed(() => resourceApplicationItems.value.map((
     savings: parts.savings,
   }
 }))
-const isResourceSubmissionBlocked = computed(() =>
-  !canCreateRequest.value
-  || resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length
-  || !resourceApplicationPolicyStatus.value.available
-  || !resourceApplicationPolicyStatus.value.descriptionOk
-  || (resourceApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken),
-)
 const isClassicApplication = computed(() => applicationMode.value !== 'resource')
-const isClassicSubmissionBlocked = computed(() =>
-  !canCreateRequest.value
-  || !selectedApplicationPolicyStatus.value.available
-  || !selectedApplicationPolicyStatus.value.descriptionOk
-  || totalApplicationBytes.value > MAX_ATTACHMENT_BYTES
-  || (selectedApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
-  || (currentUser.value?.points ?? 0) < selectedPrepaidCost.value,
-)
 
 function pad2(value: number) {
   return value < 10 ? `0${value}` : String(value)
@@ -736,7 +735,64 @@ function markSubmitReady() {
   submitReadyMessage.value = '已准备就绪'
 }
 
+function classicSubmissionBlockReason() {
+  if (!currentUser.value)
+    return '请先登录后提交申请'
+  if (!applicationForm.title.trim())
+    return '请填写申请标题'
+  if (!applicationForm.description.trim())
+    return '请填写申请说明'
+  if (!selectedApplicationPolicyStatus.value.descriptionOk)
+    return `申请内容不得少于 ${selectedApplicationPolicyStatus.value.minDescriptionChars} 字`
+  if (totalApplicationBytes.value > MAX_ATTACHMENT_BYTES)
+    return `附件总大小不能超过 ${formatBytes(MAX_ATTACHMENT_BYTES)}`
+  if (!canCreateRequest.value)
+    return `当前待处理请求已达上限，最多同时保留 ${MAX_ACTIVE_USER_REQUESTS} 个`
+  if (!selectedApplicationPolicyStatus.value.available)
+    return selectedApplicationPolicyStatus.value.reason || '当前暂不满足提交条件'
+  if (selectedApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
+    return '请先完成提交安全校验'
+  if ((currentUser.value.points ?? 0) < selectedPrepaidCost.value)
+    return `积分不足，本次申请需要预扣 ${formatPoints(selectedPrepaidCost.value)}`
+
+  return ''
+}
+
+function resourceSubmissionBlockReason() {
+  if (!currentUser.value)
+    return '请先登录后提交申请'
+  if (!resourceApplicationForm.title.trim())
+    return '请填写申请标题'
+  if (!resourceApplicationForm.reason.trim())
+    return '请填写申请说明'
+  if (!resourceApplicationForm.selectedResourceTypes.length)
+    return '请至少选择一种资源类型'
+  if (!resourceApplicationItems.value.length)
+    return '请至少添加一条资源明细'
+  if (resourceApplicationForm.acceptedTermIds.length !== selectedResourceTerms.value.length)
+    return '请先阅读并同意当前资源申请所需协议'
+  if (!resourceApplicationPolicyStatus.value.descriptionOk)
+    return `申请内容不得少于 ${resourceApplicationPolicyStatus.value.minDescriptionChars} 字`
+  if (totalApplicationBytes.value > MAX_ATTACHMENT_BYTES)
+    return `附件总大小不能超过 ${formatBytes(MAX_ATTACHMENT_BYTES)}`
+  if (!canCreateRequest.value)
+    return `当前待处理请求已达上限，最多同时保留 ${MAX_ACTIVE_USER_REQUESTS} 个`
+  if (!resourceApplicationPolicyStatus.value.available)
+    return resourceApplicationPolicyStatus.value.reason || '当前暂不满足提交条件'
+  if (resourceApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
+    return '请先完成提交安全校验'
+  if ((currentUser.value?.points ?? 0) < checkoutPayableEstimate.value)
+    return `积分不足，本单需要预扣 ${formatPoints(checkoutPayableEstimate.value)}`
+
+  return ''
+}
+
 function onSubmitClassicApplication() {
+  const reason = classicSubmissionBlockReason()
+  if (reason) {
+    notify(reason)
+    return
+  }
   markSubmitReady()
   runSafely(async () => {
     await submitApplicationWithAiReview()
@@ -761,6 +817,11 @@ function onSaveDraft() {
 }
 
 function onSubmitResourceApplication() {
+  const reason = resourceSubmissionBlockReason()
+  if (reason) {
+    notify(reason)
+    return
+  }
   markSubmitReady()
   runSafely(async () => {
     sanitizeResourceDurations()
@@ -802,48 +863,43 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="resource-create-section space-y-6">
-    <TxCard class="solid-panel" background="pure" shadow="soft" :padding="20" :radius="24">
+  <section class="resource-create-section">
+    <TxCard class="solid-panel resource-create-card" background="pure" shadow="soft" :padding="0" :radius="0">
       <div class="resource-create-header">
         <button class="resource-back-button" type="button" title="返回列表" @click="cancelCreate">
           <span class="i-carbon-chevron-left" />
         </button>
         <div class="min-w-0">
-          <h2 class="resource-create-title">
-            {{ isEditingDraft ? '编辑资源草稿' : `${currentModeTitle} 申请` }}
-          </h2>
+          <div class="resource-create-heading-line">
+            <h2 class="resource-create-title">
+              {{ currentCreateTitle }}
+            </h2>
+            <span class="resource-create-badge">{{ currentModeBadge }}</span>
+          </div>
+          <p class="resource-create-subtitle">
+            {{ currentModeTagline }}
+          </p>
         </div>
       </div>
 
-      <div v-if="!isEditingDraft" class="application-mode-tabs" role="tablist" aria-label="申请类型">
+      <div v-if="!isEditingDraft && isClassicApplication" class="application-mode-cards" role="tablist" aria-label="申请类型">
         <button
           v-for="item in applicationModeItems"
           :key="item.type"
           type="button"
-          class="application-mode-tab"
+          class="application-mode-card"
           :class="{ 'is-active': applicationMode === item.type }"
           role="tab"
           :aria-selected="applicationMode === item.type"
           @click="selectApplicationMode(item.type)"
         >
-          <span :class="item.icon" />
-          {{ item.label }}
-        </button>
-      </div>
-
-      <div v-if="!isClassicApplication" class="resource-step-track" aria-label="资源申请进度">
-        <div
-          v-for="(step, index) in resourceStepItems"
-          :key="step.key"
-          class="resource-step-item"
-          :class="{ 'is-active': index === activeStep, 'is-complete': index < activeStep }"
-        >
-          <span class="resource-step-number">{{ index + 1 }}</span>
-          <span class="resource-step-copy">
-            <b>{{ step.title }}</b>
-            <small>{{ step.description }}</small>
+          <span class="application-mode-card__icon" :class="item.icon" />
+          <span>
+            <b>{{ item.title }}</b>
+            <small>{{ item.description }}</small>
           </span>
-        </div>
+          <i class="application-mode-card__check" :class="applicationMode === item.type ? 'i-carbon-checkmark-filled' : ''" />
+        </button>
       </div>
 
       <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
@@ -909,20 +965,45 @@ onBeforeUnmount(() => {
           {{ selectedApplicationPolicyStatus.reason }}
         </div>
 
-        <div class="classic-application-footer">
-          <span class="field-hint">当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
-          <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
-            {{ submitReadyMessage }}
-          </span>
-          <TxButton variant="primary" :disabled="isClassicSubmissionBlocked" @click="onSubmitClassicApplication">
-            提交并预扣 {{ formatPoints(selectedPrepaidCost) }}
-          </TxButton>
+        <div class="classic-application-footer resource-action-bar">
+          <span class="resource-action-status">当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
+          <div class="resource-action-buttons">
+            <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
+              {{ submitReadyMessage }}
+            </span>
+            <TxButton variant="primary" @click="onSubmitClassicApplication">
+              提交并预扣 {{ formatPoints(selectedPrepaidCost) }}
+            </TxButton>
+          </div>
         </div>
       </div>
 
-      <div v-else class="mt-5 space-y-4">
-        <template v-if="currentStep === 'types'">
-          <div class="verification-submit-warning">
+      <div v-else class="resource-workbench">
+        <aside class="resource-workbench-sidebar">
+          <div class="resource-progress-card" aria-label="资源申请进度">
+            <h3>申请进度</h3>
+            <div class="resource-step-track">
+              <div
+                v-for="(step, index) in resourceStepItems"
+                :key="step.key"
+                class="resource-step-item"
+                :class="{ 'is-active': index === activeStep, 'is-complete': index < activeStep }"
+              >
+                <span class="resource-step-number">{{ index + 1 }}</span>
+                <span class="resource-step-copy">
+                  <b>{{ step.title }}</b>
+                  <small>{{ step.description }}</small>
+                </span>
+                <span class="resource-step-state">{{ index < activeStep ? '已完成' : index === activeStep ? '当前' : '待填写' }}</span>
+                <span class="resource-step-indicator" aria-hidden="true">
+                  <span v-if="index < activeStep" class="i-carbon-checkmark" />
+                  <span v-else-if="index === activeStep" class="resource-step-spinner" />
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="verification-submit-warning resource-side-warning">
             各类认证不是资源申请门槛。已认证会作为审核参考并可能提高通过率；未认证用户仍可按常规流程提交申请。
           </div>
 
@@ -949,349 +1030,359 @@ onBeforeUnmount(() => {
             </span>
           </div>
 
-          <div class="gap-2 grid md:grid-cols-3 xl:grid-cols-4">
+          <div class="resource-type-grid">
             <button
               v-for="config in visibleResourceTypeConfigs"
               :key="config.resourceType"
               type="button"
-              class="p-2.5 text-left border rounded-2xl transition relative overflow-hidden"
-              :class="isSelectedResourceType(config.resourceType) ? 'border-emerald-400 bg-emerald-50 shadow-md shadow-emerald-500/10 dark:bg-emerald-500/10' : 'border-black/8 bg-white hover:border-slate-400 dark:border-white/10 dark:bg-[#151820]'"
+              class="resource-type-card"
+              :class="{ 'is-selected': isSelectedResourceType(config.resourceType) }"
               @click="toggleResourceType(config.resourceType)"
             >
-              <div class="flex gap-2 items-center justify-between">
-                <span class="text-lg" :class="config.icon" />
-                <span class="text-[10px] text-slate-500 fw-800">{{ config.approverGroup }}</span>
+              <div class="resource-type-card__top">
+                <span class="resource-type-icon" :class="config.icon" />
+                <span class="resource-type-approver">{{ config.approverGroup }}</span>
               </div>
-              <div class="text-sm fw-900 mt-2">
+              <div class="resource-type-title">
                 {{ config.displayName }}
               </div>
-              <p class="text-xs text-slate-500 leading-4 mt-1 dark:text-slate-400">
-                {{ config.description }}
-              </p>
+              <p>{{ config.description }}</p>
+              <span class="resource-type-check" :class="isSelectedResourceType(config.resourceType) ? 'i-carbon-checkmark-filled' : ''" />
             </button>
           </div>
+        </aside>
 
-          <div class="flex flex-wrap gap-3 items-center justify-end">
-            <span class="text-sm text-slate-500 dark:text-slate-400">已选 {{ resourceApplicationForm.selectedResourceTypes.length }} 类资源</span>
-            <TxButton variant="primary" size="lg" @click="nextToMaterials">
-              下一步：填写材料
-            </TxButton>
-          </div>
-        </template>
-
-        <template v-else-if="currentStep === 'materials'">
-          <div class="gap-5 grid md:grid-cols-2">
-            <label class="gap-2 grid md:col-span-2">
-              <span class="field-label">申请标题</span>
-              <TxInput v-model="resourceApplicationForm.title" placeholder="例如：客服 Agent 数据库 + 大模型 + GPU 申请" />
-            </label>
-            <label class="gap-2 grid md:col-span-2">
-              <span class="field-label">申请说明</span>
-              <RichTextEditor
-                v-model="resourceApplicationForm.reason"
-                :min-height="280"
-                placeholder="请说明申请原因、业务背景、影响范围、公益/研发目标。可粘贴百度网盘等外链；图片建议作为下方附件上传。"
-              />
-            </label>
-            <label class="gap-2 grid">
-              <span class="field-label">紧急程度</span>
-              <TxSelect v-model="resourceApplicationForm.urgency" panel-background="pure">
-                <TxSelectItem v-for="item in urgencyOptions" :key="item.value" :value="item.value" :label="item.label" />
-              </TxSelect>
-            </label>
-            <div class="gap-2 grid">
-              <span class="field-label">期望生效时间</span>
-              <TxSelect v-model="expectedEffectivePreset" panel-background="pure" @update:model-value="applyExpectedEffectivePreset">
-                <TxSelectItem v-for="item in expectedEffectiveOptions" :key="item.value" :value="item.value" :label="item.label" />
-              </TxSelect>
-              <div v-if="expectedEffectivePreset === 'custom'" class="gap-2 grid grid-cols-[1fr_110px]">
-                <TxInput :model-value="expectedDateValue" readonly placeholder="选择日期" @focus="openExpectedDatePicker" @click="openExpectedDatePicker" />
-                <input v-model="expectedTimeValue" class="form-time-input" type="time">
-              </div>
-              <TxDatePicker v-model="expectedDateValue" v-model:visible="expectedDatePickerVisible" title="选择期望生效日期" confirm-text="确定" cancel-text="取消" />
-            </div>
-          </div>
-
-          <div class="space-y-5">
-            <div v-for="group in groupedResourceItems" :key="group.config!.resourceType" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-              <div class="flex flex-wrap gap-3 items-center justify-between">
+        <main class="resource-workbench-main">
+          <div class="resource-workbench-scroll">
+            <template v-if="currentStep === 'types'">
+              <div class="resource-type-intro-card">
+                <span class="i-carbon-checkmark-outline" />
                 <div>
-                  <h3 class="text-xl fw-900">
-                    {{ group.config!.displayName }}
-                  </h3>
-                  <p class="field-hint mt-1">
-                    审批组：{{ group.config!.approverGroup }}
-                  </p>
+                  <b>已选择 {{ resourceApplicationForm.selectedResourceTypes.length }} 类资源</b>
+                  <p>左侧选择本次需要申请的资源类型，确认协议后进入材料填写。资源类型可多选，系统会自动合并所需协议和审批组。</p>
                 </div>
-                <TxButton size="sm" variant="secondary" @click="addResourceApplicationItem(group.config!.resourceType)">
-                  添加明细
-                </TxButton>
+              </div>
+            </template>
+
+            <template v-else-if="currentStep === 'materials'">
+              <div class="gap-5 grid md:grid-cols-2">
+                <label class="gap-2 grid md:col-span-2">
+                  <span class="field-label">申请标题</span>
+                  <TxInput v-model="resourceApplicationForm.title" placeholder="例如：客服 Agent 数据库 + 大模型 + GPU 申请" />
+                </label>
+                <label class="gap-2 grid md:col-span-2">
+                  <span class="field-label">申请说明</span>
+                  <RichTextEditor
+                    v-model="resourceApplicationForm.reason"
+                    :min-height="280"
+                    placeholder="请说明申请原因、业务背景、影响范围、公益/研发目标。可粘贴百度网盘等外链；图片建议作为下方附件上传。"
+                  />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">紧急程度</span>
+                  <TxSelect v-model="resourceApplicationForm.urgency" panel-background="pure">
+                    <TxSelectItem v-for="item in urgencyOptions" :key="item.value" :value="item.value" :label="item.label" />
+                  </TxSelect>
+                </label>
+                <div class="gap-2 grid">
+                  <span class="field-label">期望生效时间</span>
+                  <TxSelect v-model="expectedEffectivePreset" panel-background="pure" @update:model-value="applyExpectedEffectivePreset">
+                    <TxSelectItem v-for="item in expectedEffectiveOptions" :key="item.value" :value="item.value" :label="item.label" />
+                  </TxSelect>
+                  <div v-if="expectedEffectivePreset === 'custom'" class="gap-2 grid grid-cols-[1fr_110px]">
+                    <TxInput :model-value="expectedDateValue" readonly placeholder="选择日期" @focus="openExpectedDatePicker" @click="openExpectedDatePicker" />
+                    <input v-model="expectedTimeValue" class="form-time-input" type="time">
+                  </div>
+                  <TxDatePicker v-model="expectedDateValue" v-model:visible="expectedDatePickerVisible" title="选择期望生效日期" confirm-text="确定" cancel-text="取消" />
+                </div>
               </div>
 
-              <div class="mt-4 space-y-4">
-                <div v-for="item in group.items" :key="item.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+              <div class="space-y-5">
+                <div v-for="group in groupedResourceItems" :key="group.config!.resourceType" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
                   <div class="flex flex-wrap gap-3 items-center justify-between">
-                    <b>资源明细</b>
-                    <TxButton size="sm" variant="danger" @click="removeResourceApplicationItem(item.id)">
-                      删除
+                    <div>
+                      <h3 class="text-xl fw-900">
+                        {{ group.config!.displayName }}
+                      </h3>
+                      <p class="field-hint mt-1">
+                        审批组：{{ group.config!.approverGroup }}
+                      </p>
+                    </div>
+                    <TxButton size="sm" variant="secondary" @click="addResourceApplicationItem(group.config!.resourceType)">
+                      添加明细
                     </TxButton>
                   </div>
 
-                  <div class="mt-4 gap-4 grid md:grid-cols-2">
-                    <label v-if="item.resourceType !== 'llm_api_quota'" class="gap-2 grid">
-                      <span class="field-label">子类型</span>
-                      <TxSelect v-model="item.resourceSubtype" panel-background="pure">
-                        <TxSelectItem v-for="subtype in group.config!.subtypes" :key="subtype" :value="subtype" :label="subtype" />
-                      </TxSelect>
-                    </label>
-
-                    <template v-if="item.resourceType === 'database'">
-                      <label class="gap-2 grid"><span class="field-label">实例/库名</span><TxInput v-model="item.payload.name" placeholder="orders_prod / cache_user" /></label>
-                      <label class="gap-2 grid"><span class="field-label">环境</span><TxSelect v-model="item.payload.environment" panel-background="pure"><TxSelectItem v-for="env in environmentOptions" :key="env" :value="env" :label="env" /></TxSelect></label>
-                      <label class="gap-2 grid"><span class="field-label">权限级别</span><TxSelect v-model="item.requestedPermission" panel-background="pure"><TxSelectItem v-for="option in databasePermissionOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect></label>
-                      <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
-                      <label class="option-check md:col-span-2"><TxCheckbox v-model="item.payload.sensitiveData" variant="checkmark" /><span><b>涉及敏感数据</b><small>生产库、用户信息或受限数据需勾选。</small></span></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">申请原因</span><RichTextEditor v-model="item.payload.reason" :min-height="120" placeholder="说明申请原因" /></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">操作范围说明</span><RichTextEditor v-model="item.payload.operationScope" :min-height="120" placeholder="读取哪些表、执行哪些操作、是否需要变更数据" /></label>
-                    </template>
-
-                    <template v-else-if="item.resourceType === 'llm_api_quota'">
-                      <label class="gap-2 grid"><span class="field-label">大模型</span><TxSelect v-model="item.payload.model" panel-background="pure" @update:model-value="onLlmModelChange(item)"><TxSelectItem v-for="model in selectableLlmApiModels" :key="model.key" :value="model.key" :label="llmModelSelectLabel(model)" /></TxSelect></label>
-                      <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptionsForItem(item)" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span><span v-else-if="isGptProItem(item)" class="field-hint">GPT PRO 默认有效期 7 天。</span></label>
-                      <div class="gap-2 grid">
-                        <span class="field-label">RPM / TPM 策略</span>
-                        <TxSelect v-model="item.payload.rateLimitMode" panel-background="pure" @update:model-value="onRateLimitModeChange(item)">
-                          <TxSelectItem v-for="option in rateLimitModeOptions" :key="option.value" :value="option.value" :label="option.label" />
-                        </TxSelect>
+                  <div class="mt-4 space-y-4">
+                    <div v-for="item in group.items" :key="item.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+                      <div class="flex flex-wrap gap-3 items-center justify-between">
+                        <b>资源明细</b>
+                        <TxButton size="sm" variant="danger" @click="removeResourceApplicationItem(item.id)">
+                          删除
+                        </TxButton>
                       </div>
-                      <div v-if="item.payload.rateLimitMode === 'custom'" class="gap-4 grid md:col-span-2 md:grid-cols-2">
-                        <label class="gap-2 grid">
-                          <span class="field-label">RPM</span>
-                          <TxNumberInput v-model="item.payload.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" />
+
+                      <div class="mt-4 gap-4 grid md:grid-cols-2">
+                        <label v-if="item.resourceType !== 'llm_api_quota'" class="gap-2 grid">
+                          <span class="field-label">子类型</span>
+                          <TxSelect v-model="item.resourceSubtype" panel-background="pure">
+                            <TxSelectItem v-for="subtype in group.config!.subtypes" :key="subtype" :value="subtype" :label="subtype" />
+                          </TxSelect>
                         </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">TPM</span>
-                          <TxNumberInput v-model="item.payload.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" />
-                        </label>
+
+                        <template v-if="item.resourceType === 'database'">
+                          <label class="gap-2 grid"><span class="field-label">实例/库名</span><TxInput v-model="item.payload.name" placeholder="orders_prod / cache_user" /></label>
+                          <label class="gap-2 grid"><span class="field-label">环境</span><TxSelect v-model="item.payload.environment" panel-background="pure"><TxSelectItem v-for="env in environmentOptions" :key="env" :value="env" :label="env" /></TxSelect></label>
+                          <label class="gap-2 grid"><span class="field-label">权限级别</span><TxSelect v-model="item.requestedPermission" panel-background="pure"><TxSelectItem v-for="option in databasePermissionOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect></label>
+                          <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
+                          <label class="option-check md:col-span-2"><TxCheckbox v-model="item.payload.sensitiveData" variant="checkmark" /><span><b>涉及敏感数据</b><small>生产库、用户信息或受限数据需勾选。</small></span></label>
+                          <label class="gap-2 grid md:col-span-2"><span class="field-label">申请原因</span><RichTextEditor v-model="item.payload.reason" :min-height="120" placeholder="说明申请原因" /></label>
+                          <label class="gap-2 grid md:col-span-2"><span class="field-label">操作范围说明</span><RichTextEditor v-model="item.payload.operationScope" :min-height="120" placeholder="读取哪些表、执行哪些操作、是否需要变更数据" /></label>
+                        </template>
+
+                        <template v-else-if="item.resourceType === 'llm_api_quota'">
+                          <label class="gap-2 grid"><span class="field-label">大模型</span><TxSelect v-model="item.payload.model" panel-background="pure" @update:model-value="onLlmModelChange(item)"><TxSelectItem v-for="model in selectableLlmApiModels" :key="model.key" :value="model.key" :label="llmModelSelectLabel(model)" /></TxSelect></label>
+                          <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptionsForItem(item)" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span><span v-else-if="isGptProItem(item)" class="field-hint">GPT PRO 默认有效期 7 天。</span></label>
+                          <div class="gap-2 grid">
+                            <span class="field-label">RPM / TPM 策略</span>
+                            <TxSelect v-model="item.payload.rateLimitMode" panel-background="pure" @update:model-value="onRateLimitModeChange(item)">
+                              <TxSelectItem v-for="option in rateLimitModeOptions" :key="option.value" :value="option.value" :label="option.label" />
+                            </TxSelect>
+                          </div>
+                          <div v-if="item.payload.rateLimitMode === 'custom'" class="gap-4 grid md:col-span-2 md:grid-cols-2">
+                            <label class="gap-2 grid">
+                              <span class="field-label">RPM</span>
+                              <TxNumberInput v-model="item.payload.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" />
+                            </label>
+                            <label class="gap-2 grid">
+                              <span class="field-label">TPM</span>
+                              <TxNumberInput v-model="item.payload.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" />
+                            </label>
+                          </div>
+                          <div class="gap-2 grid md:col-span-2">
+                            <span class="field-label">默认 RPM / TPM</span>
+                            <div class="rate-default-card">
+                              默认 RPM {{ llmModelForItem(item)?.rpmLimit ?? '-' }} · 默认 TPM {{ llmModelForItem(item)?.tpmLimit ?? '-' }}
+                            </div>
+                          </div>
+                          <div v-if="llmRateChangeCost(item)" class="rate-warning md:col-span-2">
+                            <b>修改 RPM / TPM 会消耗大量积分：约 {{ llmRateChangeCost(item).toLocaleString('zh-CN') }} 积分</b><span>该消耗不享受任何折扣；请谨慎调整，费用很高很高。最终实际扣费以后端结算为准。</span>
+                          </div>
+                          <div class="gap-3 grid md:col-span-2">
+                            <div class="flex flex-wrap gap-3 items-center justify-between">
+                              <span class="field-label">{{ llmQuotaFieldLabel(item) }}</span><b>{{ formatLlmQuotaForItem(item) }}</b>
+                            </div><TxSlider v-model="item.payload.budgetLimit" :min="llmQuotaMin(item)" :max="llmQuotaMax(item)" :step="llmQuotaStep(item)" :show-value="false" :format-value="llmQuotaFormatter(item)" /><div class="quota-marks">
+                              <span v-for="mark in llmQuotaMarks(item)" :key="mark">{{ formatLlmQuota(mark, llmModelForItem(item)) }}</span>
+                            </div><p v-if="isGptProItem(item)" class="field-hint text-amber-600 dark:text-amber-300">
+                              GPT PRO 按对话轮次计费，默认 5 轮，每轮消耗较高，本期按 {{ GPT_PRO_ACTIVITY_NAME }} 处理。
+                            </p><p v-else-if="item.payload.budgetLimit > 100" class="field-hint text-amber-600 dark:text-amber-300">
+                              超过 $100 的额度申请需要更长时间审核
+                            </p>
+                          </div>
+                          <label class="gap-2 grid md:col-span-2"><span class="field-label">使用场景</span><RichTextEditor v-model="item.payload.usageScenario" :min-height="140" placeholder="说明项目用途、调用场景、预估消耗和收益" /></label>
+                        </template>
+
+                        <template v-else>
+                          <label class="gap-2 grid"><span class="field-label">规格</span><TxInput v-model="item.payload.specification" placeholder="规格、权限级别、容量或配额" /></label>
+                          <label class="gap-2 grid"><span class="field-label">数量</span><TxNumberInput v-model="item.payload.quantity" :min="1" :step="1" :controls="false" /></label>
+                          <label class="gap-2 grid"><span class="field-label">环境</span><TxSelect v-model="item.payload.environment" panel-background="pure"><TxSelectItem v-for="env in environmentOptions" :key="env" :value="env" :label="env" /></TxSelect></label>
+                          <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
+                          <label class="gap-2 grid"><span class="field-label">项目</span><TxInput v-model="item.payload.project" /></label>
+                          <label class="gap-2 grid"><span class="field-label">成本归属</span><TxInput v-model="item.payload.costCenter" /></label>
+                          <label class="gap-2 grid md:col-span-2"><span class="field-label">访问范围或用途说明</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" placeholder="说明访问范围、用途和必要性" /></label>
+                        </template>
                       </div>
-                      <div class="gap-2 grid md:col-span-2">
-                        <span class="field-label">默认 RPM / TPM</span>
-                        <div class="rate-default-card">
-                          默认 RPM {{ llmModelForItem(item)?.rpmLimit ?? '-' }} · 默认 TPM {{ llmModelForItem(item)?.tpmLimit ?? '-' }}
+                      <div class="resource-estimate-card mt-4">
+                        <div class="flex flex-wrap gap-2 items-center justify-between">
+                          <b>本项预估资源</b>
+                          <span>{{ formatPoints(itemEstimateParts(item).discounted) }}</span>
                         </div>
+                        <ul class="resource-estimate-list">
+                          <li>
+                            <span>基础</span>
+                            <b>{{ formatPoints(itemEstimateParts(item).base) }}</b>
+                          </li>
+                          <li v-if="itemEstimateParts(item).rate">
+                            <span>RPM/TPM</span>
+                            <b>{{ formatPoints(itemEstimateParts(item).rate) }}</b>
+                          </li>
+                          <li v-if="itemEstimateParts(item).duration">
+                            <span>有效期延长</span>
+                            <b>{{ formatPoints(itemEstimateParts(item).duration) }}</b>
+                          </li>
+                          <li v-if="itemEstimateParts(item).savings" class="is-saving">
+                            <span>{{ itemActivityDiscountText(item) }}</span>
+                            <b>-{{ formatPoints(itemEstimateParts(item).savings) }}</b>
+                          </li>
+                        </ul>
                       </div>
-                      <div v-if="llmRateChangeCost(item)" class="rate-warning md:col-span-2">
-                        <b>修改 RPM / TPM 会消耗大量积分：约 {{ llmRateChangeCost(item).toLocaleString('zh-CN') }} 积分</b><span>该消耗不享受任何折扣；请谨慎调整，费用很高很高。最终实际扣费以后端结算为准。</span>
-                      </div>
-                      <div class="gap-3 grid md:col-span-2">
-                        <div class="flex flex-wrap gap-3 items-center justify-between">
-                          <span class="field-label">{{ llmQuotaFieldLabel(item) }}</span><b>{{ formatLlmQuotaForItem(item) }}</b>
-                        </div><TxSlider v-model="item.payload.budgetLimit" :min="llmQuotaMin(item)" :max="llmQuotaMax(item)" :step="llmQuotaStep(item)" :show-value="false" :format-value="llmQuotaFormatter(item)" /><div class="quota-marks">
-                          <span v-for="mark in llmQuotaMarks(item)" :key="mark">{{ formatLlmQuota(mark, llmModelForItem(item)) }}</span>
-                        </div><p v-if="isGptProItem(item)" class="field-hint text-amber-600 dark:text-amber-300">
-                          GPT PRO 按对话轮次计费，默认 5 轮，每轮消耗较高，本期按 {{ GPT_PRO_ACTIVITY_NAME }} 处理。
-                        </p><p v-else-if="item.payload.budgetLimit > 100" class="field-hint text-amber-600 dark:text-amber-300">
-                          超过 $100 的额度申请需要更长时间审核
-                        </p>
-                      </div>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">使用场景</span><RichTextEditor v-model="item.payload.usageScenario" :min-height="140" placeholder="说明项目用途、调用场景、预估消耗和收益" /></label>
-                    </template>
-
-                    <template v-else>
-                      <label class="gap-2 grid"><span class="field-label">规格</span><TxInput v-model="item.payload.specification" placeholder="规格、权限级别、容量或配额" /></label>
-                      <label class="gap-2 grid"><span class="field-label">数量</span><TxNumberInput v-model="item.payload.quantity" :min="1" :step="1" :controls="false" /></label>
-                      <label class="gap-2 grid"><span class="field-label">环境</span><TxSelect v-model="item.payload.environment" panel-background="pure"><TxSelectItem v-for="env in environmentOptions" :key="env" :value="env" :label="env" /></TxSelect></label>
-                      <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
-                      <label class="gap-2 grid"><span class="field-label">项目</span><TxInput v-model="item.payload.project" /></label>
-                      <label class="gap-2 grid"><span class="field-label">成本归属</span><TxInput v-model="item.payload.costCenter" /></label>
-                      <label class="gap-2 grid md:col-span-2"><span class="field-label">访问范围或用途说明</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" placeholder="说明访问范围、用途和必要性" /></label>
-                    </template>
-                  </div>
-                  <div class="resource-estimate-card mt-4">
-                    <div class="flex flex-wrap gap-2 items-center justify-between">
-                      <b>本项预估资源</b>
-                      <span>{{ formatPoints(itemEstimateParts(item).discounted) }}</span>
                     </div>
-                    <ul class="resource-estimate-list">
-                      <li>
-                        <span>基础</span>
-                        <b>{{ formatPoints(itemEstimateParts(item).base) }}</b>
-                      </li>
-                      <li v-if="itemEstimateParts(item).rate">
-                        <span>RPM/TPM</span>
-                        <b>{{ formatPoints(itemEstimateParts(item).rate) }}</b>
-                      </li>
-                      <li v-if="itemEstimateParts(item).duration">
-                        <span>有效期延长</span>
-                        <b>{{ formatPoints(itemEstimateParts(item).duration) }}</b>
-                      </li>
-                      <li v-if="itemEstimateParts(item).savings" class="is-saving">
-                        <span>{{ itemActivityDiscountText(item) }}</span>
-                        <b>-{{ formatPoints(itemEstimateParts(item).savings) }}</b>
-                      </li>
-                    </ul>
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div>
-            <div class="mb-2 flex gap-3 items-center justify-between">
-              <span class="field-label">Markdown 附件 / 图片</span>
-              <span class="field-hint">{{ formatBytes(totalApplicationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
-            </div>
-            <TxFileUploader v-model="applicationFiles" :max="20" button-text="上传附件" drop-text="图片和补充材料都拖拽到这里" hint-text="图片、Markdown 附件和补充材料都上传到这里；全部文件总大小不超过 200MB。也可在申请说明里填写百度网盘等外链。" />
-          </div>
-
-          <div class="flex flex-wrap gap-3 justify-between">
-            <TxButton variant="secondary" @click="onSaveDraft">
-              保存草稿
-            </TxButton>
-            <div class="flex gap-3">
-              <TxButton variant="ghost" @click="currentStep = 'types'">
-                上一步
-              </TxButton>
-              <TxButton variant="primary" @click="nextToTerms">
-                下一步：结算单
-              </TxButton>
-            </div>
-          </div>
-        </template>
-
-        <template v-else>
-          <div v-if="(resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey) || applicationSecurityForm.message" class="resource-confirm-card resource-security-card">
-            <TurnstileChallenge
-              v-if="resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey"
-              :site-key="resourceApplicationPolicyStatus.turnstileSiteKey"
-              @verified="setApplicationTurnstileToken"
-              @expired="setApplicationTurnstileToken('')"
-            />
-            <p v-if="applicationSecurityForm.message" class="field-hint">
-              {{ applicationSecurityForm.message }}
-            </p>
-          </div>
-
-          <div class="resource-confirm-card resource-checkout-card">
-            <div class="flex flex-wrap gap-3 items-start justify-between">
               <div>
-                <h3 class="text-lg fw-900">
-                  资源明细
-                </h3>
-                <p class="field-hint mt-1">
-                  大模型额度按申请金额阶梯折扣；RPM/TPM 修改和有效期延长不参与活动折扣。
+                <div class="mb-2 flex gap-3 items-center justify-between">
+                  <span class="field-label">Markdown 附件 / 图片</span>
+                  <span class="field-hint">{{ formatBytes(totalApplicationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
+                </div>
+                <TxFileUploader v-model="applicationFiles" :max="20" button-text="上传附件" drop-text="图片和补充材料都拖拽到这里" hint-text="图片、Markdown 附件和补充材料都上传到这里；全部文件总大小不超过 200MB。也可在申请说明里填写百度网盘等外链。" />
+              </div>
+            </template>
+
+            <template v-else>
+              <div v-if="(resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey) || applicationSecurityForm.message" class="resource-confirm-card resource-security-card">
+                <TurnstileChallenge
+                  v-if="resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey"
+                  :site-key="resourceApplicationPolicyStatus.turnstileSiteKey"
+                  @verified="setApplicationTurnstileToken"
+                  @expired="setApplicationTurnstileToken('')"
+                />
+                <p v-if="applicationSecurityForm.message" class="field-hint">
+                  {{ applicationSecurityForm.message }}
                 </p>
               </div>
-              <span class="text-xs fw-900 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
-                {{ resourceCheckoutRows.length }} 条
-              </span>
-            </div>
-            <div class="checkout-table mt-3">
-              <div class="checkout-table-row checkout-table-head">
-                <span>资源</span>
-                <span>有效期</span>
-                <span>基础成本</span>
-                <span>额外成本</span>
-                <span>活动后</span>
-              </div>
-              <div v-for="row in resourceCheckoutRows" :key="row.id" class="checkout-table-row">
-                <div class="checkout-resource-cell min-w-0">
-                  <b>{{ row.type }}</b>
-                  <span>{{ row.subtype }}</span>
-                  <small>{{ row.details.join(' · ') }}</small>
+
+              <div class="resource-confirm-card resource-checkout-card">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <h3 class="text-lg fw-900">
+                      资源明细
+                    </h3>
+                    <p class="field-hint mt-1">
+                      大模型额度按申请金额阶梯折扣；RPM/TPM 修改和有效期延长不参与活动折扣。
+                    </p>
+                  </div>
+                  <span class="text-xs fw-900 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
+                    {{ resourceCheckoutRows.length }} 条
+                  </span>
                 </div>
-                <span>{{ row.duration }}</span>
-                <span>{{ formatPoints(row.base) }}</span>
-                <span>{{ formatPoints(row.rate + row.durationCost) }}</span>
-                <b>{{ formatPoints(row.discounted) }}</b>
+                <div class="checkout-table mt-3">
+                  <div class="checkout-table-row checkout-table-head">
+                    <span>资源</span>
+                    <span>有效期</span>
+                    <span>基础成本</span>
+                    <span>额外成本</span>
+                    <span>活动后</span>
+                  </div>
+                  <div v-for="row in resourceCheckoutRows" :key="row.id" class="checkout-table-row">
+                    <div class="checkout-resource-cell min-w-0">
+                      <b>{{ row.type }}</b>
+                      <span>{{ row.subtype }}</span>
+                      <small>{{ row.details.join(' · ') }}</small>
+                    </div>
+                    <span>{{ row.duration }}</span>
+                    <span>{{ formatPoints(row.base) }}</span>
+                    <span>{{ formatPoints(row.rate + row.durationCost) }}</span>
+                    <b>{{ formatPoints(row.discounted) }}</b>
+                  </div>
+                </div>
               </div>
-            </div>
+
+              <div class="order-total-panel">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="order-total-title">
+                      订单结算
+                    </div>
+                    <div class="order-total-summary">
+                      {{ resourceApplicationForm.title }} · 资源申请 · {{ resourceApplicationItems.length }} 条资源明细
+                    </div>
+                  </div>
+                  <label class="order-coupon-select">
+                    <span>优惠券</span>
+                    <TxSelect v-model="resourceApplicationForm.selectedCouponId" panel-background="pure">
+                      <TxSelectItem value="" label="不使用优惠券" />
+                      <TxSelectItem v-for="coupon in availableResourceCoupons" :key="coupon.id" :value="coupon.id" :label="`${coupon.name} · ${couponDiscountText(coupon)}`" />
+                    </TxSelect>
+                  </label>
+                </div>
+                <label class="square-share-option mt-3">
+                  <TxCheckbox v-model="resourceApplicationForm.shareToSquare" variant="checkmark" />
+                  <span>
+                    <b>发布到广场参与拼一刀</b>
+                    <small>提交后公开申请标题、说明和资源明细，用于邀请他人支持这个领域；本单在优惠券后继续享受 {{ rateDiscountText(SQUARE_SHARE_DISCOUNT_RATE) }}，可与其他优惠叠加。广场助力每 3 人递减 0.1 折，最低 8 折。</small>
+                  </span>
+                </label>
+                <label v-if="resourceApplicationForm.shareToSquare" class="mt-3 gap-2 grid">
+                  <span class="field-label">广场展示说明</span>
+                  <RichTextEditor
+                    v-model="resourceApplicationForm.squarePostContent"
+                    :min-height="120"
+                    placeholder="说明为什么这个领域值得支持，或补充项目背景。留空时使用申请说明。"
+                  />
+                </label>
+                <div class="order-total-table mt-3">
+                  <div>
+                    <span>原价合计</span>
+                    <b>{{ formatPoints(totalUndiscountedEstimate) }}</b>
+                  </div>
+                  <div class="is-discount">
+                    <span class="order-total-label">
+                      <i class="order-benefit-tag">限时福利</i>
+                      {{ checkoutActivityLabel }} 后价格
+                    </span>
+                    <b>{{ formatPoints(totalDiscountedEstimate) }}</b>
+                  </div>
+                  <div class="is-discount" :class="{ 'is-muted': couponDiscountAmount <= 0 }">
+                    <span>优惠券抵扣</span>
+                    <b>-{{ formatPoints(couponDiscountAmount) }}</b>
+                  </div>
+                  <div class="is-discount" :class="{ 'is-muted': squareDiscountAmount <= 0 }">
+                    <span>广场发布折扣</span>
+                    <b>-{{ formatPoints(squareDiscountAmount) }}</b>
+                  </div>
+                  <div class="is-saving">
+                    <span>共节省</span>
+                    <b>{{ formatPoints(totalDiscountSavings) }}</b>
+                  </div>
+                  <div class="is-total">
+                    <span>本单预扣</span>
+                    <b>{{ formatPoints(checkoutPayableEstimate) }}</b>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
 
-          <div class="order-total-panel">
-            <div class="flex flex-wrap gap-3 items-start justify-between">
-              <div>
-                <div class="order-total-title">
-                  订单结算
-                </div>
-                <div class="order-total-summary">
-                  {{ resourceApplicationForm.title }} · 资源申请 · {{ resourceApplicationItems.length }} 条资源明细
-                </div>
-              </div>
-              <label class="order-coupon-select">
-                <span>优惠券</span>
-                <TxSelect v-model="resourceApplicationForm.selectedCouponId" panel-background="pure">
-                  <TxSelectItem value="" label="不使用优惠券" />
-                  <TxSelectItem v-for="coupon in availableResourceCoupons" :key="coupon.id" :value="coupon.id" :label="`${coupon.name} · ${couponDiscountText(coupon)}`" />
-                </TxSelect>
-              </label>
-            </div>
-            <label class="square-share-option mt-3">
-              <TxCheckbox v-model="resourceApplicationForm.shareToSquare" variant="checkmark" />
-              <span>
-                <b>发布到广场参与拼一刀</b>
-                <small>提交后公开申请标题、说明和资源明细，用于邀请他人支持这个领域；本单在优惠券后继续享受 {{ rateDiscountText(SQUARE_SHARE_DISCOUNT_RATE) }}，可与其他优惠叠加。广场助力每 3 人递减 0.1 折，最低 8 折。</small>
-              </span>
-            </label>
-            <label v-if="resourceApplicationForm.shareToSquare" class="mt-3 gap-2 grid">
-              <span class="field-label">广场展示说明</span>
-              <RichTextEditor
-                v-model="resourceApplicationForm.squarePostContent"
-                :min-height="120"
-                placeholder="说明为什么这个领域值得支持，或补充项目背景。留空时使用申请说明。"
-              />
-            </label>
-            <div class="order-total-table mt-3">
-              <div>
-                <span>原价合计</span>
-                <b>{{ formatPoints(totalUndiscountedEstimate) }}</b>
-              </div>
-              <div class="is-discount">
-                <span class="order-total-label">
-                  <i class="order-benefit-tag">限时福利</i>
-                  {{ checkoutActivityLabel }} 后价格
+          <div class="resource-action-bar">
+            <span v-if="currentStep === 'types'" class="resource-action-status">已选 {{ resourceApplicationForm.selectedResourceTypes.length }} 类资源</span>
+            <span v-else-if="currentStep === 'materials'" class="resource-action-status">自动保存中 · 当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
+            <span v-else class="resource-action-status">预计冻结：{{ formatPoints(checkoutPayableEstimate) }} · 待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
+            <div class="resource-action-buttons">
+              <template v-if="currentStep === 'types'">
+                <TxButton variant="primary" size="lg" @click="nextToMaterials">
+                  下一步：填写材料
+                </TxButton>
+              </template>
+              <template v-else-if="currentStep === 'materials'">
+                <TxButton variant="secondary" @click="onSaveDraft">
+                  保存草稿
+                </TxButton>
+                <TxButton variant="ghost" @click="currentStep = 'types'">
+                  上一步
+                </TxButton>
+                <TxButton variant="primary" @click="nextToTerms">
+                  下一步：结算单
+                </TxButton>
+              </template>
+              <template v-else>
+                <TxButton variant="secondary" @click="onSaveDraft">
+                  保存草稿
+                </TxButton>
+                <TxButton variant="ghost" @click="currentStep = 'materials'">
+                  上一步
+                </TxButton>
+                <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
+                  {{ submitReadyMessage }}
                 </span>
-                <b>{{ formatPoints(totalDiscountedEstimate) }}</b>
-              </div>
-              <div class="is-discount" :class="{ 'is-muted': couponDiscountAmount <= 0 }">
-                <span>优惠券抵扣</span>
-                <b>-{{ formatPoints(couponDiscountAmount) }}</b>
-              </div>
-              <div class="is-discount" :class="{ 'is-muted': squareDiscountAmount <= 0 }">
-                <span>广场发布折扣</span>
-                <b>-{{ formatPoints(squareDiscountAmount) }}</b>
-              </div>
-              <div class="is-saving">
-                <span>共节省</span>
-                <b>{{ formatPoints(totalDiscountSavings) }}</b>
-              </div>
-              <div class="is-total">
-                <span>本单预扣</span>
-                <b>{{ formatPoints(checkoutPayableEstimate) }}</b>
-              </div>
+                <TxButton variant="primary" @click="onSubmitResourceApplication">
+                  提交并预扣 {{ formatPoints(checkoutPayableEstimate) }}
+                </TxButton>
+              </template>
             </div>
           </div>
-
-          <div class="flex flex-wrap gap-3 justify-between">
-            <TxButton variant="secondary" @click="onSaveDraft">
-              保存草稿
-            </TxButton>
-            <div class="flex gap-3 items-center">
-              <TxButton variant="ghost" @click="currentStep = 'materials'">
-                上一步
-              </TxButton>
-              <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
-                {{ submitReadyMessage }}
-              </span>
-              <TxButton variant="primary" :disabled="isResourceSubmissionBlocked" @click="onSubmitResourceApplication">
-                提交并预扣 {{ formatPoints(checkoutPayableEstimate) }}
-              </TxButton>
-            </div>
-          </div>
-          <p class="field-hint text-right">
-            当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}
-          </p>
-        </template>
+        </main>
       </div>
     </TxCard>
 

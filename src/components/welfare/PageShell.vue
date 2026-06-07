@@ -9,10 +9,11 @@ const route = useRoute()
 const { persistenceError, activeSiteBanner } = useWelfareUiState()
 const { toastMessage } = useWelfareFeedback()
 const isDashboardShell = computed(() => route.path.startsWith('/dashboard'))
+const showFooter = computed(() => !route.path.startsWith('/dashboard/apply/create'))
 </script>
 
 <template>
-  <div class="app-shell flex flex-col min-h-screen relative" :class="activeSiteBanner ? 'app-shell--with-banner' : ''">
+  <div class="app-shell flex flex-col min-h-screen relative" :class="[activeSiteBanner ? 'app-shell--with-banner' : '', isDashboardShell ? 'app-shell--dashboard' : '']">
     <SiteHeader />
 
     <div
@@ -22,16 +23,16 @@ const isDashboardShell = computed(() => route.path.startsWith('/dashboard'))
       <div
         v-if="persistenceError"
         class="text-sm text-rose-900 leading-6 mb-2 p-2 border border-rose-400/30 rounded-xl bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30"
-        :class="isDashboardShell ? 'mx-4 mt-3 lg:ml-[calc(var(--cms-sidebar-width)+1rem)]' : ''"
+        :class="isDashboardShell ? 'mx-4 mt-3' : ''"
       >
         数据库状态加载失败：{{ persistenceError }}
       </div>
 
-      <div class="flex flex-1 flex-col">
+      <div class="app-main__body flex flex-1 flex-col">
         <slot />
       </div>
 
-      <footer class="text-sm text-slate-500 mt-4 pt-2 border-t border-black/8 flex flex-wrap gap-2 items-center justify-between dark:text-slate-400 dark:border-white/10" :class="isDashboardShell ? 'mx-4 pb-4 lg:ml-[calc(var(--cms-sidebar-width)+1rem)]' : ''">
+      <footer v-if="showFooter" class="text-sm text-slate-500 mt-4 pt-2 border-t border-black/8 flex flex-wrap gap-2 items-center justify-between dark:text-slate-400 dark:border-white/10" :class="isDashboardShell ? 'mx-4 pb-4' : ''">
         <div class="flex gap-2 items-center">
           <span>Powered by <a class="underline underline-offset-4" href="https://blog.tagzxia.com" target="_blank" rel="noreferrer">TaGzxia</a>.</span>
           <span>Built with <a class="underline underline-offset-4" href="https://github.com/talex-touch/tuffex" target="_blank" rel="noreferrer">tuffex</a>.</span>

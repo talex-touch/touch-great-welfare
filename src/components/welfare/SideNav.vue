@@ -177,10 +177,10 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
 
 @media (min-width: 1024px) {
   .cms-side-nav {
-    position: fixed;
+    position: sticky;
     top: var(--cms-header-height);
-    bottom: 0;
-    left: 0;
+    height: calc(100vh - var(--cms-header-height));
+    min-height: 0;
     z-index: 30;
     border-right: 1px solid rgb(229 231 235);
     background: rgba(255, 255, 255, 0.86);
