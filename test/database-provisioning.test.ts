@@ -401,6 +401,50 @@ describe('database resource provisioning', () => {
     expect(usernames.every(name => name.length <= 63)).toBe(true)
   })
 
+  it('keeps generated PostgreSQL identifiers valid when approved names start with digits', async () => {
+    const state = createState()
+    const item = state.applications[0].resourceItems![0]
+    item.approvedPayload = {
+      databaseName: '2026-orders',
+      username: '123_reader',
+      permission: 'readonly',
+      expiresInDays: 14,
+    }
+
+    const d1 = createMemoryD1(state)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: '2026',
+      }),
+    }), env)
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    expect(d1.data.bindings[0]).toMatchObject({
+      database_name: 'x_2026_orders',
+      username: 'x_123_reader',
+    })
+    expect(poolQueries.some(item => item.sql.includes('create database "x_2026_orders"'))).toBe(true)
+    expect(poolQueries.some(item => item.sql.includes('create role "x_123_reader"'))).toBe(true)
+  })
+
   it('keeps successful database secrets when another resource item falls back to manual provisioning', async () => {
     const state = createState()
     const application = state.applications[0]!

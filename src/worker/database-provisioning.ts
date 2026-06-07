@@ -91,13 +91,23 @@ function normalizeExpiresInDays(value: unknown) {
 
 function normalizeNamePart(value: unknown, fallback: string, maxLength = 32) {
   const text = typeof value === 'string' ? value : fallback
-  const normalized = text
+  let fallbackNormalized = fallback
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, maxLength)
-  return normalized || fallback
+  if (fallbackNormalized && !/^[a-z_]/.test(fallbackNormalized))
+    fallbackNormalized = `x_${fallbackNormalized}`.slice(0, maxLength)
+  let normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, maxLength)
+  if (normalized && !/^[a-z_]/.test(normalized))
+    normalized = `x_${normalized}`.slice(0, maxLength)
+  return normalized || fallbackNormalized || 'x'
 }
 
 function stableHashInt(parts: unknown[]) {
