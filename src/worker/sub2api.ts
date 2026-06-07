@@ -383,7 +383,15 @@ async function callSub2Api<T>(
     },
   }, 20000)
   const text = await response.text()
-  const payload = text ? JSON.parse(text) as UpstreamEnvelope<T> | T : {} as T
+  let payload = {} as UpstreamEnvelope<T> | T
+  if (text) {
+    try {
+      payload = JSON.parse(text) as UpstreamEnvelope<T> | T
+    }
+    catch {
+      payload = { message: text } as UpstreamEnvelope<T>
+    }
+  }
   if (!response.ok) {
     const message = payload && typeof payload === 'object' && 'message' in payload
       ? String((payload as UpstreamEnvelope<T>).message)

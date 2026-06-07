@@ -287,4 +287,58 @@ describe('sub2api resource provisioning', () => {
     expect(d1.data.bindings).toHaveLength(1)
     expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('completed')
   })
+
+  it('treats non-JSON 404 responses as unsupported admin key endpoints', async () => {
+    const d1 = createMemoryD1(createState())
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-sub2api',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/users?'))
+        return Response.json({ data: { items: [{ id: 42, email: 'user@example.com' }] } })
+      if (url.endsWith('/api/v1/admin/users/42/api-keys')) {
+        return new Response('missing route', {
+          status: 404,
+          headers: { 'content-type': 'text/plain' },
+        })
+      }
+      return Response.json({ message: 'not found' }, { status: 404 })
+    }))
+
+    await handleSub2ApiRequest(new Request('https://welfare.example.com/api/sub2api/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        baseUrl: 'https://sub2api.example.com',
+        adminApiKey: 'admin-key',
+        clearDatabaseUrl: true,
+        defaultQuotaUsd: 10,
+        defaultExpiresInDays: 30,
+        defaultRateLimit5h: 0,
+        defaultRateLimit1d: 0,
+        defaultRateLimit7d: 0,
+      }),
+    }), env)
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+    const result = await response.json() as { status: string, error: string }
+
+    expect(response.ok).toBe(true)
+    expect(result).toMatchObject({
+      status: 'pending_manual',
+      error: 'Sub2API Admin API 不支持创建 API Key，且数据库连接未配置',
+    })
+    const updatedState = await readWelfareState(env) as WelfareState
+    expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('pending')
+    expect(updatedState.applications[0].resourceItems?.[0].provisionNote).toContain('Sub2API Admin API 不支持创建 API Key')
+  })
 })
