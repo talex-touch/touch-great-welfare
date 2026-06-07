@@ -401,6 +401,72 @@ describe('database resource provisioning', () => {
     expect(usernames.every(name => name.length <= 63)).toBe(true)
   })
 
+  it('keeps successful database secrets when another resource item falls back to manual provisioning', async () => {
+    const state = createState()
+    const application = state.applications[0]!
+    const firstItem = application.resourceItems![0]!
+    application.resourceItems!.push({
+      ...firstItem,
+      id: 'item_mysql',
+      resourceSubtype: 'mysql',
+      approvedPayload: undefined,
+      payload: {
+        name: 'legacy_mysql',
+        environment: 'dev',
+        permission: 'readonly',
+        operationScope: '读取历史系统数据',
+        duration: '7 天',
+      },
+    })
+
+    const d1 = createMemoryD1(state)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+      }),
+    }), env)
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    const result = await response.json() as {
+      status: string
+      items: Array<{ provider: string, database: { password?: string, connectionUrl?: string } }>
+      failures: Array<{ itemId: string, error: string }>
+    }
+    expect(result.status).toBe('provisioned')
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0].database.password).toBeTruthy()
+    expect(result.items[0].database.connectionUrl).toContain('approved_reader')
+    expect(result.failures).toEqual([
+      { itemId: 'item_mysql', error: '数据库自动发放当前仅支持 PostgreSQL，mysql 需人工处理' },
+    ])
+    expect(d1.data.bindings).toHaveLength(1)
+
+    const updatedState = await readWelfareState(env)
+    const [postgresItem, mysqlItem] = updatedState.applications[0].resourceItems!
+    expect(postgresItem.provisionStatus).toBe('completed')
+    expect(postgresItem.provisionNote).toContain('明文密码仅在本次发放响应中返回')
+    expect(mysqlItem.provisionStatus).toBe('pending')
+    expect(mysqlItem.provisionNote).toContain('待人工处理')
+  })
+
   it('reuses a binding created while waiting for the database provision lock', async () => {
     const state = createState()
     const d1 = createMemoryD1(state)

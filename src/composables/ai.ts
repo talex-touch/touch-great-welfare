@@ -104,6 +104,7 @@ export type ProvisionApplicationRewardResult
     status: 'provisioned'
     provider: 'sub2api' | 'resource'
     applicationId: string
+    failures?: Array<{ itemId: string, error: string }>
     items: Array<
       {
         itemId: string
