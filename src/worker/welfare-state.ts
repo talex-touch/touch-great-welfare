@@ -17,7 +17,7 @@ import { createUserInviteCode } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
 import { base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
-import { applyPointTransactionsFromClientState, backfillPointTransactionsFromState, syncUserPointBalancesFromLedger } from './points'
+import { applyPointTransactionsFromClientState, backfillPointTransactionsFromState } from './points'
 import { authenticatedUserId, clearSessionCookie, createSessionCookie } from './session'
 
 export interface WorkerEnv {
@@ -629,13 +629,7 @@ export async function readWelfareState(env: WorkerEnv) {
       .first<{ state: string }>()
 
     const state = await decodeStoredState(env, row?.state ? JSON.parse(row.state) : {})
-    const backfilled = await backfillPointTransactionsFromState(env, state)
-    const syncedBalances = await syncUserPointBalancesFromLedger(env, state)
-    const result = applyWelfareRetentionPolicy(state)
-    if (result.changed || backfilled || syncedBalances)
-      await writeWelfareState(env, result.state)
-
-    return result.state
+    return applyWelfareRetentionPolicy(state).state
   }
 
   const result = await getPool(env).query(
@@ -644,13 +638,7 @@ export async function readWelfareState(env: WorkerEnv) {
   )
 
   const state = await decodeStoredState(env, result.rows[0]?.state ?? {})
-  const backfilled = await backfillPointTransactionsFromState(env, state)
-  const syncedBalances = await syncUserPointBalancesFromLedger(env, state)
-  const retentionResult = applyWelfareRetentionPolicy(state)
-  if (retentionResult.changed || backfilled || syncedBalances)
-    await writeWelfareState(env, retentionResult.state)
-
-  return retentionResult.state
+  return applyWelfareRetentionPolicy(state).state
 }
 
 export async function writeWelfareState(env: WorkerEnv, state: unknown) {
