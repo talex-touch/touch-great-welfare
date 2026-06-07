@@ -779,6 +779,15 @@ select {
   padding: 0.5rem;
 }
 
+.verification-admin-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  align-items: end;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
 .verification-admin-row {
   display: grid;
   gap: 1rem;
@@ -838,6 +847,11 @@ select {
   font-size: 0.875rem;
   font-weight: 800;
   text-align: center;
+}
+
+.verification-admin-pagination {
+  padding: 0.75rem 1.5rem 1.25rem;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .verification-review-drawer {
@@ -1026,6 +1040,11 @@ select {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
+.dark .verification-admin-tools,
+.dark .verification-admin-pagination {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
 .dark .verification-admin-head h3,
 .dark .verification-admin-row b {
   color: #f8fafc;
@@ -1120,6 +1139,8 @@ select {
 
   .verification-progress-header,
   .verification-admin-head,
+  .verification-admin-tools,
+  .verification-admin-pagination,
   .verification-type-lock {
     align-items: stretch;
     flex-direction: column;

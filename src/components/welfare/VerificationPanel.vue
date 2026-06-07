@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { StudentVerification, VerificationType } from '~/composables/welfare'
-import { TxButton, TxCard, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@talex-touch/tuffex'
-import { computed, ref, watch } from 'vue'
+import { TxButton, TxCard, TxInput, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@talex-touch/tuffex'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
@@ -33,11 +33,49 @@ const { runSafely } = useWelfareFeedback()
 const activeSection = ref<'mine' | 'review'>('mine')
 const activeAdminTab = ref<'pending' | 'history'>('pending')
 const selectedVerificationId = ref('')
+const ALL_FILTER = 'all'
+const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
+const pendingFilters = reactive({
+  query: '',
+  from: '',
+  to: '',
+  verificationType: ALL_FILTER,
+  status: ALL_FILTER,
+  material: ALL_FILTER,
+  page: 1,
+  pageSize: 10,
+})
 const studentApproved = computed(() => !!currentUser.value?.profile.studentVerified)
 const frontlineApproved = computed(() => currentStudentVerifications.value.some(item => item.verificationType === 'frontline' && item.status === 'approved'))
 const openSourceConfigured = computed(() => !!currentUser.value?.profile.githubAuthorized && !!profileForm.githubUsername && !!profileForm.selectedRepo)
 const sortedStudentVerifications = computed(() => [...state.studentVerifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
 const pendingStudentVerifications = computed(() => sortedStudentVerifications.value.filter(item => item.status === 'pending' || item.status === 'needs_supplement'))
+const filteredPendingStudentVerifications = computed(() => pendingStudentVerifications.value
+  .filter(item => pendingFilters.verificationType === ALL_FILTER || (item.verificationType ?? 'student') === pendingFilters.verificationType)
+  .filter(item => pendingFilters.status === ALL_FILTER || item.status === pendingFilters.status)
+  .filter(item => pendingFilters.material === ALL_FILTER || (
+    pendingFilters.material === 'with_attachment'
+      ? item.attachments.length > 0
+      : pendingFilters.material === 'without_attachment'
+        ? item.attachments.length === 0
+        : item.educationEmailVerified
+  ))
+  .filter(item => isInDateRange(item.createdAt, pendingFilters))
+  .filter(item => matchesQuery(pendingFilters.query, [
+    item.realName,
+    userName(item.userId),
+    item.category,
+    item.school,
+    item.identity,
+    item.grade,
+    item.educationLevel,
+    item.educationEmail,
+    item.notes,
+    verificationTypeLabel(item.verificationType),
+    verificationOrganizationLabel(item.verificationType),
+    verificationStatusText(item.status),
+  ])))
+const pendingPagination = computed(() => paginateRows(filteredPendingStudentVerifications.value, pendingFilters))
 const selectedVerification = computed(() => sortedStudentVerifications.value.find(item => item.id === selectedVerificationId.value))
 
 watch(isAdmin, (canReview) => {
@@ -45,12 +83,81 @@ watch(isAdmin, (canReview) => {
     activeSection.value = 'mine'
 })
 
+watch(
+  () => [pendingFilters.query, pendingFilters.from, pendingFilters.to, pendingFilters.verificationType, pendingFilters.status, pendingFilters.material, pendingFilters.pageSize],
+  () => {
+    pendingFilters.page = 1
+  },
+)
+
 function latestVerification(type: VerificationType) {
   return currentStudentVerifications.value.find(item => (item.verificationType ?? 'student') === type)
 }
 
 function verificationStatusText(status: string) {
   return status === 'pending' ? '处理中' : statusText(status)
+}
+
+function dateInputTime(value: string, endOfDay = false) {
+  if (!value)
+    return undefined
+
+  const time = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`).getTime()
+  return Number.isNaN(time) ? undefined : time
+}
+
+function isInDateRange(value: string, filters: { from: string, to: string }) {
+  const time = new Date(value).getTime()
+  if (Number.isNaN(time))
+    return false
+
+  const from = dateInputTime(filters.from)
+  const to = dateInputTime(filters.to, true)
+  return (from === undefined || time >= from) && (to === undefined || time <= to)
+}
+
+function matchesQuery(query: string, fields: Array<string | number | undefined | null>) {
+  const keyword = query.trim().toLowerCase()
+  if (!keyword)
+    return true
+
+  return fields.some(field => String(field ?? '').toLowerCase().includes(keyword))
+}
+
+function paginateRows<T>(rows: T[], filters: { page: number, pageSize: number }) {
+  const pageSize = Number(filters.pageSize) || PAGE_SIZE_OPTIONS[1]
+  const total = rows.length
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const page = Math.min(Math.max(1, Number(filters.page) || 1), totalPages)
+  const start = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const end = Math.min(page * pageSize, total)
+
+  return {
+    rows: rows.slice((page - 1) * pageSize, page * pageSize),
+    total,
+    page,
+    totalPages,
+    start,
+    end,
+  }
+}
+
+function previousPendingPage() {
+  pendingFilters.page = Math.max(1, pendingFilters.page - 1)
+}
+
+function nextPendingPage() {
+  pendingFilters.page = Math.min(pendingPagination.value.totalPages, pendingFilters.page + 1)
+}
+
+function resetPendingFilters() {
+  pendingFilters.query = ''
+  pendingFilters.from = ''
+  pendingFilters.to = ''
+  pendingFilters.verificationType = ALL_FILTER
+  pendingFilters.status = ALL_FILTER
+  pendingFilters.material = ALL_FILTER
+  pendingFilters.page = 1
 }
 
 function verificationCardState(type: VerificationType, approved: boolean) {
@@ -266,12 +373,74 @@ function onRejectStudent(id: string) {
               </div>
               <TxStatusBadge :text="`${pendingStudentVerifications.length} 条待处理`" :status="pendingStudentVerifications.length ? 'warning' : 'success'" size="sm" />
             </div>
+            <div class="verification-admin-tools">
+              <label class="admin-filter-field admin-filter-field--wide">
+                <span class="field-label">搜索</span>
+                <TxInput v-model="pendingFilters.query" placeholder="姓名 / 用户 / 学校 / 邮箱 / 材料说明" prefix-icon="i-carbon-search" />
+              </label>
+              <label class="admin-filter-field">
+                <span class="field-label">开始日期</span>
+                <input v-model="pendingFilters.from" type="date" class="admin-date-input">
+              </label>
+              <label class="admin-filter-field">
+                <span class="field-label">结束日期</span>
+                <input v-model="pendingFilters.to" type="date" class="admin-date-input">
+              </label>
+              <label class="admin-filter-field">
+                <span class="field-label">认证类型</span>
+                <select v-model="pendingFilters.verificationType" class="form-select">
+                  <option :value="ALL_FILTER">
+                    全部类型
+                  </option>
+                  <option value="student">
+                    学生认证
+                  </option>
+                  <option value="frontline">
+                    一线认证
+                  </option>
+                </select>
+              </label>
+              <label class="admin-filter-field">
+                <span class="field-label">状态</span>
+                <select v-model="pendingFilters.status" class="form-select">
+                  <option :value="ALL_FILTER">
+                    全部状态
+                  </option>
+                  <option value="pending">
+                    待审核
+                  </option>
+                  <option value="needs_supplement">
+                    待补充资料
+                  </option>
+                </select>
+              </label>
+              <label class="admin-filter-field">
+                <span class="field-label">材料</span>
+                <select v-model="pendingFilters.material" class="form-select">
+                  <option :value="ALL_FILTER">
+                    全部材料
+                  </option>
+                  <option value="with_attachment">
+                    有附件
+                  </option>
+                  <option value="without_attachment">
+                    无附件
+                  </option>
+                  <option value="email_verified">
+                    邮箱已验证
+                  </option>
+                </select>
+              </label>
+              <TxButton size="sm" variant="secondary" @click="resetPendingFilters">
+                重置
+              </TxButton>
+            </div>
             <div class="verification-admin-list">
-              <div v-if="!pendingStudentVerifications.length" class="verification-admin-empty">
-                暂无待处理认证申请
+              <div v-if="!pendingPagination.rows.length" class="verification-admin-empty">
+                {{ pendingStudentVerifications.length ? '暂无匹配的待处理认证申请' : '暂无待处理认证申请' }}
               </div>
               <button
-                v-for="item in pendingStudentVerifications"
+                v-for="item in pendingPagination.rows"
                 :key="item.id"
                 class="verification-admin-row"
                 type="button"
@@ -286,6 +455,27 @@ function onRejectStudent(id: string) {
                   <small>{{ formatDate(item.createdAt) }}</small>
                 </span>
               </button>
+            </div>
+            <div class="verification-admin-pagination admin-pagination">
+              <div class="text-xs text-slate-500 dark:text-slate-400">
+                第 {{ pendingPagination.start }}-{{ pendingPagination.end }} 条 / 共 {{ pendingPagination.total }} 条
+              </div>
+              <div class="admin-pagination-controls">
+                <select v-model="pendingFilters.pageSize" class="form-select admin-page-size">
+                  <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">
+                    {{ size }} / 页
+                  </option>
+                </select>
+                <TxButton size="sm" variant="secondary" :disabled="pendingPagination.page <= 1" @click="previousPendingPage">
+                  上一页
+                </TxButton>
+                <span class="text-xs text-slate-500 fw-800 dark:text-slate-400">
+                  {{ pendingPagination.page }} / {{ pendingPagination.totalPages }}
+                </span>
+                <TxButton size="sm" variant="secondary" :disabled="pendingPagination.page >= pendingPagination.totalPages" @click="nextPendingPage">
+                  下一页
+                </TxButton>
+              </div>
             </div>
           </TxTabItem>
 
