@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ResourceTermId, ResourceType } from '~/composables/welfare'
+import type { RequestKind, ResourceTermId, ResourceType } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -13,13 +13,16 @@ import TurnstileChallenge from './TurnstileChallenge.vue'
 
 const {
   currentUser,
+  applicationForm,
   applicationSecurityForm,
   applicationFiles,
   resourceApplicationForm,
   resourceApplicationItems,
   resourceTypeConfigs,
   selectedResourceTerms,
+  selectedApplicationPolicyStatus,
   resourceApplicationPolicyStatus,
+  selectedPrepaidCost,
   availableCurrentUserCoupons,
   totalApplicationBytes,
   activeRequestCount,
@@ -34,10 +37,13 @@ const {
   resetApplicationFiles,
   resetApplicationSecurity,
   setApplicationTurnstileToken,
+  submitApplicationWithAiReview,
 } = useWelfareUiState()
 
 const router = useRouter()
 const { runSafely } = useWelfareFeedback()
+type ApplicationCreateMode = Extract<RequestKind, 'image' | 'pro' | 'resource'>
+const applicationMode = ref<ApplicationCreateMode>('resource')
 const currentStep = ref<'types' | 'materials' | 'terms'>('types')
 const expectedDatePickerVisible = ref(false)
 const isTermsDialogOpen = ref(false)
@@ -49,6 +55,12 @@ let previousHtmlOverflow = ''
 const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
 const currentUserLevelPriority = computed(() => currentUser.value ? userLevelCard(currentUser.value.id).priority : 0)
 const visibleResourceTypeConfigs = computed(() => resourceTypeConfigs.value.filter(config => isResourceTypeAvailable(config.resourceType)))
+const applicationModeItems: Array<{ type: ApplicationCreateMode, label: string, icon: string }> = [
+  { type: 'image', label: 'Image', icon: 'i-carbon-image' },
+  { type: 'pro', label: 'Pro', icon: 'i-carbon-star' },
+  { type: 'resource', label: '资源', icon: 'i-carbon-assembly-cluster' },
+]
+const currentModeTitle = computed(() => applicationModeItems.find(item => item.type === applicationMode.value)?.label ?? '资源')
 const activeResourceTerm = computed(() =>
   selectedResourceTerms.value.find(term => term.id === activeResourceTermTab.value)
   ?? selectedResourceTerms.value[0],
@@ -345,6 +357,15 @@ const isResourceSubmissionBlocked = computed(() =>
   || !resourceApplicationPolicyStatus.value.descriptionOk
   || (resourceApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken),
 )
+const isClassicApplication = computed(() => applicationMode.value !== 'resource')
+const isClassicSubmissionBlocked = computed(() =>
+  !canCreateRequest.value
+  || !selectedApplicationPolicyStatus.value.available
+  || !selectedApplicationPolicyStatus.value.descriptionOk
+  || totalApplicationBytes.value > MAX_ATTACHMENT_BYTES
+  || (selectedApplicationPolicyStatus.value.turnstileEnabled && !applicationSecurityForm.turnstileToken)
+  || (currentUser.value?.points ?? 0) < selectedPrepaidCost.value,
+)
 
 function pad2(value: number) {
   return value < 10 ? `0${value}` : String(value)
@@ -589,6 +610,20 @@ function cancelCreate() {
   router.push('/dashboard/apply')
 }
 
+function selectApplicationMode(type: ApplicationCreateMode) {
+  applicationMode.value = type
+  applicationForm.type = type
+  resetApplicationSecurity()
+}
+
+function onSubmitClassicApplication() {
+  runSafely(async () => {
+    await submitApplicationWithAiReview()
+    resetApplicationFiles()
+    router.push('/dashboard/apply')
+  }, `${applicationMode.value === 'image' ? 'Image' : 'Pro'} 申请已提交，等待审核`)
+}
+
 function onSaveDraft() {
   runSafely(async () => {
     sanitizeResourceDurations()
@@ -612,6 +647,7 @@ function onSubmitResourceApplication() {
 }
 
 onMounted(() => {
+  applicationForm.type = applicationMode.value
   resetResourceApplicationForm()
   resetApplicationSecurity()
   restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
@@ -636,12 +672,28 @@ onBeforeUnmount(() => {
         </button>
         <div class="min-w-0">
           <h2 class="resource-create-title">
-            资源申请
+            {{ currentModeTitle }} 申请
           </h2>
         </div>
       </div>
 
-      <div class="resource-step-track" aria-label="资源申请进度">
+      <div class="application-mode-tabs" role="tablist" aria-label="申请类型">
+        <button
+          v-for="item in applicationModeItems"
+          :key="item.type"
+          type="button"
+          class="application-mode-tab"
+          :class="{ 'is-active': applicationMode === item.type }"
+          role="tab"
+          :aria-selected="applicationMode === item.type"
+          @click="selectApplicationMode(item.type)"
+        >
+          <span :class="item.icon" />
+          {{ item.label }}
+        </button>
+      </div>
+
+      <div v-if="!isClassicApplication" class="resource-step-track" aria-label="资源申请进度">
         <div
           v-for="(step, index) in resourceStepItems"
           :key="step.key"
@@ -658,6 +710,69 @@ onBeforeUnmount(() => {
 
       <div v-if="!currentUser" class="mt-6 p-8 text-center border border-slate-300 rounded-3xl border-dashed dark:border-slate-700">
         请先登录后提交申请。
+      </div>
+
+      <div v-else-if="isClassicApplication" class="classic-application-form mt-5">
+        <label class="gap-2 grid">
+          <span class="field-label">申请标题</span>
+          <TxInput v-model="applicationForm.title" />
+        </label>
+
+        <label class="gap-2 grid">
+          <span class="field-label">申请说明</span>
+          <RichTextEditor
+            v-model="applicationForm.description"
+            :min-height="260"
+            :placeholder="applicationMode === 'image' ? '请说明图片用途、风格、尺寸、文字内容和限制。' : '请说明项目背景、希望解决的问题、当前上下文和预期输出。'"
+          />
+        </label>
+
+        <div>
+          <div class="mb-2 flex gap-3 items-center justify-between">
+            <span class="field-label">附件 / 图片</span>
+            <span class="field-hint">{{ formatBytes(totalApplicationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
+          </div>
+          <TxFileUploader v-model="applicationFiles" :max="20" button-text="上传附件" drop-text="把补充材料拖拽到这里" hint-text="全部文件总大小不超过 200MB。" />
+        </div>
+
+        <label class="option-check">
+          <TxCheckbox v-model="applicationForm.extendStorage" variant="checkmark" />
+          <span>
+            <b>延长云端记录 7 天</b>
+            <small>只在确实需要后续补充或复盘时勾选。</small>
+          </span>
+        </label>
+
+        <label v-if="applicationMode === 'pro'" class="option-check">
+          <TxCheckbox v-model="applicationForm.expediteProcessing" variant="checkmark" />
+          <span>
+            <b>Pro 加速处理</b>
+            <small>按现有 Pro 加速规则额外预扣。</small>
+          </span>
+        </label>
+
+        <div v-if="(selectedApplicationPolicyStatus.turnstileEnabled && selectedApplicationPolicyStatus.turnstileSiteKey) || applicationSecurityForm.message" class="resource-confirm-card resource-security-card">
+          <TurnstileChallenge
+            v-if="selectedApplicationPolicyStatus.turnstileEnabled && selectedApplicationPolicyStatus.turnstileSiteKey"
+            :site-key="selectedApplicationPolicyStatus.turnstileSiteKey"
+            @verified="setApplicationTurnstileToken"
+            @expired="setApplicationTurnstileToken('')"
+          />
+          <p v-if="applicationSecurityForm.message" class="field-hint">
+            {{ applicationSecurityForm.message }}
+          </p>
+        </div>
+
+        <div v-if="selectedApplicationPolicyStatus.reason" class="field-hint text-amber-600 dark:text-amber-300">
+          {{ selectedApplicationPolicyStatus.reason }}
+        </div>
+
+        <div class="classic-application-footer">
+          <span class="field-hint">当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
+          <TxButton variant="primary" :disabled="isClassicSubmissionBlocked" @click="onSubmitClassicApplication">
+            提交并预扣 {{ formatPoints(selectedPrepaidCost) }}
+          </TxButton>
+        </div>
       </div>
 
       <div v-else class="mt-5 space-y-4">

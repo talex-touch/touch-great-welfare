@@ -879,6 +879,72 @@ select {
   line-height: 1.08;
 }
 
+.application-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1.25rem;
+}
+
+.application-mode-tab {
+  display: inline-flex;
+  gap: 0.45rem;
+  min-height: 2.45rem;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
+  color: #475569;
+  background: #fff;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.application-mode-tab:hover,
+.application-mode-tab:focus-visible {
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #2563eb;
+  outline: none;
+}
+
+.application-mode-tab.is-active {
+  border-color: rgba(59, 130, 246, 0.68);
+  color: #2563eb;
+  background: rgba(239, 246, 255, 0.95);
+}
+
+.dark .application-mode-tab {
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.84);
+}
+
+.dark .application-mode-tab:hover,
+.dark .application-mode-tab:focus-visible,
+.dark .application-mode-tab.is-active {
+  border-color: rgba(96, 165, 250, 0.52);
+  color: #93c5fd;
+  background: rgba(30, 41, 59, 0.95);
+}
+
+.classic-application-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.classic-application-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .resource-step-track {
   position: relative;
   display: grid;

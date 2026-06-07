@@ -660,14 +660,14 @@ export const USER_LEVEL_RULES: UserLevelRule[] = [
 
 export const REQUEST_COST: Record<RequestKind, number> = {
   code: 800,
-  image: 3200,
+  image: 1200,
   pro: 12000,
   resource: 0,
 }
 
 export const BASE_REQUEST_COST: Record<RequestKind, number> = {
   code: 800,
-  image: 3200,
+  image: 1200,
   pro: 12000,
   resource: 0,
 }
