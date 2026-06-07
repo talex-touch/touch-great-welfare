@@ -261,6 +261,147 @@ describe('application policy', () => {
     expect(store.state.transactions[0].reason).toBe('一线认证通过返还审核费')
   })
 
+  it('marks education email as admin verified when approving student verification', () => {
+    const store = useWelfareStore()
+    store.state.users.push(user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@example.com',
+        studentVerified: false,
+      },
+    }))
+
+    store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      educationEmail: 'student@pku.edu.cn',
+      notes: '<p>已上传学生证和校园材料。</p>',
+    })
+    const verificationId = store.state.studentVerifications[0].id
+
+    store.state.currentUserId = 'admin_1'
+    store.approveStudentVerification(verificationId, '通过')
+
+    expect(store.state.studentVerifications[0].educationEmailVerified).toBe(true)
+    expect(store.state.studentVerifications[0].educationEmailVerifiedAt).toBe('2026-06-02T09:00:00.000Z')
+    expect(store.state.studentVerifications[0].educationEmailVerificationSource).toBe('admin_approved')
+  })
+
+  it('keeps user confirmed education email verification on student submission', () => {
+    const store = useWelfareStore()
+    const challenge = store.createEducationEmailChallenge('student@pku.edu.cn', '公益同学')
+
+    store.confirmEducationEmailChallengeSent(challenge.id)
+    store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      educationEmail: 'student@pku.edu.cn',
+      educationEmailChallengeId: challenge.id,
+      educationEmailVerified: true,
+      notes: '<p>已上传学生证和校园邮箱邮件证明。</p>',
+    })
+
+    expect(store.state.educationEmailChallenges[0].verifiedAt).toBe('2026-06-02T09:00:00.000Z')
+    expect(store.state.studentVerifications[0].educationEmailVerified).toBe(true)
+    expect(store.state.studentVerifications[0].educationEmailVerifiedAt).toBe('2026-06-02T09:00:00.000Z')
+    expect(store.state.studentVerifications[0].educationEmailVerificationSource).toBe('user_confirmed_sent')
+  })
+
+  it('lets admins request student supplements and users resubmit without another review fee', () => {
+    const store = useWelfareStore()
+    store.state.users.push(user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@example.com',
+        studentVerified: false,
+      },
+    }))
+
+    store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      school: '北京航空航天大学',
+      grade: '2026 级',
+      educationEmail: 'old@buaa.edu.cn',
+      notes: '<p>已上传学生证和校园邮箱截图。</p>',
+    })
+    const verificationId = store.state.studentVerifications[0].id
+    expect(store.state.transactions).toHaveLength(1)
+
+    store.state.currentUserId = 'admin_1'
+    store.requestStudentSupplement(verificationId, '请重新提交教育邮箱证明。')
+    expect(store.state.studentVerifications[0].status).toBe('needs_supplement')
+
+    store.state.currentUserId = 'user_1'
+    const challenge = store.createEducationEmailChallenge('new@buaa.edu.cn', '公益同学')
+    store.confirmEducationEmailChallengeSent(challenge.id)
+    store.supplementStudentVerification({
+      verificationId,
+      realName: '公益同学',
+      category: '大学生',
+      school: '北京航空航天大学',
+      grade: '2026 级',
+      educationEmail: 'new@buaa.edu.cn',
+      educationEmailChallengeId: challenge.id,
+      educationEmailVerified: true,
+      notes: '<p>已重新发送教育邮箱证明，并补充校园系统截图。</p>',
+    })
+
+    expect(store.state.studentVerifications[0].status).toBe('pending')
+    expect(store.state.studentVerifications[0].educationEmail).toBe('new@buaa.edu.cn')
+    expect(store.state.studentVerifications[0].educationEmailChallengeId).toBe(challenge.id)
+    expect(store.state.studentVerifications[0].educationEmailVerified).toBe(true)
+    expect(store.state.transactions).toHaveLength(1)
+  })
+
+  it('lets admins request frontline supplements and users resubmit the same record', () => {
+    const store = useWelfareStore()
+    store.state.users.push(user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@example.com',
+        studentVerified: false,
+      },
+    }))
+
+    store.submitStudentVerification({
+      verificationType: 'frontline',
+      realName: '一线伙伴',
+      category: '乡村振兴',
+      school: '驻村项目组',
+      grade: '半年内',
+      notes: '<p>已上传服务记录。</p>',
+    })
+    const verificationId = store.state.studentVerifications[0].id
+
+    store.state.currentUserId = 'admin_1'
+    store.requestStudentSupplement(verificationId, '请补充组织证明。')
+    expect(store.state.studentVerifications[0].status).toBe('needs_supplement')
+
+    store.state.currentUserId = 'user_1'
+    store.supplementStudentVerification({
+      verificationId,
+      verificationType: 'frontline',
+      realName: '一线伙伴',
+      category: '乡村振兴',
+      school: '驻村项目组',
+      grade: '1 年',
+      notes: '<p>已补充组织证明和更完整的服务记录。</p>',
+    })
+
+    expect(store.state.studentVerifications).toHaveLength(1)
+    expect(store.state.studentVerifications[0].status).toBe('pending')
+    expect(store.state.studentVerifications[0].verificationType).toBe('frontline')
+    expect(store.state.studentVerifications[0].educationEmail).toBeUndefined()
+    expect(store.state.transactions).toHaveLength(1)
+  })
+
   it('refreshes state before submitting student verification so stale tabs cannot overspend', async () => {
     const store = useWelfareStore()
     const { useWelfareUiState } = await import('../src/composables/welfare-ui')

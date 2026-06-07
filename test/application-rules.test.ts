@@ -22,11 +22,19 @@ describe('application billing rules', async () => {
     CODEX_EXTENDED_PROCESSING_HOURS,
     CODEX_POINTS_PER_USD,
     CODEX_STANDARD_PROCESSING_HOURS,
+    DEFAULT_LLM_API_MODELS,
     createFraudRejectionCooldownUntil,
     createCodexProcessingDueAt,
     createProcessingDueAt,
     createRejectionFeeWaiverBlockedUntil,
     createRetentionExpiresAt,
+    defaultLlmApiDuration,
+    GPT_PRO_ACTIVITY_DISCOUNT_RATE,
+    GPT_PRO_DEFAULT_DURATION,
+    GPT_PRO_DEFAULT_ROUNDS,
+    GPT_PRO_MODEL_KEY,
+    llmApiBudgetActivityDiscountRate,
+    llmApiDurationExtensionCost,
   } = await import('../src/composables/welfare')
 
   it('charges rejected applications with a bounded 30% AI review fee', () => {
@@ -51,6 +59,19 @@ describe('application billing rules', async () => {
     expect(calculateLlmApiBudgetActivityPrice(cost300, 300, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost300 * 0.07))
     expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_START_AT)).toBe(cost500)
     expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_END_AT)).toBe(cost500)
+  })
+
+  it('prices GPT PRO by conversation rounds with a limited 50% activity discount', () => {
+    const gptPro = DEFAULT_LLM_API_MODELS.find(item => item.key === GPT_PRO_MODEL_KEY)!
+    const baseCost = calculateLlmApiCostPoints(GPT_PRO_DEFAULT_ROUNDS, gptPro)
+
+    expect(gptPro.defaultBudgetUsd).toBe(GPT_PRO_DEFAULT_ROUNDS)
+    expect(baseCost).toBe(BASE_REQUEST_COST.pro * GPT_PRO_DEFAULT_ROUNDS)
+    expect(llmApiBudgetActivityDiscountRate(GPT_PRO_DEFAULT_ROUNDS, gptPro)).toBe(GPT_PRO_ACTIVITY_DISCOUNT_RATE)
+    expect(calculateLlmApiBudgetActivityPrice(baseCost, GPT_PRO_DEFAULT_ROUNDS, gptPro, ACTIVITY_START_AT)).toBe(Math.ceil(baseCost * GPT_PRO_ACTIVITY_DISCOUNT_RATE))
+    expect(defaultLlmApiDuration(gptPro)).toBe(GPT_PRO_DEFAULT_DURATION)
+    expect(llmApiDurationExtensionCost(GPT_PRO_DEFAULT_DURATION, gptPro)).toBe(0)
+    expect(llmApiDurationExtensionCost('30 天', gptPro)).toBeGreaterThan(0)
   })
 
   it('includes storage and expedited processing in prepaid cost', () => {

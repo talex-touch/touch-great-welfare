@@ -457,7 +457,7 @@ onMounted(async () => {
               </div>
               <div>
                 <span>LLMApi</span>
-                <strong>仅可选 Codex / GPT PRO；GPT PRO 费用较高，超过 $100 需额外消耗 RPM/TPM 改动费用且不享受折扣。</strong>
+                <strong>仅可选 Codex / GPT PRO；GPT PRO 按对话轮次申请，默认 5 轮、7 天有效，延长有效期需额外消耗积分。</strong>
               </div>
               <div>
                 <span>学生认证</span>

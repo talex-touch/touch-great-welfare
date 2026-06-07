@@ -3,7 +3,7 @@ import { TxButton, TxCard, TxCheckbox, TxFlipOverlay, TxSelect, TxSelectItem, Tx
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { formatDate, formatPoints, formatRetentionExpiry, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailVerificationLabel, formatDate, formatPoints, formatRetentionExpiry, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -34,6 +34,7 @@ const {
   requestApplicationSupplement,
   rejectApplicationWithOptions,
   approveStudentVerification,
+  requestStudentSupplement,
   rejectStudentVerification,
   submitImageGenerationApplication,
   resourceReviewDraftFor,
@@ -117,6 +118,18 @@ function onCompleteProvision(applicationId: string, itemId: string) {
   }, '人工开通结果已记录')
 }
 
+function llmBudgetText(item: { llmApiModelKey?: string, llmApiBudgetUsd?: number }) {
+  if (!item.llmApiBudgetUsd)
+    return '-'
+  return isGptProModel(item.llmApiModelKey) ? `${item.llmApiBudgetUsd} 轮` : `$${item.llmApiBudgetUsd}`
+}
+
+function llmPointRateText(item: { llmApiModelKey?: string, llmApiPointRate?: number }) {
+  if (!item.llmApiPointRate)
+    return '-'
+  return isGptProModel(item.llmApiModelKey) ? `${formatPoints(item.llmApiPointRate)} / 轮` : `${item.llmApiPointRate} 积分 = 1 美元`
+}
+
 function aiReviewTone(status?: string) {
   if (status === 'approved')
     return { label: 'AI 建议通过', color: '#047857', background: 'rgba(16,185,129,.16)' }
@@ -156,6 +169,20 @@ function onApproveStudent(id: string) {
     approveStudentVerification(id, reviewDrafts[id] ?? '认证通过，欢迎加入公益计划。')
     delete reviewDrafts[id]
   }, '认证申请已通过，审核积分已返还')
+}
+
+function studentSupplementDefaultReply(id: string) {
+  const verification = pendingStudentVerifications.value.find(item => item.id === id)
+  return verification?.verificationType === 'frontline'
+    ? '材料不足，请补充组织/单位证明、服务记录或更清晰的一线工作材料后继续审核。'
+    : '材料不足，请补充教育邮箱证明或更清晰的身份材料后继续审核。'
+}
+
+function onRequestStudentSupplement(id: string) {
+  runSafely(() => {
+    requestStudentSupplement(id, reviewDrafts[id] ?? studentSupplementDefaultReply(id))
+    delete reviewDrafts[id]
+  }, '已要求用户补充资料')
 }
 
 function onRejectStudent(id: string) {
@@ -260,11 +287,11 @@ onMounted(() => {
               <TxTag v-else-if="item.rejectionReviewFeeWaived" label="退回免手续费" color="#7c3aed" background="rgba(167,139,250,.16)" />
               <TxTag v-else :label="`退回手续费 ${formatPoints(item.rejectionReviewFee)}`" color="#be123c" background="rgba(244,63,94,.12)" />
               <TxTag v-if="item.rejectionFraudulent" label="造假限制" color="#991b1b" background="rgba(248,113,113,.16)" />
-              <TxTag v-if="item.type === 'code' && item.llmApiBudgetUsd" :label="`LLMApi ${item.llmApiModelName ?? ''} $${item.llmApiBudgetUsd}`" color="#4338ca" background="rgba(99,102,241,.14)" />
+              <TxTag v-if="item.type === 'code' && item.llmApiBudgetUsd" :label="`LLMApi ${item.llmApiModelName ?? ''} ${llmBudgetText(item)}`" color="#4338ca" background="rgba(99,102,241,.14)" />
               <TxTag v-if="item.llmApiRequiresExtendedReview" label="更长审核" color="#b45309" background="rgba(245,158,11,.16)" />
             </div>
             <div v-if="isAdmin && item.type === 'code' && item.llmApiBudgetUsd" class="text-xs text-indigo-900 leading-5 mt-3 p-3 rounded-2xl bg-indigo-50 dark:text-indigo-100 dark:bg-indigo-950/30">
-              LLMApi {{ item.llmApiModelName }}（{{ item.llmApiProvider }}）额度 ${{ item.llmApiBudgetUsd }}，已按 {{ item.llmApiPointRate }} 积分 = 1 美元预扣 {{ formatPoints(item.cost) }}。首次访问 IP 最多 {{ item.llmApiIpLimit }} 个；默认 RPM {{ item.llmApiRpmLimit }}；并发限制 {{ item.llmApiConcurrencyLimit }}。超出 IP 限制时需要管理员清除绑定。
+              LLMApi {{ item.llmApiModelName }}（{{ item.llmApiProvider }}）{{ isGptProModel(item.llmApiModelKey) ? '对话' : '额度' }} {{ llmBudgetText(item) }}，已按 {{ llmPointRateText(item) }} 预扣 {{ formatPoints(item.cost) }}。首次访问 IP 最多 {{ item.llmApiIpLimit }} 个；默认 RPM {{ item.llmApiRpmLimit }}；并发限制 {{ item.llmApiConcurrencyLimit }}。超出 IP 限制时需要管理员清除绑定。
             </div>
             <div v-if="item.aiReview" class="text-xs leading-5 mt-3 p-3 rounded-2xl bg-slate-50 dark:bg-white/5">
               <div class="fw-800">
@@ -424,7 +451,7 @@ onMounted(() => {
         认证申请审核
       </h3>
       <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-        管理员可在此处理认证材料；通过后返还审核费，退回不返还。
+        管理员可在此处理认证材料；可先要求补充资料，通过后返还审核费，最终退回不返还。
       </p>
       <div class="mt-4 space-y-4">
         <div v-if="!pendingStudentVerifications.length" class="text-sm text-slate-500 p-8 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
@@ -447,15 +474,19 @@ onMounted(() => {
               </div>
               <div v-if="item.verificationType !== 'frontline' && item.educationEmail" class="text-xs text-slate-500 mt-1">
                 教育邮箱：{{ item.educationEmail }}
+                <span v-if="item.educationEmailVerified" class="text-emerald-700 fw-800 ml-2 dark:text-emerald-300">{{ educationEmailVerificationLabel(item.educationEmailVerificationSource) }}</span>
               </div>
             </div>
             <TxTag :label="`审核费 ${pricingSummary.studentReviewFee}`" color="#854d0e" background="rgba(250,204,21,.18)" />
           </div>
           <RichTextView :content="item.notes" class="rich-text-preview mt-3" />
-          <RichTextEditor v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="`审核说明：通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`" />
+          <RichTextEditor v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`" />
           <div class="mt-4 flex flex-wrap gap-3">
             <TxButton variant="primary" @click="onApproveStudent(item.id)">
               通过并返还
+            </TxButton>
+            <TxButton variant="secondary" @click="onRequestStudentSupplement(item.id)">
+              要求补充资料
             </TxButton>
             <TxButton variant="danger" @click="onRejectStudent(item.id)">
               退回

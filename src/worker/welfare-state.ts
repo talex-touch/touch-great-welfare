@@ -1,10 +1,23 @@
-import type { User, WelfareState } from '~/composables/welfare'
+import type {
+  ApplicationItem,
+  CreditTransaction,
+  CrowdReview,
+  EducationEmailChallenge,
+  InvitationBinding,
+  SquareBoost,
+  SquarePost,
+  SquareReport,
+  StudentVerification,
+  User,
+  WelfareApplication,
+  WelfareState,
+} from '~/composables/welfare'
 import { Pool } from 'pg'
 import { createUserInviteCode } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
 import { base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
-import { applyPointTransactionsFromClientState, backfillPointTransactionsFromState } from './points'
+import { applyPointTransactionsFromClientState, backfillPointTransactionsFromState, syncUserPointBalancesFromLedger } from './points'
 import { authenticatedUserId, clearSessionCookie, createSessionCookie } from './session'
 
 export interface WorkerEnv {
@@ -116,6 +129,8 @@ function publicBootstrapState(state: unknown) {
           lastLoginAt: '',
         }]
       : [],
+    siteBanner: isRecord(state) ? state.siteBanner : undefined,
+    systemConfig: isRecord(state) ? state.systemConfig : undefined,
     createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
   }
 }
@@ -322,8 +337,9 @@ export async function readWelfareState(env: WorkerEnv) {
 
     const state = await decodeStoredState(env, row?.state ? JSON.parse(row.state) : {})
     const backfilled = await backfillPointTransactionsFromState(env, state)
+    const syncedBalances = await syncUserPointBalancesFromLedger(env, state)
     const result = applyWelfareRetentionPolicy(state)
-    if (result.changed || backfilled)
+    if (result.changed || backfilled || syncedBalances)
       await writeWelfareState(env, result.state)
 
     return result.state
@@ -336,8 +352,9 @@ export async function readWelfareState(env: WorkerEnv) {
 
   const state = await decodeStoredState(env, result.rows[0]?.state ?? {})
   const backfilled = await backfillPointTransactionsFromState(env, state)
+  const syncedBalances = await syncUserPointBalancesFromLedger(env, state)
   const retentionResult = applyWelfareRetentionPolicy(state)
-  if (retentionResult.changed || backfilled)
+  if (retentionResult.changed || backfilled || syncedBalances)
     await writeWelfareState(env, retentionResult.state)
 
   return retentionResult.state

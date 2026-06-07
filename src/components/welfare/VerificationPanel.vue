@@ -4,7 +4,7 @@ import { TxButton, TxCard, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@tale
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -22,6 +22,7 @@ const {
   profileForm,
   githubAppConfigForm,
   approveStudentVerification,
+  requestStudentSupplement,
   rejectStudentVerification,
 } = useWelfareUiState()
 
@@ -33,7 +34,7 @@ const studentApproved = computed(() => !!currentUser.value?.profile.studentVerif
 const frontlineApproved = computed(() => currentStudentVerifications.value.some(item => item.verificationType === 'frontline' && item.status === 'approved'))
 const openSourceConfigured = computed(() => !!currentUser.value?.profile.githubAuthorized && !!profileForm.githubUsername && !!profileForm.selectedRepo)
 const sortedStudentVerifications = computed(() => [...state.studentVerifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
-const pendingStudentVerifications = computed(() => sortedStudentVerifications.value.filter(item => item.status === 'pending'))
+const pendingStudentVerifications = computed(() => sortedStudentVerifications.value.filter(item => item.status === 'pending' || item.status === 'needs_supplement'))
 const selectedVerification = computed(() => sortedStudentVerifications.value.find(item => item.id === selectedVerificationId.value))
 
 function latestVerification(type: VerificationType) {
@@ -52,12 +53,14 @@ function verificationCardState(type: VerificationType, approved: boolean) {
       verification,
       statusText: verificationStatusText(verification.status),
       statusTone: statusTone(verification.status),
-      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'rejected' ? '查看回复' : '查看详情',
+      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '补充资料' : verification.status === 'rejected' ? '查看回复' : '查看详情',
       meta: verification.status === 'pending'
         ? `${formatDate(verification.createdAt)} 提交，等待审核回复`
-        : verification.reviewedAt
-          ? `${formatDate(verification.reviewedAt)} 已回复`
-          : `${formatDate(verification.createdAt)} 提交`,
+        : verification.status === 'needs_supplement'
+          ? `${verification.reviewedAt ? formatDate(verification.reviewedAt) : formatDate(verification.createdAt)} 需要补充资料`
+          : verification.reviewedAt
+            ? `${formatDate(verification.reviewedAt)} 已回复`
+            : `${formatDate(verification.createdAt)} 提交`,
     }
   }
 
@@ -127,12 +130,27 @@ function closeVerificationDrawer() {
   selectedVerificationId.value = ''
 }
 
+function studentSupplementDefaultReply(verification: StudentVerification) {
+  return verification.verificationType === 'frontline'
+    ? '材料不足，请补充组织/单位证明、服务记录或更清晰的一线工作材料后继续审核。'
+    : '材料不足，请补充教育邮箱证明或更清晰的身份材料后继续审核。'
+}
+
 function onApproveStudent(id: string) {
   runSafely(async () => {
     await approveStudentVerification(id, reviewDrafts[id] ?? '认证通过，欢迎加入公益计划。')
     delete reviewDrafts[id]
     closeVerificationDrawer()
   }, '认证申请已通过，审核积分已返还')
+}
+
+function onRequestStudentSupplement(id: string) {
+  runSafely(async () => {
+    const verification = sortedStudentVerifications.value.find(item => item.id === id)
+    await requestStudentSupplement(id, reviewDrafts[id] ?? (verification ? studentSupplementDefaultReply(verification) : '材料不足，请补充有效证明后继续审核。'))
+    delete reviewDrafts[id]
+    closeVerificationDrawer()
+  }, '已要求用户补充资料')
 }
 
 function onRejectStudent(id: string) {
@@ -225,7 +243,7 @@ function onRejectStudent(id: string) {
           <div class="verification-admin-head">
             <div>
               <h3>待处理认证</h3>
-              <p>点击记录查看材料详情，可直接通过或退回申请。</p>
+              <p>点击记录查看材料详情，可通过、要求补充资料或最终退回。</p>
             </div>
             <TxStatusBadge :text="`${pendingStudentVerifications.length} 条待处理`" :status="pendingStudentVerifications.length ? 'warning' : 'success'" size="sm" />
           </div>
@@ -245,7 +263,7 @@ function onRejectStudent(id: string) {
                 <small>{{ userName(item.userId) }} · {{ item.category }} · {{ verificationOrganizationLabel(item.verificationType) }}：{{ item.school || '未填写' }}</small>
               </span>
               <span class="verification-admin-row__meta">
-                <TxStatusBadge text="处理中" :status="statusTone(item.status)" size="sm" />
+                <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
                 <small>{{ formatDate(item.createdAt) }}</small>
               </span>
             </button>
@@ -336,6 +354,7 @@ function onRejectStudent(id: string) {
                 <TxTag :label="selectedVerification.identity || '未填身份'" color="#334155" background="rgba(100,116,139,.12)" />
                 <TxTag v-if="selectedVerification.educationLevel" :label="selectedVerification.educationLevel" color="#315244" background="rgba(49,82,68,.12)" />
                 <TxTag v-if="selectedVerification.educationEmail" :label="selectedVerification.educationEmail" color="#0369a1" background="rgba(14,165,233,.14)" />
+                <TxTag v-if="selectedVerification.educationEmailVerified" :label="educationEmailVerificationLabel(selectedVerification.educationEmailVerificationSource)" color="#047857" background="rgba(16,185,129,.14)" />
                 <TxTag :label="`${selectedVerification.attachments.length} 个材料`" color="#854d0e" background="rgba(250,204,21,.18)" />
               </div>
             </section>
@@ -351,12 +370,15 @@ function onRejectStudent(id: string) {
                 v-if="selectedVerification.status === 'pending'"
                 v-model="reviewDrafts[selectedVerification.id]"
                 :min-height="150"
-                :placeholder="`审核说明：通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`"
+                :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`"
               />
               <RichTextView v-else :content="selectedVerification.reply || '暂无回复。'" class="rich-text-preview" />
               <div v-if="selectedVerification.status === 'pending'" class="mt-4 flex flex-wrap gap-3">
                 <TxButton variant="primary" @click="onApproveStudent(selectedVerification.id)">
                   通过并返还
+                </TxButton>
+                <TxButton variant="secondary" @click="onRequestStudentSupplement(selectedVerification.id)">
+                  要求补充资料
                 </TxButton>
                 <TxButton variant="danger" @click="onRejectStudent(selectedVerification.id)">
                   退回

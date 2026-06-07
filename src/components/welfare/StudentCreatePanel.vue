@@ -15,8 +15,10 @@ import {
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
+import RichTextView from './RichTextView.vue'
 
 const {
+  state,
   currentUser,
   educationEmailVerificationForm,
   studentForm,
@@ -28,10 +30,14 @@ const {
   studentSchoolSuggestions,
   totalStudentBytes,
   submitStudentVerification,
+  supplementStudentVerification,
+  fillStudentFormFromVerification,
   resetStudentFiles,
+  resetEducationEmailVerificationForm,
   generateEducationEmailChallenge,
   copyEducationEmailTemplate,
   openEducationEmailClient,
+  confirmEducationEmailSent,
 } = useWelfareUiState()
 
 const router = useRouter()
@@ -54,6 +60,16 @@ const currentVerificationLabel = computed(() => verificationTypeLabel(selectedVe
 const currentOrganizationLabel = computed(() => verificationOrganizationLabel(selectedVerificationType.value))
 const currentCategoryOptions = computed(() => isStudentVerification.value ? [...studentCategoryOptions] : [...frontlineCategoryOptions])
 const selectedVerificationOption = computed(() => verificationTypeOptions.find(option => option.value === selectedVerificationType.value) ?? verificationTypeOptions[0])
+const editingVerificationId = computed(() => {
+  const raw = route.query.edit
+  return Array.isArray(raw) ? raw[0] : String(raw ?? '')
+})
+const editingVerification = computed(() => state.studentVerifications.find(item =>
+  item.id === editingVerificationId.value
+  && item.userId === currentUser.value?.id
+  && item.status === 'needs_supplement',
+))
+const isSupplementMode = computed(() => !!editingVerification.value)
 const INITIAL_SCHOOL_SUGGESTION_LIMIT = 48
 
 const filteredStudentSchoolSuggestions = computed(() => {
@@ -147,7 +163,7 @@ function normalizeSchoolQuery(value: string) {
 
 function onSubmitStudentVerification() {
   runSafely(async () => {
-    await submitStudentVerification({
+    const payload = {
       realName: studentForm.realName,
       verificationType: studentForm.verificationType,
       category: studentForm.category,
@@ -156,13 +172,23 @@ function onSubmitStudentVerification() {
       grade: studentForm.grade,
       educationEmail: studentForm.educationEmail,
       educationEmailChallengeId: educationEmailVerificationForm.challengeId,
+      educationEmailVerified: educationEmailVerificationForm.verified,
       notes: studentForm.notes,
       attachments: studentFiles.value,
-    })
+    }
+    if (isSupplementMode.value) {
+      await supplementStudentVerification({
+        ...payload,
+        verificationId: editingVerification.value!.id,
+      })
+    }
+    else {
+      await submitStudentVerification(payload)
+    }
     resetStudentFiles()
     clearLocalDraft(studentDraftKey)
     router.push('/dashboard/verification')
-  }, `${currentVerificationLabel.value}已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
+  }, isSupplementMode.value ? `${currentVerificationLabel.value}补充资料已提交，等待管理员继续审核` : `${currentVerificationLabel.value}已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
 }
 
 function onGenerateEducationEmailChallenge() {
@@ -183,25 +209,31 @@ function onOpenEducationEmailClient() {
   }, '已打开邮件客户端')
 }
 
+function onConfirmEducationEmailSent() {
+  runSafely(async () => {
+    await confirmEducationEmailSent()
+  }, '已验证教育邮箱真实性')
+}
+
 function resetEducationEmailProof() {
   studentForm.educationEmail = ''
-  educationEmailVerificationForm.code = ''
-  educationEmailVerificationForm.challengeId = ''
-  educationEmailVerificationForm.subject = ''
-  educationEmailVerificationForm.body = ''
-  educationEmailVerificationForm.mailto = ''
-  educationEmailVerificationForm.sentTo = ''
-  educationEmailVerificationForm.expiresAt = ''
-  educationEmailVerificationForm.verified = false
-  educationEmailVerificationForm.message = ''
+  resetEducationEmailVerificationForm()
 }
 
 onMounted(() => {
-  restoreLocalDraft(studentDraftKey, studentForm)
-  studentForm.verificationType = route.query.type === 'frontline' ? 'frontline' : 'student'
+  if (editingVerification.value) {
+    fillStudentFormFromVerification(editingVerification.value)
+    currentStep.value = 'details'
+    hasStudentConsent.value = true
+  }
+  else {
+    restoreLocalDraft(studentDraftKey, studentForm)
+    studentForm.verificationType = route.query.type === 'frontline' ? 'frontline' : 'student'
+  }
   if (studentForm.verificationType === 'frontline')
     resetEducationEmailProof()
-  persistLocalDraft(studentDraftKey, studentForm)
+  if (!editingVerification.value)
+    persistLocalDraft(studentDraftKey, studentForm)
 })
 </script>
 
@@ -214,10 +246,10 @@ onMounted(() => {
         </button>
         <div class="min-w-0">
           <h2 class="resource-create-title">
-            提交认证申请
+            {{ isSupplementMode ? '补充认证资料' : '提交认证申请' }}
           </h2>
           <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-            先选择认证子类并确认材料处理边界，再填写认证信息。草稿会保存在本地浏览器。
+            {{ isSupplementMode ? '根据审核意见更新资料，重新提交后会回到待审核队列，不重复扣除审核费。' : '先选择认证子类并确认材料处理边界，再填写认证信息。草稿会保存在本地浏览器。' }}
           </p>
         </div>
       </div>
@@ -253,7 +285,7 @@ onMounted(() => {
                 当前规则
               </div>
               <div class="text-xl fw-900">
-                {{ currentVerificationLabel }} · 审核费 {{ STUDENT_REVIEW_FEE }} 积分 · 通过后返还
+                {{ isSupplementMode ? `${currentVerificationLabel} · 补充资料 · 不重复扣费` : `${currentVerificationLabel} · 审核费 ${STUDENT_REVIEW_FEE} 积分 · 通过后返还` }}
               </div>
             </div>
             <div class="flex flex-wrap gap-3 items-center">
@@ -273,7 +305,7 @@ onMounted(() => {
               <span class="verification-type-lock__icon i-carbon-locked" />
               <div>
                 <div class="verification-type-lock__eyebrow">
-                  认证子类已锁定
+                  {{ isSupplementMode ? '正在补充资料' : '认证子类已锁定' }}
                 </div>
                 <div class="verification-type-lock__title">
                   {{ selectedVerificationOption.label }}
@@ -284,8 +316,13 @@ onMounted(() => {
               </div>
             </div>
             <TxButton variant="ghost" @click="cancelCreate">
-              重新选择
+              {{ isSupplementMode ? '返回认证' : '重新选择' }}
             </TxButton>
+          </div>
+
+          <div v-if="isSupplementMode && editingVerification?.reply" class="verification-submit-warning">
+            <b>审核补充要求：</b>
+            <RichTextView :content="editingVerification.reply" class="rich-text-preview mt-2" />
           </div>
 
           <div class="gap-5 grid md:grid-cols-2">
@@ -389,7 +426,7 @@ onMounted(() => {
                 <span class="field-label">教育邮箱邮件证明</span>
                 <TxInput v-model="studentForm.educationEmail" type="email" placeholder="name@school.edu.cn，可选" />
               </label>
-              <div class="gap-3 grid lg:grid-cols-[1fr_auto_auto_auto]">
+              <div class="gap-3 grid xl:grid-cols-[1fr_auto_auto_auto_auto]">
                 <TxInput v-model="educationEmailVerificationForm.code" readonly placeholder="生成后显示唯一证明码" />
                 <TxButton variant="secondary" :disabled="educationEmailVerificationForm.loading || !studentForm.educationEmail" @click="onGenerateEducationEmailChallenge">
                   {{ educationEmailVerificationForm.loading ? '生成中' : '生成证明码' }}
@@ -399,6 +436,9 @@ onMounted(() => {
                 </TxButton>
                 <TxButton variant="primary" :disabled="!studentForm.educationEmail" @click="onOpenEducationEmailClient">
                   一键发邮件
+                </TxButton>
+                <TxButton variant="secondary" :disabled="!educationEmailVerificationForm.challengeId || educationEmailVerificationForm.verified" @click="onConfirmEducationEmailSent">
+                  {{ educationEmailVerificationForm.verified ? '已验证真实性' : '我已发送验证码' }}
                 </TxButton>
               </div>
               <p class="field-hint">
@@ -429,13 +469,13 @@ onMounted(() => {
               </div>
               <FileUploader v-model="studentFiles" :max="12" button-text="上传材料" drop-text="拖拽证明材料" hint-text="支持任意材料，总大小 200MB 内" />
               <p class="field-hint mt-2">
-                证明材料会在认证提交成功后随记录保存；建议遮挡证件号、人脸、家庭住址、二维码等非必要信息。
+                {{ isSupplementMode ? `原记录已保留 ${editingVerification?.attachments.length ?? 0} 个材料；本次上传会追加保存。建议遮挡证件号、人脸、家庭住址、二维码等非必要信息。` : '证明材料会在认证提交成功后随记录保存；建议遮挡证件号、人脸、家庭住址、二维码等非必要信息。' }}
               </p>
             </div>
           </div>
 
           <div class="verification-submit-warning md:col-span-2">
-            提交后会立即扣除 {{ STUDENT_REVIEW_FEE }} 积分作为审核费；如果审核通过，系统自动返还这 {{ STUDENT_REVIEW_FEE }} 积分。确认提交即视为同意本次规则和数据处理说明。
+            {{ isSupplementMode ? '补充提交不会再次扣除审核费；管理员会基于原材料和本次补充继续审核。' : `提交后会立即扣除 ${STUDENT_REVIEW_FEE} 积分作为审核费；如果审核通过，系统自动返还这 ${STUDENT_REVIEW_FEE} 积分。确认提交即视为同意本次规则和数据处理说明。` }}
           </div>
 
           <div class="flex gap-3 justify-end">
@@ -443,7 +483,7 @@ onMounted(() => {
               取消
             </TxButton>
             <TxButton variant="primary" @click="onSubmitStudentVerification">
-              提交认证
+              {{ isSupplementMode ? '提交补充资料' : '提交认证' }}
             </TxButton>
           </div>
         </template>

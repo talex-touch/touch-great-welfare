@@ -3,6 +3,7 @@ import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  educationEmailVerificationLabel,
   formatDate,
   formatRetentionExpiry,
   verificationOrganizationLabel,
@@ -89,8 +90,8 @@ const progressSteps = computed(() => {
       key: 'replied',
       label: '审核回复',
       description: verification.value?.reviewedAt ? formatDate(verification.value.reviewedAt) : '尚未回复',
-      done: status === 'approved' || status === 'rejected',
-      active: status === 'approved' || status === 'rejected',
+      done: status === 'approved' || status === 'rejected' || status === 'needs_supplement',
+      active: status === 'approved' || status === 'rejected' || status === 'needs_supplement',
     },
   ]
 })
@@ -106,6 +107,19 @@ function reapply() {
   router.push({
     path: '/dashboard/student/create',
     query: { type: verification.value.verificationType ?? 'student' },
+  })
+}
+
+function supplement() {
+  if (!verification.value)
+    return
+
+  router.push({
+    path: '/dashboard/student/create',
+    query: {
+      type: verification.value.verificationType ?? 'student',
+      edit: verification.value.id,
+    },
   })
 }
 </script>
@@ -197,7 +211,12 @@ function reapply() {
           <div class="verification-detail-section">
             <h3>审核回复</h3>
             <RichTextView :content="replyText" class="rich-text-preview" />
-            <div v-if="verification.status === 'rejected'" class="mt-4">
+            <div v-if="verification.status === 'needs_supplement'" class="mt-4">
+              <TxButton variant="primary" @click="supplement">
+                补充资料
+              </TxButton>
+            </div>
+            <div v-else-if="verification.status === 'rejected'" class="mt-4">
               <TxButton variant="secondary" @click="reapply">
                 重新提交
               </TxButton>
@@ -221,7 +240,10 @@ function reapply() {
               </div>
               <div v-if="verification.verificationType !== 'frontline' && verification.educationEmail">
                 <dt>教育邮箱</dt>
-                <dd>{{ verification.educationEmail }}</dd>
+                <dd>
+                  {{ verification.educationEmail }}
+                  <span v-if="verification.educationEmailVerified" class="text-emerald-700 fw-800 ml-2 dark:text-emerald-300">{{ educationEmailVerificationLabel(verification.educationEmailVerificationSource) }}</span>
+                </dd>
               </div>
               <div>
                 <dt>附件</dt>

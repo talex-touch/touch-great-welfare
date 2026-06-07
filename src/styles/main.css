@@ -1766,6 +1766,15 @@ select {
   font-weight: 900;
 }
 
+.order-total-table .is-muted span,
+.order-total-table .is-muted b {
+  color: #94a3b8;
+}
+
+.order-total-table .is-muted b {
+  font-weight: 800;
+}
+
 .order-total-table .is-total {
   background: rgba(248, 250, 252, 0.92);
 }
@@ -2263,6 +2272,11 @@ select {
 .dark .order-total-table .is-saving b,
 .dark .order-total-table .is-total b {
   color: #f87171;
+}
+
+.dark .order-total-table .is-muted span,
+.dark .order-total-table .is-muted b {
+  color: #64748b;
 }
 
 .dark .order-benefit-tag {
@@ -3076,6 +3090,57 @@ select {
   font-style: normal;
   font-weight: 950;
   vertical-align: 0.08rem;
+}
+
+.application-row-tags {
+  display: flex !important;
+  min-width: 0;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.application-row-tag {
+  display: inline-flex !important;
+  min-height: 1.15rem;
+  padding: 0.08rem 0.42rem;
+  border-radius: 5px;
+  align-items: center;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1.35;
+}
+
+.application-row-tag--amber {
+  color: #92400e;
+  background: rgba(251, 191, 36, 0.18);
+}
+
+.application-row-tag--emerald,
+.application-row-tag--teal {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.application-row-tag--blue {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.application-row-tag--violet {
+  color: #6d28d9;
+  background: rgba(139, 92, 246, 0.14);
+}
+
+.application-row-tag--rose {
+  color: #be123c;
+  background: rgba(244, 63, 94, 0.13);
+}
+
+.application-row-tag--slate {
+  color: #475569;
+  background: rgba(100, 116, 139, 0.12);
 }
 
 .application-type-tag {

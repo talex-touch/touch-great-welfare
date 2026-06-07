@@ -3,7 +3,7 @@ import type { RequestKind, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxFlipOverlay, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { formatDate } from '~/composables/welfare'
+import { formatDate, formatPoints } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import { richTextToPlainText } from '~/utils/rich-text'
 import ApplicationDetailPanel from './ApplicationDetailPanel.vue'
@@ -44,6 +44,7 @@ interface ApplicationRow {
   type: string
   email: string
   date: string
+  tags: Array<{ label: string, tone: string }>
 }
 
 const typeText: Record<RequestKind, string> = {
@@ -207,7 +208,29 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
     type: typeLabel(item.type),
     email: userEmail(item.userId),
     date: formatDate(item.createdAt),
+    tags: applicationRowTags(item),
   }
+}
+
+function applicationRowTags(item: WelfareApplication) {
+  const tags: Array<{ label: string, tone: string }> = []
+  if (item.pricingPromotionName)
+    tags.push({ label: item.pricingPromotionName, tone: 'amber' })
+  if (item.couponDiscountAmount)
+    tags.push({ label: `优惠券 -${formatPoints(item.couponDiscountAmount)}`, tone: 'emerald' })
+  if (item.squareDiscountAmount)
+    tags.push({ label: `广场 -${formatPoints(item.squareDiscountAmount)}`, tone: 'blue' })
+  if (item.rejectionReviewFeeWaived && item.rejectionFraudulent)
+    tags.push({ label: '认真承诺但造假仍扣费', tone: 'rose' })
+  else if (item.rejectionReviewFeeWaived)
+    tags.push({ label: '认真填写承诺', tone: 'violet' })
+  else if (item.type !== 'resource')
+    tags.push({ label: `退回手续费 ${formatPoints(item.rejectionReviewFee)}`, tone: 'slate' })
+  if (item.storageExtended)
+    tags.push({ label: `存储 +${formatPoints(item.storageExtensionCost)}`, tone: 'teal' })
+  if (item.expedited)
+    tags.push({ label: `加速 +${formatPoints(item.expediteCost || 0)}`, tone: 'amber' })
+  return tags
 }
 </script>
 
@@ -322,9 +345,11 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
             <span class="application-cell-title">
               <b>
                 {{ row.item.title }}
-                <em v-if="row.item.storageExtended">置顶</em>
               </b>
               <small>{{ row.description }}</small>
+              <span v-if="row.tags.length" class="application-row-tags">
+                <em v-for="tag in row.tags" :key="tag.label" :class="`application-row-tag application-row-tag--${tag.tone}`">{{ tag.label }}</em>
+              </span>
             </span>
             <span>
               <i :class="typeIcon(row.item.type)" aria-hidden="true" />
@@ -333,7 +358,7 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
             <span>
               <TxStatusBadge :text="statusText(row.item.status)" :status="statusTone(row.item.status)" size="sm" />
             </span>
-            <span>消耗 {{ row.item.cost }} 积分</span>
+            <span>消耗 {{ formatPoints(row.item.cost) }}</span>
             <span>{{ row.email }}</span>
             <span>{{ row.date }}</span>
             <span class="application-row-arrow i-carbon-chevron-right" aria-hidden="true" />
@@ -425,6 +450,9 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
             <span class="application-cell-title">
               <b>{{ row.item.title }}</b>
               <small>{{ row.description }}</small>
+              <span v-if="row.tags.length" class="application-row-tags">
+                <em v-for="tag in row.tags" :key="tag.label" :class="`application-row-tag application-row-tag--${tag.tone}`">{{ tag.label }}</em>
+              </span>
             </span>
             <span>
               <i :class="typeIcon(row.item.type)" aria-hidden="true" />

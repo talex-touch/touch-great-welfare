@@ -7,8 +7,9 @@ export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
 export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'needs_supplement' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
 export type ApplicationMessageType = 'comment' | 'supplement' | 'result_submission' | 'system'
-export type StudentStatus = 'pending' | 'approved' | 'rejected'
+export type StudentStatus = 'pending' | 'needs_supplement' | 'approved' | 'rejected'
 export type VerificationType = 'student' | 'frontline'
+export type EducationEmailVerificationSource = 'mail_auto' | 'user_confirmed_sent' | 'admin_approved'
 export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustment' | 'grant'
 export type AiReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_human' | 'failed'
 export type CrowdReviewTargetType = 'pro_application'
@@ -261,6 +262,7 @@ export interface StudentVerification {
   educationEmail?: string
   educationEmailVerified?: boolean
   educationEmailVerifiedAt?: string
+  educationEmailVerificationSource?: EducationEmailVerificationSource
   educationEmailChallengeId?: string
   notes: string
   attachments: AttachmentMeta[]
@@ -268,6 +270,8 @@ export interface StudentVerification {
   reviewFee: number
   feeReturned: boolean
   reply?: string
+  supplementRequestedAt?: string
+  supplementedAt?: string
   createdAt: string
   reviewedAt?: string
 }
@@ -409,12 +413,32 @@ export interface SiteBannerConfig {
   updatedBy?: string
 }
 
+export interface SystemFeatureToggle {
+  enabled: boolean
+  reason?: string
+}
+
+export interface SystemConfig {
+  siteEnabled: boolean
+  siteClosedReason: string
+  loginEnabled: boolean
+  loginClosedReason: string
+  registrationEnabled: boolean
+  registrationClosedReason: string
+  rechargeEnabled: boolean
+  rechargeClosedReason: string
+  verification: Record<VerificationType, SystemFeatureToggle>
+  updatedAt?: string
+  updatedBy?: string
+}
+
 export interface WelfareState {
   users: User[]
   currentUserId?: string
   oauth: OauthConfig
   applicationPolicy: ApplicationPolicyConfig
   siteBanner: SiteBannerConfig
+  systemConfig: SystemConfig
   applications: WelfareApplication[]
   studentVerifications: StudentVerification[]
   educationEmailChallenges: EducationEmailChallenge[]
@@ -527,6 +551,7 @@ export interface AppendApplicationContextPayload {
 }
 
 export interface SubmitStudentPayload {
+  verificationId?: string
   verificationType?: VerificationType
   realName: string
   category: string
@@ -536,6 +561,7 @@ export interface SubmitStudentPayload {
   educationLevel?: string
   educationEmail?: string
   educationEmailChallengeId?: string
+  educationEmailVerified?: boolean
   notes: string
   attachments?: FileLike[]
 }
@@ -563,6 +589,10 @@ export function verificationTypeLabel(type?: string) {
 
 export function verificationOrganizationLabel(type?: string) {
   return normalizeVerificationType(type) === 'frontline' ? '组织 / 单位' : '学校'
+}
+
+export function educationEmailVerificationLabel(source?: EducationEmailVerificationSource) {
+  return source === 'user_confirmed_sent' ? '已验证教育邮箱真实性' : '已自动验证'
 }
 
 export interface UserLevelRule {
@@ -689,6 +719,13 @@ export const PRO_CONTEXT_APPEND_COST = 10880
 export const PRO_STANDARD_PROCESSING_HOURS = 72
 export const PRO_EXPEDITED_PROCESSING_HOURS = 48
 export const PRO_EXPEDITE_COST = 1100
+export const GPT_PRO_MODEL_KEY = 'gpt-pro'
+export const GPT_PRO_DEFAULT_ROUNDS = 5
+export const GPT_PRO_MIN_ROUNDS = 1
+export const GPT_PRO_MAX_ROUNDS = 50
+export const GPT_PRO_ACTIVITY_DISCOUNT_RATE = 0.5
+export const GPT_PRO_ACTIVITY_NAME = 'GPT PRO 限量五折'
+export const GPT_PRO_DEFAULT_DURATION = '7 天'
 export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
 export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'gpt-pro', 'claude-code', 'mimo'] as const
 export const LLM_API_SELECTABLE_MODEL_KEYS = ['codex', 'gpt-pro'] as const
@@ -725,12 +762,12 @@ export const DEFAULT_LLM_API_MODELS: LlmApiModelPricing[] = [
     name: 'GPT PRO',
     provider: 'OpenAI',
     region: 'global',
-    description: '适合高质量复杂推理、长任务、关键代码改造和高成本模型调用。',
+    description: '按对话轮次申请，默认 5 轮，默认有效期 7 天。',
     enabled: true,
-    pointsPerUsd: 200,
-    defaultBudgetUsd: 10,
-    minBudgetUsd: 10,
-    maxBudgetUsd: 1000,
+    pointsPerUsd: PRO_PUBLIC_COST,
+    defaultBudgetUsd: GPT_PRO_DEFAULT_ROUNDS,
+    minBudgetUsd: GPT_PRO_MIN_ROUNDS,
+    maxBudgetUsd: GPT_PRO_MAX_ROUNDS,
     ipLimit: 1,
     rpmLimit: 1,
     tpmLimit: 8000,
@@ -1026,6 +1063,9 @@ export function calculateActivityPrice(cost: number, referenceTime = now()) {
 }
 
 export function llmApiBudgetActivityDiscountRate(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
+  if (isGptProModel(model))
+    return GPT_PRO_ACTIVITY_DISCOUNT_RATE
+
   const budget = normalizeLlmApiBudgetUsd(budgetUsd, model)
   const tier = LLM_API_BUDGET_ACTIVITY_TIERS.find(item => budget >= item.minBudgetUsd)
   return tier?.discountRate ?? ACTIVITY_DISCOUNT_RATE
@@ -1034,6 +1074,9 @@ export function llmApiBudgetActivityDiscountRate(budgetUsd: number, model: LlmAp
 export function calculateLlmApiBudgetActivityPrice(cost: number, budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0], referenceTime = now()) {
   if (!isPromotionActive(referenceTime))
     return cost
+
+  if (isGptProModel(model))
+    return applyRateDiscount(cost, GPT_PRO_ACTIVITY_DISCOUNT_RATE)
 
   return applyRateDiscount(cost, llmApiBudgetActivityDiscountRate(budgetUsd, model))
 }
@@ -1045,6 +1088,20 @@ export function calculateSquareBoostDiscountRate(boostCount: number) {
 
 export function applyRateDiscount(cost: number, rate: number) {
   return Math.max(1, Math.ceil(cost * Math.max(0.01, Math.min(1, rate))))
+}
+
+export function isGptProModel(modelOrKey?: Pick<LlmApiModelPricing, 'key'> | string) {
+  const key = typeof modelOrKey === 'string' ? modelOrKey : modelOrKey?.key
+  return key === GPT_PRO_MODEL_KEY
+}
+
+export function defaultLlmApiDuration(model: Pick<LlmApiModelPricing, 'key'> = DEFAULT_LLM_API_MODELS[0]) {
+  return isGptProModel(model) ? GPT_PRO_DEFAULT_DURATION : RESOURCE_DEFAULT_DURATION
+}
+
+export function llmApiDurationExtensionCost(duration: string | undefined, model: Pick<LlmApiModelPricing, 'key'> = DEFAULT_LLM_API_MODELS[0]) {
+  const normalized = duration || defaultLlmApiDuration(model)
+  return normalized === defaultLlmApiDuration(model) ? 0 : RESOURCE_DURATION_EXTENSION_COST
 }
 
 export function buildPricingSnapshot(type: RequestKind, referenceTime = now()) {
@@ -1155,6 +1212,9 @@ export function calculateLlmApiBaseBudgetCostPoints(budgetUsd: number, model: Ll
 
 export function calculateLlmApiCostPoints(budgetUsd: number, model: LlmApiModelPricing = DEFAULT_LLM_API_MODELS[0]) {
   const budget = normalizeLlmApiBudgetUsd(budgetUsd, model)
+  if (isGptProModel(model))
+    return Math.ceil(budget * PRO_PUBLIC_COST)
+
   const multiplier = Math.max(0.1, model.pointsPerUsd / DEFAULT_LLM_API_MODELS[0].pointsPerUsd)
   const acceleratedCost = calculateLlmApiBaseBudgetCostPoints(budget, model) * multiplier
   return Math.max(Math.ceil(budget * 10), Math.ceil(acceleratedCost))
@@ -1259,6 +1319,7 @@ function defaultState(): WelfareState {
       body: '',
       tone: 'info',
     },
+    systemConfig: defaultSystemConfig(),
     applications: [],
     studentVerifications: [],
     educationEmailChallenges: [],
@@ -1316,6 +1377,50 @@ export function normalizeSiteBanner(input?: Partial<SiteBannerConfig>): SiteBann
   }
 }
 
+export function defaultSystemConfig(): SystemConfig {
+  return {
+    siteEnabled: true,
+    siteClosedReason: '系统维护中，请稍后再试。',
+    loginEnabled: true,
+    loginClosedReason: '登录入口维护中，请稍后再试。',
+    registrationEnabled: true,
+    registrationClosedReason: '新用户注册暂未开放。',
+    rechargeEnabled: true,
+    rechargeClosedReason: '充值入口维护中，请稍后再试。',
+    verification: {
+      student: { enabled: true, reason: '学生认证暂未开放。' },
+      frontline: { enabled: true, reason: '一线认证暂未开放。' },
+    },
+  }
+}
+
+function normalizeSystemToggle(input: Partial<SystemFeatureToggle> | undefined, fallback: SystemFeatureToggle): SystemFeatureToggle {
+  return {
+    enabled: input?.enabled ?? fallback.enabled,
+    reason: input?.reason?.trim() || fallback.reason,
+  }
+}
+
+export function normalizeSystemConfig(input?: Partial<SystemConfig>): SystemConfig {
+  const fallback = defaultSystemConfig()
+  return {
+    siteEnabled: input?.siteEnabled ?? fallback.siteEnabled,
+    siteClosedReason: input?.siteClosedReason?.trim() || fallback.siteClosedReason,
+    loginEnabled: input?.loginEnabled ?? fallback.loginEnabled,
+    loginClosedReason: input?.loginClosedReason?.trim() || fallback.loginClosedReason,
+    registrationEnabled: input?.registrationEnabled ?? fallback.registrationEnabled,
+    registrationClosedReason: input?.registrationClosedReason?.trim() || fallback.registrationClosedReason,
+    rechargeEnabled: input?.rechargeEnabled ?? fallback.rechargeEnabled,
+    rechargeClosedReason: input?.rechargeClosedReason?.trim() || fallback.rechargeClosedReason,
+    verification: {
+      student: normalizeSystemToggle(input?.verification?.student, fallback.verification.student),
+      frontline: normalizeSystemToggle(input?.verification?.frontline, fallback.verification.frontline),
+    },
+    updatedAt: input?.updatedAt,
+    updatedBy: input?.updatedBy,
+  }
+}
+
 function normalizeState(input: Partial<WelfareState>): WelfareState {
   const fallback = defaultState()
   const normalized = {
@@ -1327,6 +1432,7 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     },
     applicationPolicy: normalizeApplicationPolicy(input.applicationPolicy),
     siteBanner: normalizeSiteBanner(input.siteBanner),
+    systemConfig: normalizeSystemConfig(input.systemConfig),
     users: input.users ?? [],
     applications: input.applications ?? [],
     studentVerifications: input.studentVerifications ?? [],
@@ -1558,7 +1664,7 @@ function userReviewStats(userId: string, source: Pick<WelfareState, 'application
       if (normalizeVerificationType(verification.verificationType) === 'student')
         stats.studentRejected += 1
     }
-    if (verification.status === 'pending')
+    if (verification.status === 'pending' || verification.status === 'needs_supplement')
       stats.pending += 1
   }
 
@@ -1721,7 +1827,7 @@ function isActiveApplication(status: RequestStatus) {
 }
 
 function isActiveStudentVerification(status: StudentStatus) {
-  return status === 'pending'
+  return status === 'pending' || status === 'needs_supplement'
 }
 
 function defaultApplicationRejectionAnswer(application: WelfareApplication, fraudulent: boolean) {
@@ -1764,9 +1870,9 @@ function resourceDurationExtensionCost(duration?: string) {
 }
 
 function estimatedResourceItemCostParts(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
-  const durationCost = resourceDurationExtensionCost(item.duration || readString(item.payload, 'duration'))
   if (item.resourceType === 'llm_api_quota') {
     const model = resolveSelectableLlmApiModel(readString(item.payload, 'model'))
+    const durationCost = llmApiDurationExtensionCost(item.duration || readString(item.payload, 'duration'), model)
     const budgetUsd = Number(item.payload.budgetLimit || model.defaultBudgetUsd)
     const budgetCost = calculateLlmApiCostPoints(budgetUsd, model)
     const rateCost = calculateLlmApiRateLimitChangeCost(Number(item.payload.rpmLimit || model.rpmLimit), model.rpmLimit, Number(item.payload.tpmLimit || model.tpmLimit), model.tpmLimit)
@@ -1778,6 +1884,7 @@ function estimatedResourceItemCostParts(item: SubmitResourceApplicationPayload['
       discounted: calculateLlmApiBudgetActivityPrice(budgetCost, budgetUsd, model, referenceTime) + rateCost + durationCost,
     }
   }
+  const durationCost = resourceDurationExtensionCost(item.duration || readString(item.payload, 'duration'))
   const base = item.resourceType === 'database'
     ? 1000 + (item.payload.sensitiveData ? 3000 : 0)
     : 800 * Math.max(1, Number(item.payload.quantity || 1))
@@ -1796,6 +1903,21 @@ function estimatedResourceItemCost(item: SubmitResourceApplicationPayload['resou
 
 function discountedResourceItemCost(item: SubmitResourceApplicationPayload['resourceItems'][number], referenceTime = now()) {
   return estimatedResourceItemCostParts(item, referenceTime).discounted
+}
+
+function resourceActivityPromotionName(items: SubmitResourceApplicationPayload['resourceItems'], referenceTime = now()) {
+  const names = new Set<string>()
+  for (const item of items) {
+    const parts = estimatedResourceItemCostParts(item, referenceTime)
+    if (parts.discounted >= parts.original)
+      continue
+
+    const model = item.resourceType === 'llm_api_quota'
+      ? resolveSelectableLlmApiModel(readString(item.payload, 'model'))
+      : undefined
+    names.add(isGptProModel(model) ? GPT_PRO_ACTIVITY_NAME : ACTIVITY_NAME)
+  }
+  return Array.from(names).join(' / ') || undefined
 }
 
 function validateResourceItemInput(item: SubmitResourceApplicationPayload['resourceItems'][number]) {
@@ -1821,9 +1943,15 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
     const modelKey = readString(item.payload, 'model')
     if (!isSelectableLlmApiModelKey(modelKey))
       throw new Error('大模型只能选择 Codex 或 GPT PRO')
+    const model = resolveSelectableLlmApiModel(modelKey)
     const budget = Number(item.payload.budgetLimit)
-    if (!Number.isFinite(budget) || budget < 10 || budget > 1000)
+    if (isGptProModel(model)) {
+      if (!Number.isFinite(budget) || budget < GPT_PRO_MIN_ROUNDS || budget > GPT_PRO_MAX_ROUNDS)
+        throw new Error(`GPT PRO 对话轮次必须在 ${GPT_PRO_MIN_ROUNDS} 到 ${GPT_PRO_MAX_ROUNDS} 轮之间`)
+    }
+    else if (!Number.isFinite(budget) || budget < 10 || budget > 1000) {
       throw new Error('大模型 Token 额度必须在 $10 到 $1000 之间')
+    }
     const rpm = Number(item.payload.rpmLimit)
     if (!Number.isFinite(rpm) || rpm <= 0)
       throw new Error('大模型 RPM 必须大于 0')
@@ -1839,10 +1967,11 @@ function validateResourceItemInput(item: SubmitResourceApplicationPayload['resou
     item.payload.logRetention = 0
   }
 
-  const duration = item.duration?.trim() || readString(item.payload, 'duration') || RESOURCE_DEFAULT_DURATION
+  const itemModel = item.resourceType === 'llm_api_quota' ? resolveSelectableLlmApiModel(readString(item.payload, 'model')) : undefined
+  const duration = item.duration?.trim() || readString(item.payload, 'duration') || (itemModel ? defaultLlmApiDuration(itemModel) : RESOURCE_DEFAULT_DURATION)
   item.duration = duration
   item.payload.duration = duration
-  item.payload.durationExtensionCost = resourceDurationExtensionCost(duration)
+  item.payload.durationExtensionCost = itemModel ? llmApiDurationExtensionCost(duration, itemModel) : resourceDurationExtensionCost(duration)
   const estimateParts = estimatedResourceItemCostParts(item)
   item.payload.estimatedCost = estimateParts.original
   item.payload.discountedEstimatedCost = estimateParts.discounted
@@ -2047,7 +2176,7 @@ export function useWelfareStore() {
     .filter(item => ['pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review'].includes(item.status))
     .sort(compareReviewPriority))
   const pendingStudentVerifications = computed(() => state.studentVerifications
-    .filter(item => item.status === 'pending')
+    .filter(item => item.status === 'pending' || item.status === 'needs_supplement')
     .sort(compareReviewPriority))
   const totalReservedApplications = computed(() => state.applications
     .filter(item => item.status === 'reserved')
@@ -2114,6 +2243,7 @@ export function useWelfareStore() {
 
   function applicationPolicyStatus(type: RequestKind, options: { userId?: string, title?: string, description?: string, referenceAt?: string } = {}): ApplicationPolicyStatus {
     const referenceAt = options.referenceAt ?? now()
+    const systemConfig = normalizeSystemConfig(state.systemConfig)
     const policy = state.applicationPolicy
     const kindPolicy = policy.categories[type]
     const userId = options.userId ?? currentUser.value?.id
@@ -2125,6 +2255,8 @@ export function useWelfareStore() {
     const cooldownUntil = userId ? recentSubmissionCooldownUntil(userId, referenceAt) : undefined
     const reasons: string[] = []
 
+    if (!systemConfig.siteEnabled)
+      reasons.push(systemConfig.siteClosedReason)
     if (!kindPolicy.enabled)
       reasons.push(kindPolicy.closedReason || `${type.toUpperCase()} 申请暂未开放`)
     if (!isWithinOpenWindow(kindPolicy, new Date(referenceAt)))
@@ -2140,7 +2272,7 @@ export function useWelfareStore() {
 
     return {
       type,
-      enabled: kindPolicy.enabled,
+      enabled: systemConfig.siteEnabled && kindPolicy.enabled,
       available: reasons.length === 0,
       reason: reasons[0] ?? '',
       descriptionLength,
@@ -2170,6 +2302,10 @@ export function useWelfareStore() {
     powNonce?: string
     turnstileVerified?: boolean
   }) {
+    const systemConfig = normalizeSystemConfig(state.systemConfig)
+    if (!systemConfig.siteEnabled)
+      throw new Error(systemConfig.siteClosedReason)
+
     const policy = state.applicationPolicy
     const kindPolicy = policy.categories[input.type]
     if (!kindPolicy.enabled)
@@ -2203,6 +2339,10 @@ export function useWelfareStore() {
   }
 
   function assertCanCreateRequest(userId: string) {
+    const systemConfig = normalizeSystemConfig(state.systemConfig)
+    if (!systemConfig.siteEnabled)
+      throw new Error(systemConfig.siteClosedReason)
+
     if (activeRequestCount(userId) >= MAX_ACTIVE_USER_REQUESTS)
       throw new Error(`一个用户最多只能同时创建 ${MAX_ACTIVE_USER_REQUESTS} 个待处理请求`)
   }
@@ -2879,6 +3019,7 @@ export function useWelfareStore() {
     const checkout = isDraft
       ? undefined
       : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, createdAt, !!payload.shareToSquare)
+    const promotionName = checkout && checkout.activityDiscountAmount > 0 ? resourceActivityPromotionName(payload.resourceItems, createdAt) : undefined
     if (checkout && currentUser.value.points < checkout.cost)
       throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
     const termsAcceptances = isDraft
@@ -2907,7 +3048,7 @@ export function useWelfareStore() {
       squareDiscountRate: checkout?.squareDiscountRate,
       squareDiscountAmount: checkout?.squareDiscountAmount,
       pricingDiscountRate: checkout?.activityDiscountRate ?? 1,
-      pricingPromotionName: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_NAME : undefined,
+      pricingPromotionName: promotionName,
       pricingPromotionEndsAt: checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined,
       pricingAppliedAt: createdAt,
       aiReviewFeeRate: REJECTION_REVIEW_FEE_RATE,
@@ -2980,6 +3121,7 @@ export function useWelfareStore() {
     const checkout = isDraft
       ? undefined
       : resourceCheckoutSnapshot(currentUser.value.id, payload.resourceItems, payload.couponId, updatedAt, !!payload.shareToSquare)
+    const promotionName = checkout && checkout.activityDiscountAmount > 0 ? resourceActivityPromotionName(payload.resourceItems, updatedAt) : undefined
     if (checkout && currentUser.value.points < checkout.cost)
       throw new Error(`积分不足，本单需要预扣 ${checkout.cost} 积分`)
     const squarePostId = !isDraft && payload.shareToSquare ? createId('square') : undefined
@@ -3012,7 +3154,7 @@ export function useWelfareStore() {
       application.squareDiscountRate = checkout?.squareDiscountRate
       application.squareDiscountAmount = checkout?.squareDiscountAmount
       application.pricingDiscountRate = checkout?.activityDiscountRate ?? 1
-      application.pricingPromotionName = checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_NAME : undefined
+      application.pricingPromotionName = promotionName
       application.pricingPromotionEndsAt = checkout && checkout.activityDiscountAmount > 0 ? ACTIVITY_END_AT : undefined
       application.pricingAppliedAt = updatedAt
       if (application.cost > 0)
@@ -3380,9 +3522,28 @@ export function useWelfareStore() {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
   }
 
+  function markEducationEmailVerified(verification: StudentVerification, verifiedAt: string, source: EducationEmailVerificationSource) {
+    if (!verification.educationEmail)
+      return
+
+    verification.educationEmailVerified = true
+    verification.educationEmailVerifiedAt = verification.educationEmailVerifiedAt || verifiedAt
+    verification.educationEmailVerificationSource = verification.educationEmailVerificationSource || source
+
+    if (verification.educationEmailChallengeId) {
+      const challenge = state.educationEmailChallenges.find(item => item.id === verification.educationEmailChallengeId)
+      if (challenge) {
+        challenge.submittedAt = challenge.submittedAt || verifiedAt
+        challenge.verifiedAt = challenge.verifiedAt || verifiedAt
+      }
+    }
+  }
+
   function createEducationEmailChallenge(email: string, realName = '') {
     assertPersistenceReady()
     assertUserActive(currentUser.value)
+
+    assertVerificationEnabled('student')
 
     const normalizedEmail = normalizeEmail(email)
     assertEducationEmail(normalizedEmail)
@@ -3426,6 +3587,8 @@ export function useWelfareStore() {
     assertUserActive(currentUser.value)
 
     const verificationType = normalizeVerificationType(payload.verificationType)
+    assertVerificationEnabled(verificationType)
+
     const realName = payload.realName.trim()
     if (!realName)
       throw new Error('请填写真实姓名')
@@ -3448,6 +3611,7 @@ export function useWelfareStore() {
         && item.email === educationEmail,
       ) ?? latestEducationEmailChallenge(currentUser.value.id, educationEmail)
       : undefined
+    const createdAt = now()
 
     const verification: StudentVerification = {
       id: createId('stu'),
@@ -3460,21 +3624,117 @@ export function useWelfareStore() {
       grade: payload.grade?.trim(),
       educationLevel: payload.educationLevel?.trim(),
       educationEmail,
-      educationEmailVerified: false,
-      educationEmailVerifiedAt: undefined,
+      educationEmailVerified: !!(emailChallenge && payload.educationEmailVerified),
+      educationEmailVerifiedAt: emailChallenge && payload.educationEmailVerified ? createdAt : undefined,
+      educationEmailVerificationSource: emailChallenge && payload.educationEmailVerified ? 'user_confirmed_sent' : undefined,
       educationEmailChallengeId: emailChallenge?.id,
       notes,
       attachments: toAttachmentMeta(payload.attachments),
       status: 'pending',
       reviewFee: STUDENT_REVIEW_FEE,
       feeReturned: false,
-      createdAt: now(),
+      createdAt,
     }
-    if (emailChallenge)
+    if (emailChallenge) {
       emailChallenge.submittedAt = verification.createdAt
+      if (verification.educationEmailVerified)
+        emailChallenge.verifiedAt = verification.educationEmailVerifiedAt
+    }
 
     addTransaction(currentUser.value.id, -STUDENT_REVIEW_FEE, 'spend', `${verificationTypeLabel(verificationType)}审核费`, verification.id)
     state.studentVerifications.unshift(verification)
+  }
+
+  function confirmEducationEmailChallengeSent(challengeId: string) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    const challenge = state.educationEmailChallenges.find(item => item.id === challengeId && item.userId === currentUser.value?.id)
+    if (!challenge)
+      throw new Error('教育邮箱证明码不存在')
+
+    const verifiedAt = now()
+    challenge.submittedAt = challenge.submittedAt || verifiedAt
+    challenge.verifiedAt = challenge.verifiedAt || verifiedAt
+
+    const verification = state.studentVerifications.find(item =>
+      item.userId === currentUser.value?.id
+      && item.educationEmailChallengeId === challenge.id
+      && item.educationEmail === challenge.email,
+    )
+    if (verification)
+      markEducationEmailVerified(verification, verifiedAt, 'user_confirmed_sent')
+
+    return challenge
+  }
+
+  function supplementStudentVerification(payload: SubmitStudentPayload) {
+    assertPersistenceReady()
+    assertUserActive(currentUser.value)
+
+    if (!payload.verificationId)
+      throw new Error('认证申请不存在')
+
+    const verification = state.studentVerifications.find(item => item.id === payload.verificationId && item.userId === currentUser.value?.id)
+    if (!verification)
+      throw new Error('认证申请不存在')
+    if (verification.status !== 'needs_supplement')
+      throw new Error('该认证申请暂不需要补充资料')
+
+    const verificationType = normalizeVerificationType(payload.verificationType ?? verification.verificationType)
+    assertVerificationEnabled(verificationType)
+
+    const realName = payload.realName.trim()
+    if (!realName)
+      throw new Error('请填写真实姓名')
+    if (!payload.category.trim())
+      throw new Error('请填写认证类目')
+
+    const notes = sanitizeRichText(payload.notes)
+    if (isRichTextEmpty(notes))
+      throw new Error('请填写认证材料说明')
+
+    const educationEmail = payload.educationEmail?.trim() ? normalizeEmail(payload.educationEmail) : undefined
+    if (educationEmail)
+      assertEducationEmail(educationEmail)
+
+    const existingAttachments = verification.attachments ?? []
+    const newAttachments = toAttachmentMeta(payload.attachments)
+    if (totalBytes([...existingAttachments, ...newAttachments]) > MAX_ATTACHMENT_BYTES)
+      throw new Error('材料附件总大小不能超过 200MB')
+
+    const emailChallenge = educationEmail
+      ? state.educationEmailChallenges.find(item =>
+        item.id === payload.educationEmailChallengeId
+        && item.userId === currentUser.value?.id
+        && item.email === educationEmail,
+      ) ?? latestEducationEmailChallenge(currentUser.value.id, educationEmail)
+      : undefined
+
+    const supplementedAt = now()
+    verification.verificationType = verificationType
+    verification.realName = realName
+    verification.category = payload.category.trim()
+    verification.school = payload.school?.trim()
+    verification.identity = payload.identity?.trim()
+    verification.grade = payload.grade?.trim()
+    verification.educationLevel = payload.educationLevel?.trim()
+    verification.educationEmail = educationEmail
+    verification.educationEmailVerified = !!(emailChallenge && payload.educationEmailVerified)
+    verification.educationEmailVerifiedAt = emailChallenge && payload.educationEmailVerified ? supplementedAt : undefined
+    verification.educationEmailVerificationSource = emailChallenge && payload.educationEmailVerified ? 'user_confirmed_sent' : undefined
+    verification.educationEmailChallengeId = emailChallenge?.id
+    verification.notes = notes
+    verification.attachments = [...existingAttachments, ...newAttachments]
+    verification.status = 'pending'
+    verification.supplementedAt = supplementedAt
+    verification.reviewedAt = undefined
+
+    if (emailChallenge) {
+      emailChallenge.submittedAt = supplementedAt
+      if (verification.educationEmailVerified)
+        emailChallenge.verifiedAt = verification.educationEmailVerifiedAt
+    }
   }
 
   function approveStudentVerification(id: string, reply: string) {
@@ -3491,11 +3751,28 @@ export function useWelfareStore() {
     verification.reply = richTextToPlainText(reply) ? sanitizeRichText(reply) : '认证通过，审核积分已返还。'
     verification.reviewedAt = now()
     verification.feeReturned = true
+    markEducationEmailVerified(verification, verification.reviewedAt, 'admin_approved')
     addTransaction(verification.userId, verification.reviewFee, 'refund', `${verificationTypeLabel(verification.verificationType)}通过返还审核费`, verification.id)
 
     const user = state.users.find(item => item.id === verification.userId)
     if (user && normalizeVerificationType(verification.verificationType) === 'student')
       user.profile.studentVerified = true
+  }
+
+  function requestStudentSupplement(id: string, reason: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const verification = state.studentVerifications.find(item => item.id === id)
+    if (!verification)
+      throw new Error('认证申请不存在')
+    if (verification.status !== 'pending')
+      throw new Error('该认证申请已经处理')
+
+    verification.status = 'needs_supplement'
+    verification.reply = richTextToPlainText(reason) ? sanitizeRichText(reason) : '材料不足，请补充有效证明后继续审核。'
+    verification.reviewedAt = now()
+    verification.supplementRequestedAt = verification.reviewedAt
   }
 
   function rejectStudentVerification(id: string, reason: string) {
@@ -3634,6 +3911,16 @@ export function useWelfareStore() {
     user.profile.githubRepos = []
   }
 
+  function assertVerificationEnabled(type: VerificationType) {
+    const systemConfig = normalizeSystemConfig(state.systemConfig)
+    if (!systemConfig.siteEnabled)
+      throw new Error(systemConfig.siteClosedReason)
+
+    const verification = systemConfig.verification[type]
+    if (!verification.enabled)
+      throw new Error(verification.reason || `${verificationTypeLabel(type)}暂未开放`)
+  }
+
   function adjustUserPoints(userId: string, amount: number, reason: string) {
     assertPersistenceReady()
     assertAdmin(currentUser.value)
@@ -3651,6 +3938,22 @@ export function useWelfareStore() {
     state.siteBanner = normalizeSiteBanner({
       ...state.siteBanner,
       ...payload,
+      updatedAt: now(),
+      updatedBy: currentUser.value.id,
+    })
+  }
+
+  function updateSystemConfig(payload: Partial<SystemConfig>) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    state.systemConfig = normalizeSystemConfig({
+      ...state.systemConfig,
+      ...payload,
+      verification: {
+        ...state.systemConfig.verification,
+        ...payload.verification,
+      },
       updatedAt: now(),
       updatedBy: currentUser.value.id,
     })
@@ -3716,8 +4019,11 @@ export function useWelfareStore() {
     answerProApplication,
     rejectProApplication,
     createEducationEmailChallenge,
+    confirmEducationEmailChallengeSent,
     submitStudentVerification,
+    supplementStudentVerification,
     approveStudentVerification,
+    requestStudentSupplement,
     rejectStudentVerification,
     createSquarePost,
     boostSquarePost,
@@ -3730,6 +4036,7 @@ export function useWelfareStore() {
     unbindUserGitHub,
     adjustUserPoints,
     updateSiteBanner,
+    updateSystemConfig,
     ensureWelfareStateLoaded,
     reloadWelfareState,
     assertPersistenceReady,

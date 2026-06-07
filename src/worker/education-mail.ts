@@ -323,6 +323,7 @@ async function syncEducationEmailChallenges(env: WorkerEnv) {
     if (verification) {
       verification.educationEmailVerified = true
       verification.educationEmailVerifiedAt = challenge.verifiedAt
+      verification.educationEmailVerificationSource = 'mail_auto'
       verification.educationEmailChallengeId = challenge.id
     }
     matched.push({
@@ -368,6 +369,7 @@ export async function verifyEducationMailChallengesInState(
     if (verification) {
       verification.educationEmailVerified = true
       verification.educationEmailVerifiedAt = verifiedAt
+      verification.educationEmailVerificationSource = 'mail_auto'
       verification.educationEmailChallengeId = challenge.id
     }
     matched.push({ challenge, verification, mail })

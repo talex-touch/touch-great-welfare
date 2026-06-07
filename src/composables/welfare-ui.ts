@@ -4,7 +4,7 @@ import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-ap
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
 import type { Sub2ApiKeyView } from './sub2api'
-import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, VerificationType } from './welfare'
+import type { ApplicationMessageType, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, StudentVerification, VerificationType } from './welfare'
 import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
@@ -40,6 +40,7 @@ import {
   calculateLlmApiCostPoints,
   calculateLlmApiRateLimitChangeCost,
   DEFAULT_LLM_API_MODELS,
+  defaultLlmApiDuration,
   EDUCATION_EMAIL_REVIEW_INBOX,
   LLM_API_BUDGET_OPTIONS,
   LLM_API_DEFAULT_MODEL_KEY,
@@ -51,6 +52,7 @@ import {
   MAX_ACTIVE_USER_REQUESTS,
   normalizeApplicationPolicy,
   normalizeLlmApiBudgetUsd,
+  normalizeSystemConfig,
   normalizeLlmApiModelPricings,
   PRO_EXPEDITE_COST,
   PRO_EXPEDITED_PROCESSING_HOURS,
@@ -271,6 +273,23 @@ export const siteBannerConfigForm = reactive({
   title: '',
   body: '',
   tone: 'info' as 'info' | 'success' | 'warning',
+  loading: false,
+  message: '',
+})
+
+export const systemConfigForm = reactive({
+  siteEnabled: true,
+  siteClosedReason: '系统维护中，请稍后再试。',
+  loginEnabled: true,
+  loginClosedReason: '登录入口维护中，请稍后再试。',
+  registrationEnabled: true,
+  registrationClosedReason: '新用户注册暂未开放。',
+  rechargeEnabled: true,
+  rechargeClosedReason: '充值入口维护中，请稍后再试。',
+  studentVerificationEnabled: true,
+  studentVerificationReason: '学生认证暂未开放。',
+  frontlineVerificationEnabled: true,
+  frontlineVerificationReason: '一线认证暂未开放。',
   loading: false,
   message: '',
 })
@@ -545,8 +564,23 @@ export function useWelfareUiState() {
   const repoOptions = computed(() => welfare.currentUser.value?.profile.githubRepos ?? [])
   const activeSiteBanner = computed(() => {
     const banner = welfare.state.siteBanner
+    const config = normalizeSystemConfig(welfare.state.systemConfig)
+    if (!config.siteEnabled) {
+      return {
+        enabled: true,
+        title: banner.title || '系统维护',
+        body: config.siteClosedReason,
+        tone: 'warning' as const,
+        updatedAt: config.updatedAt,
+        updatedBy: config.updatedBy,
+      }
+    }
     return banner.enabled && (banner.title || banner.body) ? banner : undefined
   })
+  const systemConfig = computed(() => normalizeSystemConfig(welfare.state.systemConfig))
+  const loginFeatureEnabled = computed(() => systemConfig.value.siteEnabled && systemConfig.value.loginEnabled)
+  const registrationFeatureEnabled = computed(() => systemConfig.value.siteEnabled && systemConfig.value.registrationEnabled)
+  const rechargeFeatureEnabled = computed(() => systemConfig.value.siteEnabled && systemConfig.value.rechargeEnabled)
   const totalApplicationBytes = computed(() => applicationFiles.value.reduce((sum, file) => sum + file.size, 0))
   const totalStudentBytes = computed(() => studentFiles.value.reduce((sum, file) => sum + file.size, 0))
   const activeRequestCount = computed(() => welfare.currentUser.value ? welfare.activeRequestCount(welfare.currentUser.value.id) : 0)
@@ -706,6 +740,31 @@ export function useWelfareUiState() {
     educationEmailVerificationForm.message = ''
   })
 
+  function resetEducationEmailVerificationForm() {
+    educationEmailVerificationForm.code = ''
+    educationEmailVerificationForm.challengeId = ''
+    educationEmailVerificationForm.subject = ''
+    educationEmailVerificationForm.body = ''
+    educationEmailVerificationForm.mailto = ''
+    educationEmailVerificationForm.sentTo = ''
+    educationEmailVerificationForm.expiresAt = ''
+    educationEmailVerificationForm.verified = false
+    educationEmailVerificationForm.message = ''
+  }
+
+  function fillStudentFormFromVerification(verification: StudentVerification) {
+    studentForm.verificationType = verification.verificationType ?? 'student'
+    studentForm.realName = verification.realName
+    studentForm.category = verification.category
+    studentForm.school = verification.school ?? ''
+    studentForm.identity = verification.identity ?? ''
+    studentForm.grade = verification.grade ?? ''
+    studentForm.educationLevel = verification.educationLevel ?? ''
+    studentForm.educationEmail = verification.educationEmail ?? ''
+    studentForm.notes = verification.notes
+    resetEducationEmailVerificationForm()
+  }
+
   function statusText(status: string) {
     const map: Record<string, string> = {
       reserved: '已提交',
@@ -814,7 +873,7 @@ export function useWelfareUiState() {
       defaultRpmLimit: model.rpmLimit,
       defaultTpmLimit: model.tpmLimit,
       rateLimitMode: 'default',
-      duration: RESOURCE_DEFAULT_DURATION,
+      duration: defaultLlmApiDuration(model),
       usageScenario: '',
       uploadsUserData: false,
       uploadUserData: false,
@@ -1046,6 +1105,69 @@ export function useWelfareUiState() {
     await ensureEducationEmailChallenge()
     globalThis.location.href = educationEmailVerificationForm.mailto
     educationEmailVerificationForm.message = '已打开系统邮件客户端，请确认发件邮箱为你的教育邮箱'
+  }
+
+  async function confirmEducationEmailSent() {
+    await ensureEducationEmailChallenge()
+    const challenge = welfare.confirmEducationEmailChallengeSent(educationEmailVerificationForm.challengeId)
+    educationEmailVerificationForm.verified = true
+    educationEmailVerificationForm.message = '已标记为已验证教育邮箱真实性，管理员仍会结合材料审核'
+    await saveWelfareState(welfare.state)
+    return challenge
+  }
+
+  function refreshSystemConfigForm() {
+    const config = normalizeSystemConfig(welfare.state.systemConfig)
+    systemConfigForm.siteEnabled = config.siteEnabled
+    systemConfigForm.siteClosedReason = config.siteClosedReason
+    systemConfigForm.loginEnabled = config.loginEnabled
+    systemConfigForm.loginClosedReason = config.loginClosedReason
+    systemConfigForm.registrationEnabled = config.registrationEnabled
+    systemConfigForm.registrationClosedReason = config.registrationClosedReason
+    systemConfigForm.rechargeEnabled = config.rechargeEnabled
+    systemConfigForm.rechargeClosedReason = config.rechargeClosedReason
+    systemConfigForm.studentVerificationEnabled = config.verification.student.enabled
+    systemConfigForm.studentVerificationReason = config.verification.student.reason ?? ''
+    systemConfigForm.frontlineVerificationEnabled = config.verification.frontline.enabled
+    systemConfigForm.frontlineVerificationReason = config.verification.frontline.reason ?? ''
+  }
+
+  async function persistSystemConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    systemConfigForm.loading = true
+    systemConfigForm.message = ''
+    try {
+      welfare.updateSystemConfig({
+        siteEnabled: systemConfigForm.siteEnabled,
+        siteClosedReason: systemConfigForm.siteClosedReason,
+        loginEnabled: systemConfigForm.loginEnabled,
+        loginClosedReason: systemConfigForm.loginClosedReason,
+        registrationEnabled: systemConfigForm.registrationEnabled,
+        registrationClosedReason: systemConfigForm.registrationClosedReason,
+        rechargeEnabled: systemConfigForm.rechargeEnabled,
+        rechargeClosedReason: systemConfigForm.rechargeClosedReason,
+        verification: {
+          student: {
+            enabled: systemConfigForm.studentVerificationEnabled,
+            reason: systemConfigForm.studentVerificationReason,
+          },
+          frontline: {
+            enabled: systemConfigForm.frontlineVerificationEnabled,
+            reason: systemConfigForm.frontlineVerificationReason,
+          },
+        },
+      })
+      await saveWelfareState(welfare.state, welfare.currentUser.value.id)
+      await welfare.reloadWelfareState()
+      refreshSystemConfigForm()
+      systemConfigForm.message = '系统开关已保存'
+    }
+    finally {
+      systemConfigForm.loading = false
+    }
   }
 
   async function persistApplicationPolicy() {
@@ -1323,6 +1445,12 @@ export function useWelfareUiState() {
   }
 
   async function startOAuthLogin(providerId: string, redirect = '/dashboard/apply') {
+    const config = systemConfig.value
+    if (!config.siteEnabled)
+      throw new Error(config.siteClosedReason)
+    if (!config.loginEnabled)
+      throw new Error(config.loginClosedReason)
+
     oauthLoginForm.loadingProviderId = providerId
     oauthLoginForm.message = '正在创建 OAuth 登录链接...'
     try {
@@ -1991,6 +2119,11 @@ export function useWelfareUiState() {
 
   async function startRecharge() {
     welfare.assertPersistenceReady()
+    const config = systemConfig.value
+    if (!config.siteEnabled)
+      throw new Error(config.siteClosedReason)
+    if (!config.rechargeEnabled)
+      throw new Error(config.rechargeClosedReason)
     if (!welfare.currentUser.value)
       throw new Error('请先登录后再充值')
 
@@ -2052,6 +2185,8 @@ export function useWelfareUiState() {
       pointTransactionSummary.income = firstResult.summary.income
       pointTransactionSummary.outcome = firstResult.summary.outcome
       pointTransactionSummary.count = firstResult.summary.count
+      if (scope === 'current')
+        await welfare.reloadWelfareState()
     }
     catch (error) {
       pointTransactionSummary.message = error instanceof Error ? error.message : '积分流水加载失败'
@@ -2132,11 +2267,24 @@ export function useWelfareUiState() {
     await refreshPointTransactions()
   }
 
+  async function supplementStudentVerification(payload: Parameters<typeof welfare.supplementStudentVerification>[0]) {
+    await welfare.reloadWelfareState()
+    welfare.supplementStudentVerification(payload)
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+  }
+
   async function approveStudentVerification(id: string, reply: string) {
     welfare.approveStudentVerification(id, reply)
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
+  }
+
+  async function requestStudentSupplement(id: string, reason: string) {
+    welfare.requestStudentSupplement(id, reason)
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
   }
 
   async function rejectStudentVerification(id: string, reason: string) {
@@ -2170,7 +2318,12 @@ export function useWelfareUiState() {
     educationMailConfigForm,
     notificationProviderConfigForm,
     siteBannerConfigForm,
+    systemConfigForm,
     activeSiteBanner,
+    systemConfig,
+    loginFeatureEnabled,
+    registrationFeatureEnabled,
+    rechargeFeatureEnabled,
     adminAnnouncementForm,
     adminAnnouncements,
     temporaryAiKey,
@@ -2252,6 +2405,8 @@ export function useWelfareUiState() {
     currentCheckInStreak,
     statusText,
     statusTone,
+    fillStudentFormFromVerification,
+    resetEducationEmailVerificationForm,
     typeIcon,
     resetApplicationSecurity,
     setApplicationTurnstileToken,
@@ -2267,14 +2422,19 @@ export function useWelfareUiState() {
     completeResourceProvision,
     resetStudentFiles,
     submitStudentVerification,
+    supplementStudentVerification,
     approveStudentVerification,
+    requestStudentSupplement,
     rejectStudentVerification,
     generateEducationEmailChallenge,
     copyEducationEmailTemplate,
     openEducationEmailClient,
+    confirmEducationEmailSent,
     checkInToday,
     bindInvitationCode,
     vouchInvitation,
+    refreshSystemConfigForm,
+    persistSystemConfig,
     persistApplicationPolicy,
     crowdReviewDraftFor,
     submitCrowdReviewDraft,

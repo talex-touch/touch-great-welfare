@@ -4,7 +4,7 @@ import type { CreditTransaction, RequestKind, StudentVerification, WelfareApplic
 import { TxButton, TxCard, TxCheckbox, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatPoints, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { formatDate, formatPoints, isGptProModel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { saveWelfareState } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, useWelfareUiState } from '~/composables/welfare-ui'
 
@@ -151,6 +151,7 @@ const applicationStatusText: Record<string, string> = {
 
 const studentStatusText: Record<string, string> = {
   pending: '待审核',
+  needs_supplement: '待补充资料',
   approved: '已通过',
   rejected: '已退回',
 }
@@ -219,6 +220,7 @@ const applicationStatusFilterOptions = [
 const studentStatusFilterOptions = [
   { value: ALL_FILTER, label: '全部状态' },
   { value: 'pending', label: studentStatusText.pending },
+  { value: 'needs_supplement', label: studentStatusText.needs_supplement },
   { value: 'approved', label: studentStatusText.approved },
   { value: 'rejected', label: studentStatusText.rejected },
 ]
@@ -328,6 +330,12 @@ function userDisplayName(userId: string) {
 
 function signedPoints(value: number) {
   return value > 0 ? `+${formatPoints(value)}` : formatPoints(value)
+}
+
+function llmBudgetText(application: WelfareApplication) {
+  if (!application.llmApiBudgetUsd)
+    return '-'
+  return isGptProModel(application.llmApiModelKey) ? `${application.llmApiBudgetUsd} 轮` : `$${application.llmApiBudgetUsd}`
 }
 
 function statusPillClass(status: string) {
@@ -820,7 +828,7 @@ const dashboardMetrics = computed(() => {
   const { users, applications, studentVerifications, transactions } = dashboardMetricScope.value
   const adminCount = users.filter(user => user.role === 'admin').length
   const pendingApplicationCount = applications.filter(item => ['pending_review', 'needs_supplement'].includes(item.status)).length
-  const pendingStudentCount = studentVerifications.filter(item => item.status === 'pending').length
+  const pendingStudentCount = studentVerifications.filter(item => ['pending', 'needs_supplement'].includes(item.status)).length
   const pointsBalance = users.reduce((sum, user) => sum + user.points, 0)
   const pointsIn = transactions.filter(item => item.delta > 0).reduce((sum, item) => sum + item.delta, 0)
   const pointsOut = Math.abs(transactions.filter(item => item.delta < 0).reduce((sum, item) => sum + item.delta, 0))
@@ -895,7 +903,7 @@ const dashboardActivityRows = computed(() => {
       title: `${verificationTypeLabel(verification.verificationType)} · ${verification.category}`,
       user: userDisplayName(verification.userId),
       detail: `${verificationOrganizationLabel(verification.verificationType)} ${verification.school || '未填写'} · ${studentStatusText[verification.status]}`,
-      tone: verification.status === 'rejected' ? 'danger' : verification.status === 'pending' ? 'warning' : 'success',
+      tone: verification.status === 'rejected' ? 'danger' : ['pending', 'needs_supplement'].includes(verification.status) ? 'warning' : 'success',
       createdAt: verification.createdAt,
     })
   }
@@ -968,7 +976,7 @@ const dataGroups = computed(() => [
   {
     title: '认证申请',
     count: state.studentVerifications.length,
-    note: `${state.studentVerifications.filter(item => item.status === 'pending').length} 个待审核，${state.studentVerifications.filter(item => item.status === 'approved').length} 个已通过`,
+    note: `${state.studentVerifications.filter(item => ['pending', 'needs_supplement'].includes(item.status)).length} 个待处理，${state.studentVerifications.filter(item => item.status === 'approved').length} 个已通过`,
   },
   {
     title: '积分流水',
@@ -1098,7 +1106,7 @@ const auditEvents = computed(() => {
       action: '提交材料',
       actor: userDisplayName(verification.userId),
       detail: `${verificationTypeLabel(verification.verificationType)} · ${verification.category} · ${verificationOrganizationLabel(verification.verificationType)} ${verification.school || '未填写'} · ${studentStatusText[verification.status] ?? verification.status}`,
-      tone: verification.status === 'pending' ? 'warning' : 'info',
+      tone: ['pending', 'needs_supplement'].includes(verification.status) ? 'warning' : 'info',
     })
 
     if (verification.reviewedAt) {
@@ -1959,7 +1967,7 @@ onMounted(() => {
                     LLMApi 模型价格
                   </div>
                   <p class="field-hint mt-1">
-                    用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。这里配置每个模型的价格、默认额度、IP、默认 RPM/TPM 与并发限制。
+                    用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。Codex 按 USD 额度配置，GPT PRO 复用额度字段表示对话轮次，默认 5 轮、7 天有效。
                   </p>
                 </div>
                 <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
@@ -1985,15 +1993,15 @@ onMounted(() => {
                       <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                     </label>
                     <label class="gap-2 grid">
-                      <span class="field-label">默认额度 USD</span>
+                      <span class="field-label">{{ model.key === 'gpt-pro' ? '默认轮次' : '默认额度 USD' }}</span>
                       <TxNumberInput v-model="model.defaultBudgetUsd" :min="model.minBudgetUsd" :max="model.maxBudgetUsd" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                     </label>
                     <label class="gap-2 grid">
-                      <span class="field-label">最小 USD</span>
+                      <span class="field-label">{{ model.key === 'gpt-pro' ? '最小轮次' : '最小 USD' }}</span>
                       <TxNumberInput v-model="model.minBudgetUsd" :min="1" :max="model.maxBudgetUsd" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                     </label>
                     <label class="gap-2 grid">
-                      <span class="field-label">最大 USD</span>
+                      <span class="field-label">{{ model.key === 'gpt-pro' ? '最大轮次' : '最大 USD' }}</span>
                       <TxNumberInput v-model="model.maxBudgetUsd" :min="model.minBudgetUsd" :max="100000" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                     </label>
                     <label class="gap-2 grid">
@@ -3116,7 +3124,7 @@ onMounted(() => {
                     <span v-if="item.status === 'rejected' && (!item.rejectionReviewFeeWaived || item.rejectionFraudulent)" class="text-xs text-rose-500 block">退回费 {{ formatPoints(item.rejectionReviewFee) }}</span>
                     <span v-if="item.rejectionReviewFeeWaived && !item.rejectionFraudulent" class="text-xs text-violet-500 block">免退回费</span>
                     <span v-if="item.rejectionFraudulent" class="text-xs text-red-600 block dark:text-red-300">造假限制</span>
-                    <span v-if="item.type === 'code' && item.llmApiBudgetUsd" class="text-xs text-indigo-600 block dark:text-indigo-300">LLMApi {{ item.llmApiModelName }} ${{ item.llmApiBudgetUsd }} · RPM {{ item.llmApiRpmLimit }}</span>
+                    <span v-if="item.type === 'code' && item.llmApiBudgetUsd" class="text-xs text-indigo-600 block dark:text-indigo-300">LLMApi {{ item.llmApiModelName }} {{ llmBudgetText(item) }} · RPM {{ item.llmApiRpmLimit }}</span>
                     <span v-if="item.llmApiRequiresExtendedReview" class="text-xs text-amber-600 block dark:text-amber-300">更长审核</span>
                   </span>
                   <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>

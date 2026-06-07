@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, canApplyResourceType, formatBytes, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
+import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, canApplyResourceType, defaultLlmApiDuration, formatBytes, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
@@ -160,6 +160,7 @@ const rateLimitModeOptions = [
   { value: 'custom', label: '自定义 RPM / TPM' },
 ]
 const llmBudgetMarks = [10, 100, 500, 1000]
+const gptProRoundMarks = [1, 5, 10, 25, 50]
 const durationOptions = [
   { value: RESOURCE_DEFAULT_DURATION, label: RESOURCE_DEFAULT_DURATION },
   { value: '7 天', label: '延长至 7 天' },
@@ -168,6 +169,10 @@ const durationOptions = [
 
 function formatUsd(value: number) {
   return `$${Number(value || 0).toLocaleString('en-US')}`
+}
+
+function formatRounds(value: number) {
+  return `${Math.trunc(Number(value || 0)).toLocaleString('zh-CN')} 轮`
 }
 
 interface ResourceDraftItem {
@@ -182,6 +187,67 @@ interface ResourceDraftItem {
 function llmModelForItem(item: { payload: Record<string, any> }) {
   return selectableLlmApiModels.value.find(model => model.key === item.payload.model)
     ?? selectableLlmApiModels.value[0]
+}
+
+function isGptProItem(item: { payload: Record<string, any> }) {
+  return isGptProModel(llmModelForItem(item))
+}
+
+function formatLlmQuota(value: number, model = selectableLlmApiModels.value[0]) {
+  return isGptProModel(model) ? formatRounds(value) : formatUsd(value)
+}
+
+function formatLlmQuotaForItem(item: { payload: Record<string, any> }) {
+  return formatLlmQuota(Number(item.payload.budgetLimit || llmModelForItem(item)?.defaultBudgetUsd || 0), llmModelForItem(item))
+}
+
+function llmQuotaFormatter(item: { payload: Record<string, any> }) {
+  const model = llmModelForItem(item)
+  return (value: number) => formatLlmQuota(value, model)
+}
+
+function llmQuotaFieldLabel(item: { payload: Record<string, any> }) {
+  return isGptProItem(item) ? '对话轮次' : 'Token 额度'
+}
+
+function llmQuotaMarks(item: { payload: Record<string, any> }) {
+  return isGptProItem(item) ? gptProRoundMarks : llmBudgetMarks
+}
+
+function llmQuotaMin(item: { payload: Record<string, any> }) {
+  const model = llmModelForItem(item)
+  return isGptProModel(model) ? GPT_PRO_MIN_ROUNDS : model?.minBudgetUsd ?? 10
+}
+
+function llmQuotaMax(item: { payload: Record<string, any> }) {
+  const model = llmModelForItem(item)
+  return isGptProModel(model) ? GPT_PRO_MAX_ROUNDS : model?.maxBudgetUsd ?? 1000
+}
+
+function llmQuotaStep(item: { payload: Record<string, any> }) {
+  return isGptProItem(item) ? 1 : 10
+}
+
+function requestedQuotaText(item: { payload: Record<string, any> }) {
+  const model = llmModelForItem(item)
+  const value = Number(item.payload.budgetLimit || model?.defaultBudgetUsd || 0)
+  return isGptProModel(model) ? `${formatRounds(value)}对话` : formatUsd(value)
+}
+
+function durationOptionsForItem(item: { payload: Record<string, any> }) {
+  if (!isGptProItem(item))
+    return durationOptions
+
+  return [
+    { value: GPT_PRO_DEFAULT_DURATION, label: '默认 7 天' },
+    { value: '30 天', label: '延长至 30 天' },
+  ]
+}
+
+function llmModelSelectLabel(model: { key: string, name: string }) {
+  return isGptProModel(model)
+    ? `${model.name} · 默认 ${GPT_PRO_DEFAULT_ROUNDS} 轮 / ${GPT_PRO_DEFAULT_DURATION}`
+    : `${model.name} · 倍率 ×${LLM_API_MODEL_COST_MULTIPLIERS[model.key as keyof typeof LLM_API_MODEL_COST_MULTIPLIERS] ?? 1}`
 }
 
 function sanitizeLlmItem(item: ResourceDraftItem) {
@@ -208,8 +274,10 @@ function sanitizeLlmItem(item: ResourceDraftItem) {
   item.payload.containsSensitiveInfo = false
   item.payload.containsPrivacy = false
   item.payload.logRetention = 0
-  item.payload.duration = item.payload.duration || RESOURCE_DEFAULT_DURATION
-  item.requestedQuota = formatUsd(item.payload.budgetLimit)
+  item.payload.duration = item.payload.duration || defaultLlmApiDuration(model)
+  if (isGptProModel(model) && item.payload.duration === RESOURCE_DEFAULT_DURATION)
+    item.payload.duration = defaultLlmApiDuration(model)
+  item.requestedQuota = requestedQuotaText(item)
   item.duration = item.payload.duration
 }
 
@@ -227,14 +295,16 @@ function onLlmModelChange(item: ResourceDraftItem) {
   item.payload.defaultRpmLimit = model.rpmLimit
   item.payload.defaultTpmLimit = model.tpmLimit
   item.payload.rateLimitMode = 'default'
-  item.payload.duration = item.payload.duration || RESOURCE_DEFAULT_DURATION
-  item.requestedQuota = formatUsd(model.defaultBudgetUsd)
+  item.payload.duration = defaultLlmApiDuration(model)
+  item.requestedQuota = requestedQuotaText(item)
   item.duration = item.payload.duration
 }
 
 function sanitizeResourceDurations() {
   for (const item of resourceApplicationItems.value) {
-    const duration = item.duration || item.payload.duration || RESOURCE_DEFAULT_DURATION
+    const model = item.resourceType === 'llm_api_quota' ? llmModelForItem(item) : undefined
+    const defaultDuration = model ? defaultLlmApiDuration(model) : RESOURCE_DEFAULT_DURATION
+    const duration = item.duration || item.payload.duration || defaultDuration
     item.duration = duration
     item.payload.duration = duration
     item.payload.durationExtensionCost = itemDurationExtensionCost(item)
@@ -260,6 +330,10 @@ function sanitizeLlmItems() {
 }
 
 function itemDurationExtensionCost(item: { duration?: string, payload: Record<string, any> }) {
+  const model = item.payload.model ? llmModelForItem(item) : undefined
+  if (model)
+    return llmApiDurationExtensionCost(item.duration || item.payload.duration, model)
+
   const duration = item.duration || item.payload.duration || RESOURCE_DEFAULT_DURATION
   return duration === RESOURCE_DEFAULT_DURATION ? 0 : RESOURCE_DURATION_EXTENSION_COST
 }
@@ -307,7 +381,10 @@ function itemUndiscountedEstimate(item: ResourceDraftItem) {
 }
 
 function itemDiscountedEstimate(item: ResourceDraftItem) {
-  return calculateActivityPrice(itemBaseEstimate(item)) + llmRateChangeCost(item) + itemDurationExtensionCost(item)
+  const model = item.resourceType === 'llm_api_quota' ? llmModelForItem(item) : undefined
+  return item.resourceType === 'llm_api_quota'
+    ? calculateLlmApiBudgetActivityPrice(itemBaseEstimate(item), Number(item.payload.budgetLimit || model?.defaultBudgetUsd || 10), model) + llmRateChangeCost(item) + itemDurationExtensionCost(item)
+    : calculateActivityPrice(itemBaseEstimate(item)) + llmRateChangeCost(item) + itemDurationExtensionCost(item)
 }
 
 const totalUndiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemUndiscountedEstimate(item), 0))
@@ -328,6 +405,15 @@ const squareDiscountAmount = computed(() => {
 })
 const checkoutPayableEstimate = computed(() => Math.max(0, couponPayableEstimate.value - squareDiscountAmount.value))
 const totalDiscountSavings = computed(() => Math.max(0, totalUndiscountedEstimate.value - checkoutPayableEstimate.value))
+const checkoutActivityNames = computed(() => {
+  const names = new Set<string>()
+  if (resourceApplicationItems.value.some(item => item.resourceType === 'llm_api_quota' && isGptProItem(item)))
+    names.add(GPT_PRO_ACTIVITY_NAME)
+  if (resourceApplicationItems.value.some(item => itemEstimateParts(item).savings > 0 && !(item.resourceType === 'llm_api_quota' && isGptProItem(item))))
+    names.add(ACTIVITY_NAME)
+  return Array.from(names)
+})
+const checkoutActivityLabel = computed(() => checkoutActivityNames.value.join(' / ') || ACTIVITY_NAME)
 const requiredResourceTermIds = computed(() => selectedResourceTerms.value.map(term => term.id))
 const hasAcceptedAllResourceTerms = computed(() =>
   requiredResourceTermIds.value.length > 0
@@ -477,7 +563,7 @@ function resourceCheckoutDetails(item: ResourceDraftItem) {
     const rpm = Number(item.payload.rpmLimit || model?.rpmLimit || 0).toLocaleString('zh-CN')
     const tpm = Number(item.payload.tpmLimit || model?.tpmLimit || 0).toLocaleString('zh-CN')
     return [
-      `额度 ${formatUsd(Number(item.payload.budgetLimit || model?.defaultBudgetUsd || 0))}`,
+      `${isGptProModel(model) ? '对话' : '额度'} ${formatLlmQuotaForItem(item)}`,
       `RPM ${rpm}`,
       `TPM ${tpm}`,
       item.payload.rateLimitMode === 'custom' ? '自定义限流' : '默认限流',
@@ -907,8 +993,8 @@ onBeforeUnmount(() => {
                     </template>
 
                     <template v-else-if="item.resourceType === 'llm_api_quota'">
-                      <label class="gap-2 grid"><span class="field-label">大模型</span><TxSelect v-model="item.payload.model" panel-background="pure" @update:model-value="onLlmModelChange(item)"><TxSelectItem v-for="model in selectableLlmApiModels" :key="model.key" :value="model.key" :label="`${model.name} · 倍率 ×${LLM_API_MODEL_COST_MULTIPLIERS[model.key as keyof typeof LLM_API_MODEL_COST_MULTIPLIERS] ?? 1}`" /></TxSelect></label>
-                      <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptions" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span></label>
+                      <label class="gap-2 grid"><span class="field-label">大模型</span><TxSelect v-model="item.payload.model" panel-background="pure" @update:model-value="onLlmModelChange(item)"><TxSelectItem v-for="model in selectableLlmApiModels" :key="model.key" :value="model.key" :label="llmModelSelectLabel(model)" /></TxSelect></label>
+                      <label class="gap-2 grid"><span class="field-label">有效期</span><TxSelect v-model="item.duration" panel-background="pure"><TxSelectItem v-for="option in durationOptionsForItem(item)" :key="option.value" :value="option.value" :label="option.label" /></TxSelect><span v-if="itemDurationExtensionCost(item)" class="field-hint text-amber-600 dark:text-amber-300">延长有效期将额外预估消耗 {{ formatPoints(itemDurationExtensionCost(item)) }}，费用很高。</span><span v-else-if="isGptProItem(item)" class="field-hint">GPT PRO 默认有效期 7 天。</span></label>
                       <div class="gap-2 grid">
                         <span class="field-label">RPM / TPM 策略</span>
                         <TxSelect v-model="item.payload.rateLimitMode" panel-background="pure" @update:model-value="onRateLimitModeChange(item)">
@@ -936,10 +1022,12 @@ onBeforeUnmount(() => {
                       </div>
                       <div class="gap-3 grid md:col-span-2">
                         <div class="flex flex-wrap gap-3 items-center justify-between">
-                          <span class="field-label">Token 额度</span><b>{{ formatUsd(item.payload.budgetLimit) }}</b>
-                        </div><TxSlider v-model="item.payload.budgetLimit" :min="10" :max="1000" :step="10" :show-value="false" :format-value="formatUsd" /><div class="quota-marks">
-                          <span v-for="mark in llmBudgetMarks" :key="mark">{{ formatUsd(mark) }}</span>
-                        </div><p v-if="item.payload.budgetLimit > 100" class="field-hint text-amber-600 dark:text-amber-300">
+                          <span class="field-label">{{ llmQuotaFieldLabel(item) }}</span><b>{{ formatLlmQuotaForItem(item) }}</b>
+                        </div><TxSlider v-model="item.payload.budgetLimit" :min="llmQuotaMin(item)" :max="llmQuotaMax(item)" :step="llmQuotaStep(item)" :show-value="false" :format-value="llmQuotaFormatter(item)" /><div class="quota-marks">
+                          <span v-for="mark in llmQuotaMarks(item)" :key="mark">{{ formatLlmQuota(mark, llmModelForItem(item)) }}</span>
+                        </div><p v-if="isGptProItem(item)" class="field-hint text-amber-600 dark:text-amber-300">
+                          GPT PRO 按对话轮次计费，默认 5 轮，每轮消耗较高，本期按 {{ GPT_PRO_ACTIVITY_NAME }} 处理。
+                        </p><p v-else-if="item.payload.budgetLimit > 100" class="field-hint text-amber-600 dark:text-amber-300">
                           超过 $100 的额度申请需要更长时间审核
                         </p>
                       </div>
@@ -1092,21 +1180,21 @@ onBeforeUnmount(() => {
             </label>
             <div class="order-total-table mt-3">
               <div>
-                <span>累计预估积分消耗</span>
+                <span>原价合计</span>
                 <b>{{ formatPoints(totalUndiscountedEstimate) }}</b>
               </div>
               <div class="is-discount">
                 <span class="order-total-label">
                   <i class="order-benefit-tag">限时福利</i>
-                  {{ ACTIVITY_NAME }} 后价格
+                  {{ checkoutActivityLabel }} 后价格
                 </span>
                 <b>{{ formatPoints(totalDiscountedEstimate) }}</b>
               </div>
-              <div class="is-discount">
+              <div class="is-discount" :class="{ 'is-muted': couponDiscountAmount <= 0 }">
                 <span>优惠券抵扣</span>
                 <b>-{{ formatPoints(couponDiscountAmount) }}</b>
               </div>
-              <div class="is-discount">
+              <div class="is-discount" :class="{ 'is-muted': squareDiscountAmount <= 0 }">
                 <span>广场发布折扣</span>
                 <b>-{{ formatPoints(squareDiscountAmount) }}</b>
               </div>

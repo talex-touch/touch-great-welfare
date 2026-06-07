@@ -153,6 +153,14 @@ async function latestBalanceForUser(env: WorkerEnv, userId: string) {
   return result.rows[0]?.balance_after
 }
 
+async function currentBalanceForUser(env: WorkerEnv, users: Array<{ id: string, points: number }>, userId: string) {
+  const ledgerBalance = await latestBalanceForUser(env, userId)
+  if (ledgerBalance !== undefined)
+    return ledgerBalance
+
+  return users.find(item => item.id === userId)?.points ?? 0
+}
+
 async function insertPointTransaction(env: WorkerEnv, tx: Required<Omit<CreditTransaction, 'balanceAfter'>> & { balanceAfter: number }) {
   await ensurePointTransactionSchema(env)
   if (shouldUseD1(env)) {
@@ -460,6 +468,29 @@ export async function pointTransactionExistsByRef(env: WorkerEnv, type: CreditTr
   return (result.rowCount ?? 0) > 0
 }
 
+export async function syncUserPointBalancesFromLedger(env: WorkerEnv, state: unknown) {
+  const users = stateUsers(state)
+  let changed = false
+
+  for (const user of users) {
+    if (!isRecord(user) || typeof user.id !== 'string')
+      continue
+
+    const ledgerBalance = await latestBalanceForUser(env, user.id)
+    if (ledgerBalance === undefined)
+      continue
+
+    const currentPoints = Number(user.points)
+    if (Number.isFinite(currentPoints) && currentPoints === ledgerBalance)
+      continue
+
+    user.points = ledgerBalance
+    changed = true
+  }
+
+  return changed
+}
+
 export async function handlePointRequest(request: Request, env: WorkerEnv) {
   try {
     const url = new URL(request.url)
@@ -492,8 +523,9 @@ export async function handlePointRequest(request: Request, env: WorkerEnv) {
     const requestedUserId = url.searchParams.get('userId') || ''
     const targetUserId = user.role === 'admin' ? requestedUserId : user.id
     const balance = targetUserId
-      ? users.find(item => item.id === targetUserId)?.points ?? user.points
-      : users.reduce((sum, item) => sum + item.points, 0)
+      ? await currentBalanceForUser(env, users, targetUserId)
+      : (await Promise.all(users.map(item => currentBalanceForUser(env, users, item.id))))
+          .reduce((sum, value) => sum + value, 0)
     return json({
       ...result,
       balance,

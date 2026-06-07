@@ -3,7 +3,7 @@ import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatBytes, formatDate, formatPoints, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
+import { formatBytes, formatDate, formatPoints, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
 import ApplicationThread from './ApplicationThread.vue'
@@ -54,6 +54,22 @@ const application = computed(() => state.applications.find((item) => {
 }))
 
 const messages = computed(() => application.value?.messages ?? [])
+
+const llmBudgetText = computed(() => {
+  if (!application.value?.llmApiBudgetUsd)
+    return '-'
+  return isGptProModel(application.value.llmApiModelKey)
+    ? `${application.value.llmApiBudgetUsd} 轮`
+    : `$${application.value.llmApiBudgetUsd}`
+})
+
+const llmPointRateText = computed(() => {
+  if (!application.value?.llmApiPointRate)
+    return '-'
+  return isGptProModel(application.value.llmApiModelKey)
+    ? `${formatPoints(application.value.llmApiPointRate)} / 轮`
+    : `${application.value.llmApiPointRate} 积分 / 美元`
+})
 
 const prepaidStateText = computed(() => {
   if (!application.value)
@@ -191,12 +207,12 @@ function handleComplete() {
               <b>{{ application.llmApiModelName ?? '-' }}</b>
             </div>
             <div class="application-detail-stat">
-              <span>额度</span>
-              <b>${{ application.llmApiBudgetUsd ?? '-' }}</b>
+              <span>{{ isGptProModel(application.llmApiModelKey) ? '对话轮次' : '额度' }}</span>
+              <b>{{ llmBudgetText }}</b>
             </div>
             <div class="application-detail-stat">
               <span>换算</span>
-              <b>{{ application.llmApiPointRate ?? '-' }} 积分 / 美元</b>
+              <b>{{ llmPointRateText }}</b>
             </div>
             <div class="application-detail-stat">
               <span>IP 限制</span>
