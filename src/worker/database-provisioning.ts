@@ -89,15 +89,36 @@ function normalizeExpiresInDays(value: unknown) {
   return Math.max(1, Math.min(365, Math.trunc(numberValue(value, DEFAULT_EXPIRES_IN_DAYS))))
 }
 
-function normalizeNamePart(value: unknown, fallback: string) {
+function normalizeNamePart(value: unknown, fallback: string, maxLength = 32) {
   const text = typeof value === 'string' ? value : fallback
   const normalized = text
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, '_')
     .replace(/^_+|_+$/g, '')
-    .slice(0, 32)
+    .slice(0, maxLength)
   return normalized || fallback
+}
+
+function stableIdentifierHash(parts: unknown[]) {
+  const text = parts.map(part => String(part ?? '')).join('|')
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36).padStart(7, '0').slice(0, 7)
+}
+
+function composedIdentifier(parts: unknown[], fallback: string) {
+  const suffix = stableIdentifierHash(parts)
+  const baseMaxLength = 63 - suffix.length - 1
+  const base = normalizeNamePart(
+    parts.map(part => normalizeNamePart(part, 'x', 16)).join('_'),
+    fallback,
+    baseMaxLength,
+  )
+  return normalizeNamePart(`${base}_${suffix}`, fallback, 63)
 }
 
 function quoteIdent(value: string) {
@@ -294,22 +315,18 @@ function databaseValue(item: ApplicationItem, ...keys: string[]) {
 function databaseNameForItem(config: Awaited<ReturnType<typeof getEffectiveDatabaseProvisionConfig>>, user: User, item: ApplicationItem) {
   const approved = databaseValue(item, 'databaseName', 'dbName')
   if (approved)
-    return normalizeNamePart(approved, `${config.databasePrefix}_db`)
+    return normalizeNamePart(approved, `${config.databasePrefix}_db`, 63)
 
   const env = normalizeNamePart(databaseValue(item, 'environment'), 'dev')
-  const userPart = normalizeNamePart(user.id, 'user')
-  const itemPart = normalizeNamePart(item.id, 'item')
-  return normalizeNamePart(`${config.databasePrefix}_${env}_${userPart}_${itemPart}`, `${config.databasePrefix}_db`)
+  return composedIdentifier([config.databasePrefix, env, user.id, item.id], `${config.databasePrefix}_db`)
 }
 
 function usernameForItem(config: Awaited<ReturnType<typeof getEffectiveDatabaseProvisionConfig>>, user: User, item: ApplicationItem) {
   const approved = databaseValue(item, 'username', 'userName')
   if (approved)
-    return normalizeNamePart(approved, `${config.databasePrefix}_user`)
+    return normalizeNamePart(approved, `${config.databasePrefix}_user`, 63)
 
-  const userPart = normalizeNamePart(user.id, 'user')
-  const itemPart = normalizeNamePart(item.id, 'item')
-  return normalizeNamePart(`${config.databasePrefix}_${userPart}_${itemPart}`, `${config.databasePrefix}_user`)
+  return composedIdentifier([config.databasePrefix, user.id, item.id], `${config.databasePrefix}_user`)
 }
 
 function permissionForItem(item: ApplicationItem) {

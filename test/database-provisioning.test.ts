@@ -334,4 +334,66 @@ describe('database resource provisioning', () => {
     const retryState = await readWelfareState(env)
     expect(retryState.applications[0].resourceItems?.[0].provisionNote).toContain('明文密码不再返回')
   })
+
+  it('generates distinct default names for multiple items with long user ids', async () => {
+    const state = createState()
+    const longUserId = 'user_with_a_very_long_identifier_that_would_hide_item_id_when_truncated'
+    const user = state.users[1]!
+    const application = state.applications[0]!
+    const firstItem = application.resourceItems![0]!
+
+    user.id = longUserId
+    application.userId = longUserId
+    delete firstItem.approvedPayload
+    firstItem.requestedPermission = 'readonly'
+    firstItem.payload = {
+      name: 'analytics',
+      environment: 'dev',
+      permission: 'readonly',
+      operationScope: '读取统计数据',
+      duration: '7 天',
+    }
+    application.resourceItems!.push({
+      ...firstItem,
+      id: 'item_2',
+      payload: {
+        ...firstItem.payload,
+        operationScope: '读取审计数据',
+      },
+    })
+
+    const d1 = createMemoryD1(state)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+      }),
+    }), env)
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    expect(d1.data.bindings).toHaveLength(2)
+    const databaseNames = d1.data.bindings.map(item => String(item.database_name))
+    const usernames = d1.data.bindings.map(item => String(item.username))
+    expect(new Set(databaseNames).size).toBe(2)
+    expect(new Set(usernames).size).toBe(2)
+    expect(databaseNames.every(name => name.length <= 63)).toBe(true)
+    expect(usernames.every(name => name.length <= 63)).toBe(true)
+  })
 })
