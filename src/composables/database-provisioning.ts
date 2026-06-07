@@ -20,6 +20,23 @@ export interface SaveDatabaseProvisionConfigPayload {
   clearOnePanelApiKey?: boolean
 }
 
+export interface OnePanelStatusSnapshot {
+  configured: boolean
+  baseUrl: string
+  checkedAt: string
+  ok: boolean
+  endpoints: Array<{
+    id: string
+    label: string
+    method: 'GET' | 'POST'
+    path: string
+    ok: boolean
+    status: number
+    error?: string
+    data: unknown
+  }>
+}
+
 async function readErrorMessage(response: Response) {
   const fallback = '数据库发放接口请求失败'
   const text = await response.text()
@@ -64,6 +81,13 @@ export function saveDatabaseProvisionConfig(adminUserId: string, payload: SaveDa
 
 export function testDatabaseProvisionConfig(adminUserId: string) {
   return requestDatabaseProvision<{ ok: boolean }>('/api/database-provision/test', adminUserId, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function loadOnePanelStatus(adminUserId: string) {
+  return requestDatabaseProvision<OnePanelStatusSnapshot>('/api/database-provision/onepanel-status', adminUserId, {
     method: 'POST',
     body: JSON.stringify({}),
   })

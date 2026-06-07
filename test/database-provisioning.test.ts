@@ -29,6 +29,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 
 const { handleAiRequest } = await import('../src/worker/ai')
 const { createDatabaseForResourceItem, handleDatabaseProvisionRequest } = await import('../src/worker/database-provisioning')
+const { md5Hex } = await import('../src/worker/ldc-credit')
 const { createSessionCookie } = await import('../src/worker/session')
 const { readWelfareState } = await import('../src/worker/welfare-state')
 
@@ -253,6 +254,64 @@ describe('database resource provisioning', () => {
   beforeEach(() => {
     poolQueries.length = 0
     onAdvisoryLock = undefined
+    vi.mocked(fetch).mockImplementation(async () => Response.json({ state: {} }))
+  })
+
+  it('reads OnePanel status snapshots with signed API key headers', async () => {
+    const d1 = createMemoryD1(createState())
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+    const calls: Array<{ url: string, init?: RequestInit }> = []
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      calls.push({ url: String(input), init })
+      const url = new URL(String(input))
+      return Response.json({ code: 200, data: { path: url.pathname } })
+    })
+
+    const configResponse = await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+        onePanelBaseUrl: 'https://panel.example.com/',
+        onePanelApiKey: 'op_test_key',
+      }),
+    }), env)
+    expect(configResponse.ok).toBe(true)
+
+    const statusResponse = await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/onepanel-status', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }), env)
+
+    expect(statusResponse.ok).toBe(true)
+    const snapshot = await statusResponse.json() as {
+      ok: boolean
+      baseUrl: string
+      endpoints: Array<{ ok: boolean, path: string, data: { data: { path: string } } }>
+    }
+    expect(snapshot.ok).toBe(true)
+    expect(snapshot.baseUrl).toBe('https://panel.example.com')
+    expect(snapshot.endpoints).toHaveLength(3)
+    expect(snapshot.endpoints.every(item => item.ok)).toBe(true)
+    expect(calls.map(item => new URL(item.url).pathname)).toEqual([
+      '/api/v2/toolbox/device/base',
+      '/api/v1/dashboard/base/os',
+      '/api/v1/dashboard/current',
+    ])
+
+    const firstHeaders = new Headers(calls[0].init?.headers as HeadersInit)
+    const timestamp = firstHeaders.get('1Panel-Timestamp') || ''
+    expect(timestamp).toBeTruthy()
+    expect(firstHeaders.get('1Panel-Token')).toBe(md5Hex(`1Panelop_test_key${timestamp}`))
   })
 
   it('creates a PostgreSQL database binding for approved database resource items', async () => {

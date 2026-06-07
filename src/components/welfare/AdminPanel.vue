@@ -61,6 +61,7 @@ const {
   refreshDatabaseProvisionConfig,
   persistDatabaseProvisionConfig,
   verifyDatabaseProvisionConfig,
+  refreshOnePanelStatus,
   refreshEducationMailConfig,
   persistEducationMailConfig,
   verifyEducationMailConfig,
@@ -1565,6 +1566,14 @@ function testDatabaseProvisionProviderConfig() {
   }, '数据库 root 连接测试通过')
 }
 
+function readOnePanelStatus() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await refreshOnePanelStatus()
+  }, 'OnePanel 状态读取完成')
+}
+
 function saveEducationMailProviderConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -2335,12 +2344,12 @@ onMounted(() => {
                     <TxInput v-model="databaseProvisionConfigForm.databasePrefix" :disabled="!isAdmin || databaseProvisionConfigForm.loading" placeholder="twg" />
                   </label>
                   <label class="gap-2 grid">
-                    <span class="field-label">OnePanel 地址（预留）</span>
+                    <span class="field-label">OnePanel 地址</span>
                     <TxInput v-model="databaseProvisionConfigForm.onePanelBaseUrl" :disabled="!isAdmin || databaseProvisionConfigForm.loading" placeholder="https://panel.example.com" />
-                    <span class="field-hint">当前仅保存配置，后续可接入 OnePanel 实例、数据库和资源状态查询。</span>
+                    <span class="field-hint">用于读取 OnePanel 设备、系统和实时概览状态；不会执行写操作。</span>
                   </label>
                   <label class="gap-2 grid">
-                    <span class="field-label">OnePanel API Key（预留）</span>
+                    <span class="field-label">OnePanel API Key</span>
                     <TxInput v-model="databaseProvisionConfigForm.onePanelApiKey" :disabled="!isAdmin || databaseProvisionConfigForm.loading" type="password" :placeholder="databaseProvisionConfigForm.onePanelApiKeyMasked || 'op_...'" />
                   </label>
                 </div>
@@ -2355,9 +2364,28 @@ onMounted(() => {
                   <TxButton variant="secondary" :disabled="!isAdmin || databaseProvisionConfigForm.testing || databaseProvisionConfigForm.loading" @click="testDatabaseProvisionProviderConfig">
                     {{ databaseProvisionConfigForm.testing ? '测试中...' : '测试 root 连接' }}
                   </TxButton>
+                  <TxButton variant="secondary" :disabled="!isAdmin || databaseProvisionConfigForm.checkingOnePanel || databaseProvisionConfigForm.loading" @click="readOnePanelStatus">
+                    {{ databaseProvisionConfigForm.checkingOnePanel ? '读取中...' : '读取 OnePanel 状态' }}
+                  </TxButton>
                 </div>
                 <div v-if="databaseProvisionConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
                   {{ databaseProvisionConfigForm.message }}
+                </div>
+                <div v-if="databaseProvisionConfigForm.onePanelStatusSnapshot" class="mt-5 space-y-3">
+                  <div class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ databaseProvisionConfigForm.onePanelStatusSnapshot.baseUrl }} · {{ formatDate(databaseProvisionConfigForm.onePanelStatusSnapshot.checkedAt) }}
+                  </div>
+                  <div v-for="endpoint in databaseProvisionConfigForm.onePanelStatusSnapshot.endpoints" :key="endpoint.id" class="p-3 rounded-2xl bg-slate-50 dark:bg-white/5">
+                    <div class="text-xs fw-900 flex flex-wrap gap-2 items-center">
+                      <TxStatusBadge :text="endpoint.ok ? '可用' : '失败'" :status="endpoint.ok ? 'success' : 'danger'" size="sm" />
+                      <span>{{ endpoint.label }}</span>
+                      <span class="text-slate-500 dark:text-slate-400">{{ endpoint.method }} {{ endpoint.path }} · {{ endpoint.status || '网络错误' }}</span>
+                    </div>
+                    <div v-if="endpoint.error" class="text-xs text-red-600 mt-2 dark:text-red-200">
+                      {{ endpoint.error }}
+                    </div>
+                    <pre class="text-xs leading-5 mt-2 whitespace-pre-wrap break-all">{{ JSON.stringify(endpoint.data, null, 2) }}</pre>
+                  </div>
                 </div>
                 <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
                   当前自动发放仅支持 PostgreSQL；MySQL、Redis、MongoDB 和其他 OnePanel 托管资源会保留在人工处理队列中。

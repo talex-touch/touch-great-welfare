@@ -9,7 +9,7 @@ import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from './ai'
-import { loadDatabaseProvisionConfig, saveDatabaseProvisionConfig, testDatabaseProvisionConfig } from './database-provisioning'
+import { loadDatabaseProvisionConfig, loadOnePanelStatus, saveDatabaseProvisionConfig, testDatabaseProvisionConfig } from './database-provisioning'
 import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig, verifyEducationMailChallenge } from './education-mail'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
@@ -337,9 +337,12 @@ export const databaseProvisionConfigForm = reactive({
   onePanelBaseUrl: '',
   onePanelApiKey: '',
   onePanelApiKeyMasked: '',
+  onePanelStatus: '',
+  onePanelStatusSnapshot: null as Awaited<ReturnType<typeof loadOnePanelStatus>> | null,
   configured: false,
   loading: false,
   testing: false,
+  checkingOnePanel: false,
   message: '',
 })
 
@@ -2142,6 +2145,26 @@ export function useWelfareUiState() {
     }
   }
 
+  async function refreshOnePanelStatus() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    databaseProvisionConfigForm.checkingOnePanel = true
+    databaseProvisionConfigForm.onePanelStatus = ''
+    databaseProvisionConfigForm.onePanelStatusSnapshot = null
+    try {
+      const snapshot = await loadOnePanelStatus(welfare.currentUser.value.id)
+      databaseProvisionConfigForm.onePanelStatusSnapshot = snapshot
+      const okCount = snapshot.endpoints.filter(item => item.ok).length
+      databaseProvisionConfigForm.onePanelStatus = `OnePanel 状态读取完成：${okCount}/${snapshot.endpoints.length} 个端点可用`
+      databaseProvisionConfigForm.message = databaseProvisionConfigForm.onePanelStatus
+    }
+    finally {
+      databaseProvisionConfigForm.checkingOnePanel = false
+    }
+  }
+
   function applyEducationMailConfig(config: Awaited<ReturnType<typeof loadEducationMailConfig>>) {
     educationMailConfigForm.enabled = config.enabled
     educationMailConfigForm.baseUrl = config.baseUrl
@@ -3179,6 +3202,7 @@ export function useWelfareUiState() {
     refreshDatabaseProvisionConfig,
     persistDatabaseProvisionConfig,
     verifyDatabaseProvisionConfig,
+    refreshOnePanelStatus,
     refreshEducationMailConfig,
     persistEducationMailConfig,
     verifyEducationMailConfig,

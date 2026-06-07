@@ -1,8 +1,9 @@
 import type { WorkerEnv } from './welfare-state'
 import type { ApplicationItem, User } from '~/composables/welfare'
 import { Pool } from 'pg'
-import { assertAdminRequest, boolValue, createId, errorResponse, json, maskSecret, readJson } from './auth'
+import { assertAdminRequest, boolValue, createId, errorResponse, fetchWithTimeout, json, maskSecret, readJson } from './auth'
 import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
+import { md5Hex } from './ldc-credit'
 import { ensureNotificationSchema } from './notifications'
 import { getPool, shouldUseD1 } from './welfare-state'
 
@@ -65,10 +66,23 @@ interface DatabaseProvisionResult {
   reused?: boolean
 }
 
+interface OnePanelStatusEndpoint {
+  id: string
+  label: string
+  method: 'GET' | 'POST'
+  path: string
+  body?: unknown
+}
+
 const DATABASE_PROVISION_CONFIG_ID = 'default'
 const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_DATABASE_PREFIX = 'twg'
 const SUPPORTED_DATABASE_SUBTYPES = new Set(['postgresql'])
+const ONE_PANEL_STATUS_ENDPOINTS: OnePanelStatusEndpoint[] = [
+  { id: 'v2_device_base', label: '设备基础信息', method: 'POST', path: '/api/v2/toolbox/device/base', body: {} },
+  { id: 'v1_base_os', label: '系统基础信息', method: 'GET', path: '/api/v1/dashboard/base/os' },
+  { id: 'v1_dashboard_current', label: '实时概览', method: 'GET', path: '/api/v1/dashboard/current?ioOption=all&netOption=all&scope=all' },
+]
 
 function encryptionSecret(env: WorkerEnv) {
   return env.NOTIFY_SECRET_KEY ?? ''
@@ -87,6 +101,29 @@ function numberValue(value: unknown, fallback: number) {
 
 function normalizeExpiresInDays(value: unknown) {
   return Math.max(1, Math.min(365, Math.trunc(numberValue(value, DEFAULT_EXPIRES_IN_DAYS))))
+}
+
+function normalizeOnePanelBaseUrl(value: unknown) {
+  const text = typeof value === 'string' ? value.trim().replace(/\/+$/, '') : ''
+  if (!text)
+    return ''
+
+  let url: URL
+  try {
+    url = new URL(text)
+  }
+  catch {
+    throw new Error('OnePanel 地址格式无效')
+  }
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('OnePanel 地址必须使用 HTTP 或 HTTPS')
+
+  url.username = ''
+  url.password = ''
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  url.search = ''
+  url.hash = ''
+  return url.toString().replace(/\/+$/, '')
 }
 
 function normalizeNamePart(value: unknown, fallback: string, maxLength = 32) {
@@ -190,7 +227,7 @@ async function getEffectiveDatabaseProvisionConfig(env: WorkerEnv) {
     rootUrl,
     defaultExpiresInDays: normalizeExpiresInDays(stored?.default_expires_in_days),
     databasePrefix: normalizeNamePart(stored?.database_prefix, DEFAULT_DATABASE_PREFIX),
-    onePanelBaseUrl: stored?.onepanel_base_url?.trim() || '',
+    onePanelBaseUrl: normalizeOnePanelBaseUrl(stored?.onepanel_base_url),
     onePanelApiKey,
     configured: !!rootUrl,
     source: stored ? 'admin' as const : 'empty' as const,
@@ -230,7 +267,7 @@ async function saveDatabaseProvisionConfig(env: WorkerEnv, payload: SaveDatabase
     rootUrlEncrypted,
     defaultExpiresInDays: normalizeExpiresInDays(payload.defaultExpiresInDays),
     databasePrefix: normalizeNamePart(payload.databasePrefix, DEFAULT_DATABASE_PREFIX),
-    onePanelBaseUrl: payload.onePanelBaseUrl?.trim() || '',
+    onePanelBaseUrl: normalizeOnePanelBaseUrl(payload.onePanelBaseUrl),
     onePanelApiKeyEncrypted,
   }
 
@@ -556,6 +593,95 @@ async function testDatabaseProvisionConfig(env: WorkerEnv) {
   return { ok: true }
 }
 
+function onePanelRequestHeaders(apiKey: string) {
+  const timestamp = Math.floor(Date.now() / 1000).toString()
+  return {
+    'content-type': 'application/json',
+    '1Panel-Token': md5Hex(`1Panel${apiKey}${timestamp}`),
+    '1Panel-Timestamp': timestamp,
+  }
+}
+
+function onePanelPayloadError(payload: unknown) {
+  if (!payload || typeof payload !== 'object')
+    return ''
+
+  const data = payload as { code?: unknown, message?: unknown, msg?: unknown }
+  const code = data.code === undefined || data.code === null ? '' : String(data.code)
+  if (!code || code === '200' || code === '0')
+    return ''
+
+  return String(data.message || data.msg || `OnePanel 返回异常状态：${code}`)
+}
+
+async function fetchOnePanelEndpoint(config: Awaited<ReturnType<typeof getEffectiveDatabaseProvisionConfig>>, endpoint: OnePanelStatusEndpoint) {
+  const response = await fetchWithTimeout(`${config.onePanelBaseUrl}${endpoint.path}`, {
+    method: endpoint.method,
+    headers: onePanelRequestHeaders(config.onePanelApiKey),
+    body: endpoint.method === 'POST' ? JSON.stringify(endpoint.body ?? {}) : undefined,
+  }, 12000)
+
+  const text = await response.text()
+  let data: unknown = text
+  if (text) {
+    try {
+      data = JSON.parse(text) as unknown
+    }
+    catch {
+      data = text
+    }
+  }
+  else {
+    data = {}
+  }
+
+  const payloadError = response.ok ? onePanelPayloadError(data) : ''
+  return {
+    id: endpoint.id,
+    label: endpoint.label,
+    method: endpoint.method,
+    path: endpoint.path,
+    ok: response.ok && !payloadError,
+    status: response.status,
+    error: response.ok ? payloadError || undefined : `OnePanel 请求失败：${response.status}`,
+    data,
+  }
+}
+
+async function fetchOnePanelStatus(env: WorkerEnv) {
+  const config = await getEffectiveDatabaseProvisionConfig(env)
+  if (!config.onePanelBaseUrl)
+    throw new Error('OnePanel 地址未配置')
+  if (!config.onePanelApiKey)
+    throw new Error('OnePanel API Key 未配置')
+
+  const endpoints = await Promise.all(ONE_PANEL_STATUS_ENDPOINTS.map(async (endpoint) => {
+    try {
+      return await fetchOnePanelEndpoint(config, endpoint)
+    }
+    catch (error) {
+      return {
+        id: endpoint.id,
+        label: endpoint.label,
+        method: endpoint.method,
+        path: endpoint.path,
+        ok: false,
+        status: 0,
+        error: error instanceof Error ? error.message : 'OnePanel 请求失败',
+        data: {},
+      }
+    }
+  }))
+
+  return {
+    configured: true,
+    baseUrl: config.onePanelBaseUrl,
+    checkedAt: new Date().toISOString(),
+    ok: endpoints.some(endpoint => endpoint.ok),
+    endpoints,
+  }
+}
+
 export async function createDatabaseForResourceItem(env: WorkerEnv, payload: DatabaseProvisionPayload) {
   const existing = await findActiveDatabaseResourceBinding(env, payload.applicationId, payload.item.id)
   if (existing)
@@ -630,6 +756,11 @@ export async function handleDatabaseProvisionRequest(request: Request, env: Work
     if (url.pathname === '/api/database-provision/test' && request.method === 'POST') {
       await assertAdminRequest(request, env)
       return json(await testDatabaseProvisionConfig(env))
+    }
+
+    if (url.pathname === '/api/database-provision/onepanel-status' && request.method === 'POST') {
+      await assertAdminRequest(request, env)
+      return json(await fetchOnePanelStatus(env))
     }
 
     return errorResponse(new Error('Not Found'), 404)

@@ -51,7 +51,7 @@ export function createEpaySign(params: LdcSignParams, secret: string) {
     .map(([key, value]) => `${key}=${stringifySignValue(value)}`)
     .join('&')
 
-  return md5(`${payload}${secret}`)
+  return md5Hex(`${payload}${secret}`)
 }
 
 export function verifyEpaySign(params: LdcSignParams, secret: string) {
@@ -133,8 +133,8 @@ function timingSafeEqual(left: string, right: string) {
 }
 
 // Compact MD5 implementation for Cloudflare Workers and browsers.
-// It is used only for the LINUX DO Credit EasyPay-compatible signature.
-function md5(input: string) {
+// It is used for integrations that require MD5-compatible request signatures.
+export function md5Hex(input: string) {
   function rotateLeft(value: number, shift: number) {
     return (value << shift) | (value >>> (32 - shift))
   }
