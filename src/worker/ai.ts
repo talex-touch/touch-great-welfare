@@ -17,6 +17,7 @@ import {
 } from './auth'
 import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createAndDispatchNotification, ensureNotificationSchema } from './notifications'
+import { appendPointTransaction, pointTransactionExistsByRef } from './points'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type AiImageJobStatus = 'pending' | 'succeeded' | 'failed'
@@ -944,26 +945,6 @@ async function callImageProvider(env: WorkerEnv, config: Awaited<ReturnType<type
   throw new Error('AI Provider 未返回图片')
 }
 
-function adjustPoints(state: WelfareState, userId: string, delta: number, reason: string, refId: string) {
-  const user = state.users.find(item => item.id === userId)
-  if (!user)
-    throw new Error('用户不存在')
-  const next = user.points + delta
-  if (next < 0)
-    throw new Error('积分不足')
-
-  user.points = next
-  state.transactions.unshift({
-    id: createId('tx'),
-    userId,
-    delta,
-    type: delta < 0 ? 'spend' : 'refund',
-    reason,
-    refId,
-    createdAt: now(),
-  })
-}
-
 function updateApplicationForImage(state: WelfareState, applicationId: string | undefined, userId: string, status: 'completed' | 'rejected', answer: string) {
   if (!applicationId)
     return
@@ -1033,12 +1014,24 @@ async function createImage(request: Request, env: WorkerEnv) {
         const imageCost = Number.isFinite(imageApplication.cost)
           ? imageApplication.cost
           : calculateActivityPrice(REQUEST_COST.image)
-        adjustPoints(state, targetUserId, -imageCost, 'Image 生成历史补扣', payload.applicationId || jobId)
+        await appendPointTransaction(env, {
+          userId: targetUserId,
+          delta: -imageCost,
+          type: 'spend',
+          reason: 'Image 生成历史补扣',
+          refId: payload.applicationId || jobId,
+        }, state)
         imageApplication.costCharged = true
       }
     }
     else if (!payload.applicationId) {
-      adjustPoints(state, targetUserId, -calculateActivityPrice(REQUEST_COST.image), 'Image 生成预扣', payload.applicationId || jobId)
+      await appendPointTransaction(env, {
+        userId: targetUserId,
+        delta: -calculateActivityPrice(REQUEST_COST.image),
+        type: 'spend',
+        reason: 'Image 生成预扣',
+        refId: payload.applicationId || jobId,
+      }, state)
     }
     await writeWelfareState(env, state)
 
@@ -1073,10 +1066,17 @@ async function createImage(request: Request, env: WorkerEnv) {
     const rollbackState = await readWelfareState(env) as Partial<WelfareState>
     assertWelfareState(rollbackState)
     const refId = payload.applicationId || jobId
-    const alreadyRefunded = rollbackState.transactions.some(item => item.type === 'refund' && item.refId === refId)
+    const alreadyRefunded = await pointTransactionExistsByRef(env, 'refund', refId)
     const imageApplication = imageApplicationForRequest(rollbackState, payload.applicationId, auth.user.id, auth.user.role === 'admin')
-    if (!alreadyRefunded && imageApplication?.costCharged)
-      adjustPoints(rollbackState, targetUserId, imageApplication.cost, 'Image 生成失败退款', refId)
+    if (!alreadyRefunded && imageApplication?.costCharged) {
+      await appendPointTransaction(env, {
+        userId: targetUserId,
+        delta: imageApplication.cost,
+        type: 'refund',
+        reason: 'Image 生成失败退款',
+        refId,
+      }, rollbackState)
+    }
     updateApplicationForImage(rollbackState, payload.applicationId, targetUserId, 'rejected', error instanceof Error ? error.message : '图片生成失败')
     await writeWelfareState(env, rollbackState)
 

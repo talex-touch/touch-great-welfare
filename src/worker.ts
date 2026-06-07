@@ -3,6 +3,7 @@ import { handleAiRequest } from './worker/ai'
 import { handleGitHubAppRequest } from './worker/github-app'
 import { handleNotificationRequest } from './worker/notifications'
 import { handleOAuthRequest } from './worker/oauth'
+import { handlePointRequest } from './worker/points'
 import { handleRechargeRequest } from './worker/recharge'
 import { handleSub2ApiRequest } from './worker/sub2api'
 import { handleTurnstileRequest } from './worker/turnstile'
@@ -22,6 +23,8 @@ export default {
       return handleOAuthRequest(request, env)
     if (url.pathname.startsWith('/api/notifications'))
       return handleNotificationRequest(request, env)
+    if (url.pathname.startsWith('/api/points/'))
+      return handlePointRequest(request, env)
     if (url.pathname.startsWith('/api/recharge/'))
       return handleRechargeRequest(request, env)
     if (url.pathname.startsWith('/api/sub2api/'))

@@ -24,6 +24,7 @@ import {
   urlBase64ToUint8Array,
 } from './notifications'
 import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from './oauth'
+import { loadPointTransactions } from './points'
 import { createRechargeOrder, loadRechargeConfig, loadRechargeStatus, saveRechargeConfig } from './recharge'
 import { createSub2ApiKey, deleteSub2ApiKey, loadSub2ApiConfig, loadSub2ApiKeys, saveSub2ApiConfig, testSub2ApiConfig } from './sub2api'
 import { verifyTurnstileToken } from './turnstile'
@@ -476,6 +477,14 @@ export const adminTabItems = [
 ] as const
 export const activeAdminTab = ref<(typeof ADMIN_TABS)[keyof typeof ADMIN_TABS]>(ADMIN_TABS.login)
 export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
+export const pointTransactions = ref<Awaited<ReturnType<typeof loadPointTransactions>>['rows']>([])
+export const pointTransactionSummary = reactive({
+  income: 0,
+  outcome: 0,
+  count: 0,
+  loading: false,
+  message: '',
+})
 
 export const pricingSummary = {
   activityName: ACTIVITY_NAME,
@@ -542,14 +551,7 @@ export function useWelfareUiState() {
   const selectedResourceTerms = computed(() => termsForResourceTypes(resourceApplicationForm.selectedResourceTypes))
   const heroProgress = computed(() => Math.min(100, Math.round((welfare.state.users.length / 12) * 100) + 24))
   const pendingCount = computed(() => welfare.pendingApplications.value.length + welfare.pendingStudentVerifications.value.length)
-  const latestTransactions = computed(() => {
-    if (!welfare.currentUser.value)
-      return []
-
-    return welfare.state.transactions
-      .filter(item => item.userId === welfare.currentUser.value?.id)
-      .slice(0, 8)
-  })
+  const latestTransactions = computed(() => pointTransactions.value.slice(0, 8))
   const currentUserCoupons = computed(() => welfare.currentUserCoupons.value)
   const availableCurrentUserCoupons = computed(() => {
     const user = welfare.currentUser.value
@@ -925,6 +927,7 @@ export function useWelfareUiState() {
     })
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
+    await refreshPointTransactions()
   }
 
   function resourceReviewDraftFor(itemId: string) {
@@ -1741,6 +1744,7 @@ export function useWelfareUiState() {
     }
     finally {
       await welfare.reloadWelfareState()
+      await refreshPointTransactions()
     }
   }
 
@@ -1776,6 +1780,7 @@ export function useWelfareUiState() {
     }
     finally {
       await welfare.reloadWelfareState()
+      await refreshPointTransactions()
     }
   }
 
@@ -1912,10 +1917,55 @@ export function useWelfareUiState() {
     return status
   }
 
+  async function refreshPointTransactions(options: Parameters<typeof loadPointTransactions>[0] & { scope?: 'current' | 'admin' } = {}) {
+    const user = welfare.currentUser.value
+    if (!user)
+      return
+
+    const { scope = 'current', ...query } = options
+    const shouldLoadAllPages = scope === 'admin'
+    pointTransactionSummary.loading = true
+    pointTransactionSummary.message = ''
+    try {
+      const firstResult = await loadPointTransactions({
+        limit: 200,
+        ...query,
+        userId: scope === 'current' ? user.id : query.userId,
+      })
+      const rows = [...firstResult.rows]
+      let nextCursor = firstResult.nextCursor
+      if (shouldLoadAllPages) {
+        while (nextCursor) {
+          const nextResult = await loadPointTransactions({
+            limit: 200,
+            ...query,
+            cursor: nextCursor,
+            userId: query.userId,
+          })
+          rows.push(...nextResult.rows)
+          nextCursor = nextResult.nextCursor
+        }
+      }
+
+      pointTransactions.value = rows
+      pointTransactionSummary.income = firstResult.summary.income
+      pointTransactionSummary.outcome = firstResult.summary.outcome
+      pointTransactionSummary.count = firstResult.summary.count
+    }
+    catch (error) {
+      pointTransactionSummary.message = error instanceof Error ? error.message : '积分流水加载失败'
+      throw error
+    }
+    finally {
+      pointTransactionSummary.loading = false
+    }
+  }
+
   async function checkInToday() {
     const result = welfare.checkInToday()
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
+    await refreshPointTransactions()
     return result
   }
 
@@ -1960,6 +2010,7 @@ export function useWelfareUiState() {
     delete squareBoostDrafts[postId]
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
+    await refreshPointTransactions()
     return result
   }
 
@@ -1968,6 +2019,7 @@ export function useWelfareUiState() {
     delete squareReportDrafts[boostId]
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
+    await refreshPointTransactions()
     return result
   }
 
@@ -1976,6 +2028,21 @@ export function useWelfareUiState() {
     welfare.submitStudentVerification(payload)
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
+    await refreshPointTransactions()
+  }
+
+  async function approveStudentVerification(id: string, reply: string) {
+    welfare.approveStudentVerification(id, reply)
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    await refreshPointTransactions()
+  }
+
+  async function rejectStudentVerification(id: string, reason: string) {
+    welfare.rejectStudentVerification(id, reason)
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+    await refreshPointTransactions()
   }
 
   return {
@@ -1986,6 +2053,8 @@ export function useWelfareUiState() {
     invitationForm,
     rechargeForm,
     rechargeConfigForm,
+    pointTransactions,
+    pointTransactionSummary,
     githubAppConfigForm,
     githubAuthorizationForm,
     oauthConfigForm,
@@ -2096,6 +2165,8 @@ export function useWelfareUiState() {
     completeResourceProvision,
     resetStudentFiles,
     submitStudentVerification,
+    approveStudentVerification,
+    rejectStudentVerification,
     generateEducationEmailChallenge,
     copyEducationEmailTemplate,
     openEducationEmailClient,
@@ -2150,6 +2221,7 @@ export function useWelfareUiState() {
     readAllNotifications,
     startRecharge,
     refreshRechargeStatus,
+    refreshPointTransactions,
     createSquarePost,
     boostSquarePost,
     reportSquareBoost,

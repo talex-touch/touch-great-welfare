@@ -376,6 +376,7 @@ export interface CreditTransaction {
   type: CreditTransactionType
   reason: string
   refId?: string
+  balanceAfter?: number
   createdAt: string
 }
 

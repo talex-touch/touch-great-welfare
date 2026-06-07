@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { CreditTransaction, User, WelfareApplication, WelfareState } from '~/composables/welfare'
+import type { User, WelfareApplication, WelfareState } from '~/composables/welfare'
 import type {
   AdminAnnouncementListResult,
   AdminAnnouncementSummary,
@@ -27,6 +27,7 @@ import {
   readJson,
 } from './auth'
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret } from './crypto'
+import { appendPointTransaction } from './points'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type NotificationStatus = 'processed' | 'failed'
@@ -851,17 +852,13 @@ async function chargeEmailNotification(env: WorkerEnv, userId: string, notificat
   if (user.points < EMAIL_NOTIFICATION_COST)
     throw new Error('邮箱通知余额不足')
 
-  user.points -= EMAIL_NOTIFICATION_COST
-  const tx: CreditTransaction = {
-    id: createId('tx'),
+  await appendPointTransaction(env, {
     userId,
     delta: -EMAIL_NOTIFICATION_COST,
     type: 'spend',
     reason: '邮箱通知发送扣费',
     refId: notificationId,
-    createdAt: now(),
-  }
-  state.transactions.unshift(tx)
+  }, state)
   await writeWelfareState(env, state)
 }
 

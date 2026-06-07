@@ -5,11 +5,13 @@ import { TxButton, TxCard, TxCheckbox, TxInput, TxNumberInput, TxStatusBadge, Tx
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { formatDate, formatPoints, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { saveWelfareState } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, useWelfareUiState } from '~/composables/welfare-ui'
 
 const {
   state,
   isAdmin,
+  reloadWelfareState,
   pointDrafts,
   userLevelCard,
   setUserCrowdReviewer,
@@ -27,6 +29,8 @@ const {
   siteBannerConfigForm,
   adminAnnouncementForm,
   adminAnnouncements,
+  pointTransactions,
+  pointTransactionSummary,
   activeAdminTab,
   adjustUserPoints,
   refreshRechargeConfig,
@@ -46,6 +50,7 @@ const {
   refreshSiteBannerConfig,
   persistSiteBannerConfig,
   refreshAdminAnnouncements,
+  refreshPointTransactions,
   sendAdminAnnouncement,
 } = useWelfareUiState()
 
@@ -310,6 +315,7 @@ const selectedUserId = ref('')
 const isUserDrawerOpen = ref(false)
 const userDrawerMode = ref<'detail' | 'points'>('detail')
 const pendingAdminUserAction = ref('')
+const adminTransactions = computed(() => pointTransactions.value)
 
 function userDisplayName(userId: string) {
   return state.users.find(user => user.id === userId)?.profile.displayName ?? '未知用户'
@@ -604,7 +610,7 @@ const allUserRows = computed(() => [...state.users]
   .map((user) => {
     const applications = state.applications.filter(item => item.userId === user.id)
     const studentVerifications = state.studentVerifications.filter(item => item.userId === user.id)
-    const transactions = state.transactions.filter(item => item.userId === user.id)
+    const transactions = adminTransactions.value.filter(item => item.userId === user.id)
     const spendTransactions = transactions.filter(item => item.delta < 0)
     const pipelineSpend = spendTransactions.filter(isPipelineSpendTransaction)
     const pointIncome = transactions.filter(item => item.delta > 0)
@@ -677,7 +683,7 @@ const selectedUserDetail = computed(() => {
   const studentVerifications = [...state.studentVerifications]
     .filter(item => item.userId === user.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  const transactions = [...state.transactions]
+  const transactions = [...adminTransactions.value]
     .filter(item => item.userId === user.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const spendTransactions = transactions.filter(item => item.delta < 0)
@@ -802,7 +808,7 @@ const dashboardMetricScope = computed(() => ({
   users: state.users.filter(item => isInDateRange(item.createdAt, dashboardActivityFilters)),
   applications: state.applications.filter(item => isInDateRange(item.createdAt, dashboardActivityFilters)),
   studentVerifications: state.studentVerifications.filter(item => isInDateRange(item.createdAt, dashboardActivityFilters)),
-  transactions: state.transactions.filter(item => isInDateRange(item.createdAt, dashboardActivityFilters)),
+  transactions: adminTransactions.value.filter(item => isInDateRange(item.createdAt, dashboardActivityFilters)),
 }))
 
 const dashboardMetrics = computed(() => {
@@ -889,7 +895,7 @@ const dashboardActivityRows = computed(() => {
     })
   }
 
-  for (const transaction of state.transactions) {
+  for (const transaction of adminTransactions.value) {
     rows.push({
       id: `dashboard-transaction-${transaction.id}`,
       type: 'transaction',
@@ -961,8 +967,8 @@ const dataGroups = computed(() => [
   },
   {
     title: '积分流水',
-    count: state.transactions.length,
-    note: `${state.transactions.filter(item => item.delta > 0).length} 条入账，${state.transactions.filter(item => item.delta < 0).length} 条扣减`,
+    count: adminTransactions.value.length,
+    note: `${adminTransactions.value.filter(item => item.delta > 0).length} 条入账，${adminTransactions.value.filter(item => item.delta < 0).length} 条扣减`,
   },
 ])
 
@@ -999,7 +1005,7 @@ const studentRows = computed(() => [...state.studentVerifications]
   ]))
   .sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
 
-const transactionRows = computed(() => [...state.transactions]
+const transactionRows = computed(() => [...adminTransactions.value]
   .filter(item => transactionFilters.type === ALL_FILTER || item.type === transactionFilters.type)
   .filter(item => transactionFilters.direction === ALL_FILTER || (transactionFilters.direction === 'in' ? item.delta > 0 : item.delta < 0))
   .filter(item => isInDateRange(item.createdAt, transactionFilters))
@@ -1043,7 +1049,7 @@ const auditEvents = computed(() => {
     }
   }
 
-  for (const transaction of state.transactions) {
+  for (const transaction of adminTransactions.value) {
     events.push({
       id: `tx-${transaction.id}`,
       time: transaction.createdAt,
@@ -1292,7 +1298,12 @@ function saveApplicationPolicyConfig() {
 }
 
 function onAdjustPoints(userId: string) {
-  runSafely(() => adjustUserPoints(userId, pointDrafts[userId] ?? 0, '后台积分充值 / 调整'), '积分已调整')
+  runSafely(async () => {
+    adjustUserPoints(userId, pointDrafts[userId] ?? 0, '后台积分充值 / 调整')
+    await saveWelfareState(state, state.currentUserId)
+    await reloadWelfareState()
+    await refreshPointTransactions({ limit: 200, scope: 'admin' })
+  }, '积分已调整')
 }
 
 function onToggleReviewer(userId: string, enabled: boolean) {
@@ -1433,6 +1444,7 @@ onMounted(() => {
   refreshSub2ApiConfig().catch(() => {})
   refreshNotificationProviderConfig().catch(() => {})
   refreshAdminAnnouncements().catch(() => {})
+  refreshPointTransactions({ limit: 200, scope: 'admin' }).catch(() => {})
 })
 </script>
 
@@ -3147,7 +3159,7 @@ onMounted(() => {
                   积分流水数据
                 </div>
                 <span class="text-xs fw-800 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
-                  {{ transactionPagination.total }} / {{ state.transactions.length }} 条
+                  {{ transactionPagination.total }} / {{ pointTransactionSummary.count }} 条
                 </span>
               </div>
 

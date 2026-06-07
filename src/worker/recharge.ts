@@ -11,6 +11,7 @@ import {
   normalizeMoneyText,
   verifyEpaySign,
 } from './ldc-credit'
+import { appendPointTransaction, pointTransactionExistsByRef } from './points'
 import { authenticatedUserId } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
@@ -353,14 +354,6 @@ function createOutTradeNo() {
   return `${ORDER_PREFIX}_${date}_${Date.now().toString(36).toUpperCase()}_${random}`
 }
 
-function now() {
-  return new Date().toISOString()
-}
-
-function createTransactionId() {
-  return `tx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
 function assertWelfareState(input: Partial<WelfareState>): asserts input is WelfareState {
   if (!Array.isArray(input.users))
     throw new Error('用户状态未初始化')
@@ -394,21 +387,18 @@ async function creditRechargeOrder(env: WorkerEnv, order: RechargeOrder, notifyP
   if (!user)
     throw new Error('充值订单对应的用户不存在')
 
-  const alreadyCredited = state.transactions.some(item => item.type === 'recharge' && item.refId === order.out_trade_no)
+  const alreadyCredited = await pointTransactionExistsByRef(env, 'recharge', order.out_trade_no)
   if (!alreadyCredited) {
-    user.points += order.credited_points
-    state.transactions.unshift({
-      id: createTransactionId(),
+    await appendPointTransaction(env, {
       userId: user.id,
       delta: order.credited_points,
       type: 'recharge',
       reason: `LINUX DO Credit 充值到账 ${order.amount} LDC`,
       refId: order.out_trade_no,
-      createdAt: now(),
-    })
+    }, state)
+    await writeWelfareState(env, state)
   }
 
-  await writeWelfareState(env, state)
   await markOrderSucceeded(env, order.out_trade_no, notifyPayload.trade_no ?? '', notifyPayload)
 }
 

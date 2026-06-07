@@ -4,6 +4,7 @@ import { createUserInviteCode } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
 import { base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
+import { applyPointTransactionsFromClientState, backfillPointTransactionsFromState } from './points'
 import { authenticatedUserId, clearSessionCookie, createSessionCookie } from './session'
 
 export interface WorkerEnv {
@@ -146,9 +147,8 @@ async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(pre
   const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
   const nextUsers = Array.isArray(nextState.users)
     ? nextState.users.map((user) => {
-        if (!isRecord(user)) {
+        if (!isRecord(user))
           return user
-        }
 
         const previousUser = previousUsers.find(item => isRecord(item) && item.id === user.id)
         const previousPasswordHash = isRecord(previousUser) && typeof previousUser.passwordHash === 'string'
@@ -254,8 +254,9 @@ export async function readWelfareState(env: WorkerEnv) {
       .first<{ state: string }>()
 
     const state = await decodeStoredState(env, row?.state ? JSON.parse(row.state) : {})
+    const backfilled = await backfillPointTransactionsFromState(env, state)
     const result = applyWelfareRetentionPolicy(state)
-    if (result.changed)
+    if (result.changed || backfilled)
       await writeWelfareState(env, result.state)
 
     return result.state
@@ -267,8 +268,9 @@ export async function readWelfareState(env: WorkerEnv) {
   )
 
   const state = await decodeStoredState(env, result.rows[0]?.state ?? {})
+  const backfilled = await backfillPointTransactionsFromState(env, state)
   const retentionResult = applyWelfareRetentionPolicy(state)
-  if (retentionResult.changed)
+  if (retentionResult.changed || backfilled)
     await writeWelfareState(env, retentionResult.state)
 
   return retentionResult.state
@@ -276,6 +278,7 @@ export async function readWelfareState(env: WorkerEnv) {
 
 export async function writeWelfareState(env: WorkerEnv, state: unknown) {
   await ensureSchema(env)
+  await backfillPointTransactionsFromState(env, state)
   const storedState = await encodeStoredState(env, state)
 
   if (shouldUseD1(env)) {
@@ -485,7 +488,9 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
 
       const payload = await readPayload(request)
       assertStateShape(payload.state)
-      const nextState = applyWelfareRetentionPolicy(await mergeSensitiveWelfareState(previousState, payload.state, request, env)).state
+      const mergedSensitiveState = await mergeSensitiveWelfareState(previousState, payload.state, request, env)
+      await applyPointTransactionsFromClientState(env, previousState, mergedSensitiveState)
+      const nextState = applyWelfareRetentionPolicy(mergedSensitiveState).state
       if (isRecord(nextState))
         delete nextState.currentUserId
       await writeWelfareState(env, nextState)

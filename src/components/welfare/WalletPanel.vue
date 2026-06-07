@@ -21,6 +21,7 @@ const {
   lastRechargeStatus,
   startRecharge,
   refreshRechargeStatus,
+  refreshPointTransactions,
   reloadWelfareState,
 } = useWelfareUiState()
 
@@ -145,6 +146,9 @@ function signedDelta(tx: CreditTransaction) {
 }
 
 function transactionBalance(tx: CreditTransaction, index: number) {
+  if (typeof tx.balanceAfter === 'number')
+    return Math.max(0, tx.balanceAfter).toLocaleString('zh-CN')
+
   const laterDelta = latestTransactions.value
     .slice(0, index)
     .reduce((sum, item) => sum + item.delta, 0)
@@ -154,6 +158,10 @@ function transactionBalance(tx: CreditTransaction, index: number) {
 }
 
 onMounted(async () => {
+  await runSafely(async () => {
+    await refreshPointTransactions()
+  }, '积分流水已刷新')
+
   const outTradeNo = typeof route.query.recharge === 'string' ? route.query.recharge : ''
   if (!outTradeNo)
     return
@@ -162,6 +170,7 @@ onMounted(async () => {
     const status = await refreshRechargeStatus(outTradeNo)
     if (status.status === 'succeeded') {
       await reloadWelfareState()
+      await refreshPointTransactions()
       notify(`充值已到账：+${status.creditedPoints} 积分`)
       return
     }
