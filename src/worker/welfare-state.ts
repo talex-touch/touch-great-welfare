@@ -2978,7 +2978,7 @@ async function loginAdmin(request: Request, env: WorkerEnv) {
     admin.passwordHash = await hashPassword(typeof payload.password === 'string' ? payload.password : '')
   admin.lastLoginAt = now()
   delete state.currentUserId
-  const version = await writeWelfareState(env, state)
+  const version = await writeWelfareState(env, state, { expectedVersion: record.version })
   return json({ ok: true, userId: admin.id, state: clientVisibleWelfareState(state, admin.id), version }, 200, {
     'set-cookie': await createSessionCookie(request, env, admin.id),
   })

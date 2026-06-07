@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { CreditTransaction, CreditTransactionType, WelfareState } from '~/composables/welfare'
 import { authenticatedUserId } from './session'
-import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
+import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface PointTransactionRow {
   id: string
@@ -368,7 +368,8 @@ export async function applyPointTransactionsFromClientState(env: WorkerEnv, prev
 
 export async function appendPointTransaction(env: WorkerEnv, input: PointTransactionInput, stateOverride?: unknown) {
   await ensurePointTransactionSchema(env)
-  const state = stateOverride ?? await readWelfareState(env) as Partial<WelfareState>
+  const record = stateOverride === undefined ? await readWelfareStateRecord(env) : undefined
+  const state = (stateOverride ?? record?.state) as Partial<WelfareState>
   const users = stateUsers(state)
   const user = users.find(item => isRecord(item) && item.id === input.userId)
   if (!isRecord(user))
@@ -412,8 +413,8 @@ export async function appendPointTransaction(env: WorkerEnv, input: PointTransac
   user.points = balanceAfter
   await insertPointTransaction(env, tx)
 
-  if (!stateOverride)
-    await writeWelfareState(env, state)
+  if (stateOverride === undefined)
+    await writeWelfareState(env, state, { expectedVersion: record!.version })
 
   return {
     ...tx,

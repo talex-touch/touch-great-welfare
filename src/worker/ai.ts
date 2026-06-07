@@ -20,9 +20,13 @@ import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createAndDispatchNotification, ensureNotificationSchema } from './notifications'
 import { appendPointTransaction, pointTransactionExistsByRef } from './points'
 import { createSub2ApiKeyForUser } from './sub2api'
-import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
+import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type AiImageJobStatus = 'pending' | 'succeeded' | 'failed'
+
+function isStateVersionConflict(error: unknown) {
+  return error instanceof Error && error.name === 'StateVersionConflictError'
+}
 
 interface AiProviderConfigRow {
   id: string
@@ -914,6 +918,7 @@ async function provisionCodeApplication(
   state: WelfareState,
   application: WelfareApplication,
   adminUserId: string,
+  expectedVersion: number,
 ) {
   if (!['answered', 'completed', 'closed'].includes(application.status))
     throw new Error('LLMApi 申请尚未通过')
@@ -926,7 +931,7 @@ async function provisionCodeApplication(
   })
   const content = `<p><strong>NewAPI 自动发放：</strong>${escapeHtml(key.keyMasked)}，额度 ${key.quota}，有效期至 ${escapeHtml(key.expiresAt)}。明文 Key 已在本次发放响应中返回，请及时保存。</p>`
   appendProvisionMessage(application, adminUserId, content)
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion })
   return {
     status: 'provisioned' as const,
     provider: 'newapi' as const,
@@ -940,6 +945,7 @@ async function provisionResourceApplication(
   state: WelfareState,
   application: WelfareApplication,
   adminUserId: string,
+  expectedVersion: number,
   itemId?: string,
 ) {
   const user = findApplicationUser(state, application.userId)
@@ -969,7 +975,7 @@ async function provisionResourceApplication(
   }
 
   appendProvisionMessage(application, adminUserId, `<p><strong>Sub2API 自动发放：</strong>已完成 ${results.length} 个 LLM API 额度资源明细。</p>`)
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion })
   return {
     status: 'provisioned' as const,
     provider: 'sub2api' as const,
@@ -983,6 +989,7 @@ async function markProvisionPending(
   state: WelfareState,
   application: WelfareApplication,
   adminUserId: string,
+  expectedVersion: number,
   error: unknown,
   itemId?: string,
 ) {
@@ -997,7 +1004,7 @@ async function markProvisionPending(
     }
   }
   appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(message)}</p>`)
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion })
 }
 
 async function provisionApplicationReward(request: Request, env: WorkerEnv) {
@@ -1007,7 +1014,8 @@ async function provisionApplicationReward(request: Request, env: WorkerEnv) {
   if (!applicationId)
     throw new Error('申请 ID 不能为空')
 
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
   const application = state.applications.find(item => item.id === applicationId)
   if (!application)
@@ -1018,11 +1026,14 @@ async function provisionApplicationReward(request: Request, env: WorkerEnv) {
 
   try {
     if (application.type === 'code')
-      return await provisionCodeApplication(env, state, application, admin.id)
-    return await provisionResourceApplication(env, state, application, admin.id, payload.itemId?.trim())
+      return await provisionCodeApplication(env, state, application, admin.id, record.version)
+    return await provisionResourceApplication(env, state, application, admin.id, record.version, payload.itemId?.trim())
   }
   catch (error) {
-    await markProvisionPending(env, state, application, admin.id, error, payload.itemId?.trim())
+    if (isStateVersionConflict(error))
+      throw error
+
+    await markProvisionPending(env, state, application, admin.id, record.version, error, payload.itemId?.trim())
     return {
       status: 'pending_manual' as const,
       applicationId: application.id,
@@ -1038,7 +1049,8 @@ async function createApplicationReview(request: Request, env: WorkerEnv) {
   if (!applicationId)
     throw new Error('申请 ID 不能为空')
 
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
   const application = state.applications.find(item => item.id === applicationId)
   if (!application)
@@ -1064,7 +1076,7 @@ async function createApplicationReview(request: Request, env: WorkerEnv) {
   application.aiReview = review
   if (application.status === 'pending_review')
     application.answer = reviewToAnswer(review)
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion: record.version })
 
   return {
     applicationId: application.id,
@@ -1173,7 +1185,8 @@ async function createImage(request: Request, env: WorkerEnv) {
     status: 'pending',
   })
 
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
   try {
     const imageApplication = imageApplicationForRequest(state, payload.applicationId, auth.user.id, auth.user.role === 'admin')
@@ -1201,7 +1214,7 @@ async function createImage(request: Request, env: WorkerEnv) {
         refId: payload.applicationId || jobId,
       }, state)
     }
-    await writeWelfareState(env, state)
+    await writeWelfareState(env, state, { expectedVersion: record.version })
 
     const image = await callImageProvider(env, config, prompt, payload)
     const objectKey = `ai-images/${targetUserId}/${jobId}.png`
@@ -1211,10 +1224,11 @@ async function createImage(request: Request, env: WorkerEnv) {
       },
     })
 
-    const latestState = await readWelfareState(env) as Partial<WelfareState>
+    const latestRecord = await readWelfareStateRecord(env)
+    const latestState = latestRecord.state as Partial<WelfareState>
     assertWelfareState(latestState)
     updateApplicationForImage(latestState, payload.applicationId, targetUserId, 'completed', `图片生成已完成：/api/ai/images/${jobId}/file`)
-    await writeWelfareState(env, latestState)
+    await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
     await updateImageJob(env, jobId, 'succeeded', objectKey, image.contentType)
     await createAndDispatchNotification(env, {
       userId: targetUserId,
@@ -1231,7 +1245,11 @@ async function createImage(request: Request, env: WorkerEnv) {
     }
   }
   catch (error) {
-    const rollbackState = await readWelfareState(env) as Partial<WelfareState>
+    if (isStateVersionConflict(error))
+      throw error
+
+    const rollbackRecord = await readWelfareStateRecord(env)
+    const rollbackState = rollbackRecord.state as Partial<WelfareState>
     assertWelfareState(rollbackState)
     const refId = payload.applicationId || jobId
     const alreadyRefunded = await pointTransactionExistsByRef(env, 'refund', refId)
@@ -1246,7 +1264,7 @@ async function createImage(request: Request, env: WorkerEnv) {
       }, rollbackState)
     }
     updateApplicationForImage(rollbackState, payload.applicationId, targetUserId, 'rejected', error instanceof Error ? error.message : '图片生成失败')
-    await writeWelfareState(env, rollbackState)
+    await writeWelfareState(env, rollbackState, { expectedVersion: rollbackRecord.version })
 
     const message = error instanceof Error ? error.message : '图片生成失败'
     await updateImageJob(env, jobId, 'failed', '', '', message)

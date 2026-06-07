@@ -4,7 +4,7 @@ import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfa
 import { assertSafeExternalUrl } from './auth'
 import { bytesToHex, decryptSecret, encryptSecret } from './crypto'
 import { authenticatedUserId, createSessionCookie } from './session'
-import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
+import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface GitHubAppConfigRecord {
   id: string
@@ -607,7 +607,8 @@ function now() {
 }
 
 async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthState, user: GitHubUserResponse, emails: GitHubEmailResponse[], repos: GitHubRepoResponse[]) {
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   if (!Array.isArray(state.users) || !Array.isArray(state.transactions))
     throw new Error('用户状态未初始化')
 
@@ -679,7 +680,7 @@ async function persistAuthorizedUser(env: WorkerEnv, oauthState: GithubOAuthStat
   }
 
   delete state.currentUserId
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion: record.version })
 
   return localUser
 }

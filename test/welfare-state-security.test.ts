@@ -9,6 +9,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 
 const { createEpaySign } = await import('../src/worker/ldc-credit')
 const { createSessionCookie } = await import('../src/worker/session')
+const { appendPointTransaction } = await import('../src/worker/points')
 const { handleRechargeRequest } = await import('../src/worker/recharge')
 const { handleApplicationSubmitRequest, handleWelfareStateRequest, writeWelfareState } = await import('../src/worker/welfare-state')
 
@@ -527,6 +528,25 @@ describe('welfare state security', () => {
       ...state(),
       siteBanner: { enabled: true, title: '并发公告', body: '不应覆盖较新状态' },
     }, { expectedVersion: 1 })).rejects.toThrow('业务状态已被其他请求更新')
+
+    expect(d1.queries.some(item =>
+      item.query.includes('update welfare_app_state')
+      && item.values[3] === 1,
+    )).toBe(true)
+  })
+
+  it('uses state version checks when standalone point writes update balances', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    d1.bumpVersionAfterNextVersionRead()
+
+    await expect(appendPointTransaction(env, {
+      userId: 'user_1',
+      delta: 10,
+      type: 'grant',
+      reason: '并发积分发放',
+    })).rejects.toThrow('业务状态已被其他请求更新')
 
     expect(d1.queries.some(item =>
       item.query.includes('update welfare_app_state')

@@ -16,7 +16,7 @@ import {
 } from './ldc-credit'
 import { appendPointTransaction, pointTransactionExistsByRef } from './points'
 import { authenticatedUserId } from './session'
-import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
+import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface RechargeOrder {
   out_trade_no: string
@@ -463,7 +463,8 @@ async function assertAdminRequest(request: Request, env: WorkerEnv) {
 }
 
 async function creditRechargeOrder(env: WorkerEnv, order: RechargeOrder, notifyPayload: Record<string, string>) {
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
 
   const user = state.users.find(item => item.id === order.user_id)
@@ -480,7 +481,7 @@ async function creditRechargeOrder(env: WorkerEnv, order: RechargeOrder, notifyP
       reason: `LINUX DO Credit 充值到账 ${order.amount} LDC`,
       refId: order.out_trade_no,
     }, state)
-    await writeWelfareState(env, state)
+    await writeWelfareState(env, state, { expectedVersion: record.version })
   }
 
   await markOrderSucceeded(env, order.out_trade_no, notifyPayload.trade_no ?? '', notifyPayload)
@@ -546,7 +547,8 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
 
   const config = await getLdcConfig(env)
   const settings = await getEffectiveRechargeSettings(env)
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
   const systemConfig = normalizeSystemConfig(state.systemConfig)
   if (!systemConfig.siteEnabled)
@@ -594,7 +596,7 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
     coupon.usedAt = new Date().toISOString()
     coupon.usedFor = 'recharge_order'
     coupon.usedRefId = outTradeNo
-    await writeWelfareState(env, state)
+    await writeWelfareState(env, state, { expectedVersion: record.version })
   }
 
   const params = createEpayOrderParams(config, {

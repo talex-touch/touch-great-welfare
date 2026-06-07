@@ -29,7 +29,7 @@ import {
 } from './auth'
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret } from './crypto'
 import { appendPointTransaction } from './points'
-import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
+import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type NotificationStatus = 'processed' | 'failed'
 
@@ -1036,7 +1036,8 @@ async function hasEnoughPoints(env: WorkerEnv, userId: string, points: number) {
 }
 
 async function chargeEmailNotification(env: WorkerEnv, userId: string, notificationId: string) {
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
   const user = state.users.find(item => item.id === userId)
   if (!user)
@@ -1051,7 +1052,7 @@ async function chargeEmailNotification(env: WorkerEnv, userId: string, notificat
     reason: '邮箱通知发送扣费',
     refId: notificationId,
   }, state)
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion: record.version })
 }
 
 async function getNotificationProviderConfig(env: WorkerEnv) {

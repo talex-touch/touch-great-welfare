@@ -79,6 +79,7 @@ function createMemoryD1() {
   const pointTransactions: Record<string, unknown>[] = []
   let providerConfig: Record<string, unknown> | null = null
   let appState: WelfareState | undefined
+  let appVersion = 1
 
   return {
     data: {
@@ -95,6 +96,7 @@ function createMemoryD1() {
     },
     setState(value: WelfareState) {
       appState = value
+      appVersion = 1
     },
     addNotificationSetting(value: Record<string, unknown>) {
       settings.push(value)
@@ -175,13 +177,23 @@ function createMemoryD1() {
           }
           if (query.includes('insert into welfare_app_state')) {
             appState = JSON.parse(String(this.values[1])) as WelfareState
+            appVersion = Number(this.values[2] || appVersion + 1)
+            return { meta: { changes: 1 } }
+          }
+          if (query.includes('update welfare_app_state')) {
+            if (appVersion !== Number(this.values[3]))
+              return { meta: { changes: 0 } }
+
+            appState = JSON.parse(String(this.values[1])) as WelfareState
+            appVersion = Number(this.values[2] || appVersion + 1)
+            return { meta: { changes: 1 } }
           }
         },
         async first() {
           if (query.includes('select state') && query.includes('welfare_app_state'))
-            return appState ? { state: JSON.stringify(appState), version: 1 } : null
+            return appState ? { state: JSON.stringify(appState), version: appVersion } : null
           if (query.includes('select version') && query.includes('welfare_app_state'))
-            return appState ? { version: 1 } : null
+            return appState ? { version: appVersion } : null
           if (query.includes('select * from notification_provider_config'))
             return providerConfig
           if (query.includes('select * from notification_settings'))

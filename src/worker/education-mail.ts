@@ -16,7 +16,7 @@ import {
   readJson,
 } from './auth'
 import { decryptSecret, encryptSecret } from './crypto'
-import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
+import { getPool, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface EducationMailConfigRow {
   id: string
@@ -301,7 +301,8 @@ async function syncEducationEmailChallenges(env: WorkerEnv) {
   if (!configured(config))
     throw new Error('教育邮箱收件配置不完整')
 
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
 
   const challenges = pendingChallenges(state, config.lookbackHours)
@@ -342,7 +343,7 @@ async function syncEducationEmailChallenges(env: WorkerEnv) {
   }
 
   if (matched.length)
-    await writeWelfareState(env, state)
+    await writeWelfareState(env, state, { expectedVersion: record.version })
 
   return {
     checked: challenges.length,
@@ -363,7 +364,10 @@ async function verifyEducationEmailChallengeForUser(request: Request, env: Worke
   if (!challengeId)
     throw new Error('教育邮箱证明码不存在')
 
-  const { state, user } = await getAuthenticatedRequest(request, env)
+  const { user } = await getAuthenticatedRequest(request, env)
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
+  assertWelfareState(state)
   const challenge = state.educationEmailChallenges.find(item => item.id === challengeId && item.userId === user.id)
   if (!challenge)
     throw new Error('教育邮箱证明码不存在')
@@ -406,7 +410,7 @@ async function verifyEducationEmailChallengeForUser(request: Request, env: Worke
     verification.educationEmailVerificationSource = 'mail_auto'
     verification.educationEmailChallengeId = challenge.id
   }
-  await writeWelfareState(env, state)
+  await writeWelfareState(env, state, { expectedVersion: record.version })
 
   return {
     verified: true,
