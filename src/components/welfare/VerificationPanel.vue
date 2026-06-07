@@ -4,10 +4,11 @@ import { TxButton, TxCard, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@tale
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { educationEmailVerificationLabel, formatBytes, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
+import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
 const {
   state,
@@ -383,16 +384,7 @@ function onRejectStudent(id: string) {
               <div v-if="!selectedVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
                 暂无附件。
               </div>
-              <div v-else class="mt-3 space-y-2">
-                <div
-                  v-for="file in selectedVerification.attachments"
-                  :key="file.id"
-                  class="p-3 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5"
-                >
-                  <span class="fw-800 break-all">{{ file.name }}</span>
-                  <span class="text-sm text-slate-500 dark:text-slate-400">{{ formatBytes(file.size) }} · {{ file.type || '未知类型' }}</span>
-                </div>
-              </div>
+              <VerificationAttachmentGrid v-else :files="selectedVerification.attachments" />
             </section>
 
             <section class="verification-detail-section mt-4">

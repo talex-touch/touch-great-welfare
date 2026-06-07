@@ -3,11 +3,12 @@ import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatBytes, formatDate, formatPoints, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
+import { formatDate, formatPoints, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
 import ApplicationThread from './ApplicationThread.vue'
 import RichTextView from './RichTextView.vue'
+import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
 const props = withDefaults(defineProps<{
   applicationId?: string
@@ -105,8 +106,8 @@ function handleSendMessage(type: 'comment' | 'supplement' | 'result_submission',
   if (!application.value)
     return
 
-  runSafely(() => {
-    addApplicationMessage(applicationId.value, type, content)
+  runSafely(async () => {
+    await addApplicationMessage(applicationId.value, type, content)
   }, type === 'result_submission' ? '结果已提交' : '消息已发送')
 }
 
@@ -334,12 +335,7 @@ function handleComplete() {
           <div v-if="!application.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
             暂无附件。
           </div>
-          <div v-else class="mt-3 space-y-2">
-            <div v-for="file in application.attachments" :key="file.id" class="p-3 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5">
-              <span class="fw-800 break-all">{{ file.name }}</span>
-              <span class="text-sm text-slate-500 dark:text-slate-400">{{ formatBytes(file.size) }} · {{ file.type }}</span>
-            </div>
-          </div>
+          <VerificationAttachmentGrid v-else :files="application.attachments" />
         </div>
 
         <!-- ===== NEW: Communication Thread ===== -->

@@ -37,7 +37,7 @@ import { isRichTextEmpty, richTextToPlainText } from '~/utils/rich-text'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
-import { appendPointTransaction, applyPointTransactionsFromClientState, backfillPointTransactionsFromState } from './points'
+import { appendPointTransaction, applyPointTransactionsFromClientState, backfillPointTransactionsFromState, syncUserPointBalancesFromLedger } from './points'
 import { authenticatedUserId, clearSessionCookie, createSessionCookie } from './session'
 
 export interface WorkerEnv {
@@ -615,17 +615,19 @@ function mergeStudentVerificationsForNonAdmin(previousValue: unknown, nextValue:
     if (!previous || previous.userId !== userId)
       return item
 
+    const canSupplement = previous.status === 'needs_supplement' && item.status === 'pending'
+
     return {
       ...item,
       userId: previous.userId,
-      status: previous.status,
+      status: canSupplement ? item.status : previous.status,
       reviewFee: previous.reviewFee,
       feeReturned: previous.feeReturned,
-      reply: previous.reply,
-      reviewedAt: previous.reviewedAt,
-      educationEmailVerified: previous.educationEmailVerified,
-      educationEmailVerifiedAt: previous.educationEmailVerifiedAt,
-      educationEmailVerificationSource: previous.educationEmailVerificationSource,
+      reply: canSupplement ? undefined : previous.reply,
+      reviewedAt: canSupplement ? undefined : previous.reviewedAt,
+      educationEmailVerified: canSupplement ? item.educationEmailVerified : previous.educationEmailVerified,
+      educationEmailVerifiedAt: canSupplement ? item.educationEmailVerifiedAt : previous.educationEmailVerifiedAt,
+      educationEmailVerificationSource: canSupplement ? item.educationEmailVerificationSource : previous.educationEmailVerificationSource,
     }
   })
 }
@@ -993,22 +995,21 @@ async function ensureSchema(env: WorkerEnv) {
 export async function readWelfareState(env: WorkerEnv) {
   await ensureSchema(env)
 
-  if (shouldUseD1(env)) {
-    const row = await env.LOCAL_DB!
-      .prepare('select state from welfare_app_state where id = ?1')
-      .bind(STATE_KEY)
-      .first<{ state: string }>()
+  const rawState = shouldUseD1(env)
+    ? await (async () => {
+        const row = await env.LOCAL_DB!
+          .prepare('select state from welfare_app_state where id = ?1')
+          .bind(STATE_KEY)
+          .first<{ state: string }>()
+        return row?.state ? JSON.parse(row.state) : {}
+      })()
+    : (await getPool(env).query(
+        'select state from welfare_app_state where id = $1',
+        [STATE_KEY],
+      )).rows[0]?.state ?? {}
 
-    const state = await decodeStoredState(env, row?.state ? JSON.parse(row.state) : {})
-    return applyWelfareRetentionPolicy(state).state
-  }
-
-  const result = await getPool(env).query(
-    'select state from welfare_app_state where id = $1',
-    [STATE_KEY],
-  )
-
-  const state = await decodeStoredState(env, result.rows[0]?.state ?? {})
+  const state = await decodeStoredState(env, rawState)
+  await syncUserPointBalancesFromLedger(env, state)
   return applyWelfareRetentionPolicy(state).state
 }
 
@@ -1305,7 +1306,14 @@ function attachmentsFromPayload(value: unknown): AttachmentMeta[] {
       name: typeof item.name === 'string' ? item.name : '附件',
       size: Math.max(0, Math.trunc(Number(item.size || 0))),
       type: typeof item.type === 'string' ? item.type : 'application/octet-stream',
+      r2Key: typeof item.r2Key === 'string' ? item.r2Key : undefined,
+      url: typeof item.url === 'string' ? item.url : undefined,
+      dataUrl: typeof item.type === 'string' && item.type.startsWith('image/') && isImageDataUrl(item.dataUrl) ? item.dataUrl : undefined,
     }))
+}
+
+function isImageDataUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value)
 }
 
 function totalAttachmentBytes(attachments: AttachmentMeta[]) {

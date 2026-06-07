@@ -140,6 +140,9 @@ export interface AttachmentMeta {
   name: string
   size: number
   type: string
+  r2Key?: string
+  url?: string
+  dataUrl?: string
 }
 
 export interface AiApplicationReview {
@@ -541,6 +544,9 @@ interface FileLike {
   name: string
   size: number
   type: string
+  r2Key?: string
+  url?: string
+  dataUrl?: string
 }
 
 export interface CreateAdminPayload {
@@ -1714,6 +1720,7 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     realName: verification.realName?.trim() || '未填写姓名',
     educationEmail: verification.educationEmail ? normalizeEmail(verification.educationEmail) : undefined,
     educationEmailVerified: !!verification.educationEmailVerified,
+    attachments: toAttachmentMeta(verification.attachments),
   }))
 
   normalized.educationEmailChallenges = normalized.educationEmailChallenges
@@ -1959,12 +1966,23 @@ export function buildUserLevelCard(user: User, source: Pick<WelfareState, 'appli
   }
 }
 
+function isImageAttachment(file: Pick<FileLike, 'type'>) {
+  return file.type.startsWith('image/')
+}
+
+function isImageDataUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value)
+}
+
 function toAttachmentMeta(files: FileLike[] = []): AttachmentMeta[] {
   return files.map(file => ({
     id: file.id ?? createId('att'),
     name: file.name,
     size: file.size,
     type: file.type || 'application/octet-stream',
+    r2Key: file.r2Key,
+    url: file.url,
+    dataUrl: isImageAttachment(file) && isImageDataUrl(file.dataUrl) ? file.dataUrl : undefined,
   }))
 }
 

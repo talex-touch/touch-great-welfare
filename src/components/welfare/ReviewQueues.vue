@@ -7,6 +7,7 @@ import { educationEmailVerificationLabel, formatDate, formatPoints, formatRetent
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
+import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
 const props = withDefaults(defineProps<{
   kind?: 'all' | 'pro' | 'student'
@@ -480,6 +481,7 @@ onMounted(() => {
             <TxTag :label="`审核费 ${pricingSummary.studentReviewFee}`" color="#854d0e" background="rgba(250,204,21,.18)" />
           </div>
           <RichTextView :content="item.notes" class="rich-text-preview mt-3" />
+          <VerificationAttachmentGrid v-if="item.attachments.length" :files="item.attachments" />
           <RichTextEditor v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`" />
           <div class="mt-4 flex flex-wrap gap-3">
             <TxButton variant="primary" @click="onApproveStudent(item.id)">

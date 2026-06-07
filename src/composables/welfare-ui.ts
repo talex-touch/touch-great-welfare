@@ -84,9 +84,72 @@ export interface UploadLikeFile {
   size: number
   type: string
   file: File
+  r2Key?: string
+  url?: string
+  dataUrl?: string
+}
+
+interface UploadableAttachment {
+  id?: string
+  name: string
+  size: number
+  type: string
+  file?: File
+  r2Key?: string
+  url?: string
+  dataUrl?: string
 }
 
 const welfare = useWelfareStore()
+
+async function readUploadError(response: Response) {
+  const text = await response.text()
+  if (!text)
+    return '图片上传失败'
+
+  try {
+    const payload = JSON.parse(text) as { error?: string }
+    return payload.error || '图片上传失败'
+  }
+  catch {
+    return text
+  }
+}
+
+async function uploadImageToR2<T extends UploadableAttachment>(file: T) {
+  const sourceFile = 'file' in file && file.file instanceof File ? file.file : undefined
+  if (!file.type.startsWith('image/') || file.r2Key || file.url || !sourceFile)
+    return file
+
+  const response = await fetch('/api/uploads/images', {
+    method: 'POST',
+    headers: {
+      'content-type': file.type,
+      'x-file-name': encodeURIComponent(file.name),
+    },
+    body: sourceFile,
+    credentials: 'same-origin',
+  })
+  if (!response.ok)
+    throw new Error(await readUploadError(response))
+
+  const result = await response.json() as Pick<UploadLikeFile, 'id' | 'name' | 'size' | 'type' | 'r2Key' | 'url'>
+  return {
+    ...file,
+    ...result,
+  }
+}
+
+async function withUploadedImages<T extends { attachments?: UploadableAttachment[] }>(payload: T): Promise<T> {
+  return {
+    ...payload,
+    attachments: await Promise.all((payload.attachments ?? []).map(uploadImageToR2)),
+  }
+}
+
+async function uploadAttachmentImages(files: UploadLikeFile[] = []) {
+  return Promise.all(files.map(uploadImageToR2))
+}
 
 export const adminForm = reactive({
   displayName: '公益管理员',
@@ -1123,7 +1186,7 @@ export function useWelfareUiState() {
           description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
         })
 
-    welfare.submitResourceApplication(resourceApplicationPayload(saveAsDraft, security))
+    welfare.submitResourceApplication(await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)))
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
@@ -1145,7 +1208,7 @@ export function useWelfareUiState() {
           description: resourceApplicationForm.reason || resourceApplicationForm.businessBackground,
         })
 
-    welfare.updateResourceDraft(applicationId, resourceApplicationPayload(saveAsDraft, security))
+    welfare.updateResourceDraft(applicationId, await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)))
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
@@ -1470,16 +1533,22 @@ export function useWelfareUiState() {
     welfare.requestApplicationSupplement(applicationId, content)
   }
 
-  function submitApplicationSupplement(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
-    welfare.submitApplicationSupplement(applicationId, content, attachments)
+  async function submitApplicationSupplement(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
+    welfare.submitApplicationSupplement(applicationId, content, await uploadAttachmentImages(attachments))
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
   }
 
-  function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: UploadLikeFile[] = []) {
-    welfare.addApplicationMessage(applicationId, type, content, attachments)
+  async function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: UploadLikeFile[] = []) {
+    welfare.addApplicationMessage(applicationId, type, content, await uploadAttachmentImages(attachments))
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
   }
 
-  function submitApplicationResult(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
-    welfare.submitApplicationResult(applicationId, content, attachments)
+  async function submitApplicationResult(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
+    welfare.submitApplicationResult(applicationId, content, await uploadAttachmentImages(attachments))
+    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await welfare.reloadWelfareState()
   }
 
   function applyRechargeConfig(config: RechargeConfigView) {
@@ -2195,23 +2264,24 @@ export function useWelfareUiState() {
           title: applicationForm.title,
           description: applicationForm.description,
         })
+    const payload: Parameters<typeof welfare.submitApplication>[0] = {
+      type: 'image',
+      title: applicationForm.title,
+      description: applicationForm.description,
+      githubRepo: applicationForm.githubRepo,
+      attachments: applicationFiles.value,
+      extendStorage: applicationForm.extendStorage,
+      expediteProcessing: applicationForm.expediteProcessing,
+      waiveRejectionReviewFee: applicationForm.waiveRejectionReviewFee,
+      llmApiModelKey: applicationForm.llmApiModelKey,
+      llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
+      llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
+      llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
+      ...security,
+    }
     const application = applicationId
       ? welfare.state.applications.find(item => item.id === applicationId)
-      : welfare.submitApplication({
-          type: 'image',
-          title: applicationForm.title,
-          description: applicationForm.description,
-          githubRepo: applicationForm.githubRepo,
-          attachments: applicationFiles.value,
-          extendStorage: applicationForm.extendStorage,
-          expediteProcessing: applicationForm.expediteProcessing,
-          waiveRejectionReviewFee: applicationForm.waiveRejectionReviewFee,
-          llmApiModelKey: applicationForm.llmApiModelKey,
-          llmApiBudgetUsd: applicationForm.llmApiBudgetUsd,
-          llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
-          llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
-          ...security,
-        })
+      : welfare.submitApplication(await withUploadedImages(payload))
     if (!application || application.type !== 'image')
       throw new Error('图片申请不存在')
 
@@ -2236,7 +2306,7 @@ export function useWelfareUiState() {
       title: applicationForm.title,
       description: applicationForm.description,
     })
-    const application = welfare.submitApplication({
+    const payload: Parameters<typeof welfare.submitApplication>[0] = {
       type: applicationForm.type,
       title: applicationForm.title,
       description: applicationForm.description,
@@ -2250,7 +2320,8 @@ export function useWelfareUiState() {
       llmApiCustomRpmLimit: applicationForm.llmApiCustomRpmLimit,
       llmApiCustomTpmLimit: applicationForm.llmApiCustomTpmLimit,
       ...security,
-    })
+    }
+    const application = welfare.submitApplication(await withUploadedImages(payload))
     await saveWelfareState(welfare.state)
     try {
       await createApplicationReview(welfare.currentUser.value.id, application.id)
@@ -2565,7 +2636,7 @@ export function useWelfareUiState() {
 
   async function submitStudentVerification(payload: Parameters<typeof welfare.submitStudentVerification>[0]) {
     await welfare.reloadWelfareState()
-    welfare.submitStudentVerification(payload)
+    welfare.submitStudentVerification(await withUploadedImages(payload))
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
@@ -2573,7 +2644,7 @@ export function useWelfareUiState() {
 
   async function supplementStudentVerification(payload: Parameters<typeof welfare.supplementStudentVerification>[0]) {
     await welfare.reloadWelfareState()
-    welfare.supplementStudentVerification(payload)
+    welfare.supplementStudentVerification(await withUploadedImages(payload))
     await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
   }

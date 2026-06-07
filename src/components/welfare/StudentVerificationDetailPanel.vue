@@ -4,7 +4,6 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   educationEmailVerificationLabel,
-  formatBytes,
   formatDate,
   formatRetentionExpiry,
   verificationOrganizationLabel,
@@ -12,6 +11,7 @@ import {
 } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextView from './RichTextView.vue'
+import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -264,16 +264,7 @@ function supplement() {
           <div v-if="!verification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
             暂无附件。
           </div>
-          <div v-else class="mt-3 space-y-2">
-            <div
-              v-for="file in verification.attachments"
-              :key="file.id"
-              class="p-3 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5"
-            >
-              <span class="fw-800 break-all">{{ file.name }}</span>
-              <span class="text-sm text-slate-500 dark:text-slate-400">{{ formatBytes(file.size) }} · {{ file.type || '未知类型' }}</span>
-            </div>
-          </div>
+          <VerificationAttachmentGrid v-else :files="verification.attachments" />
         </div>
       </div>
     </TxCard>

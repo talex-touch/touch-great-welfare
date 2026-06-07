@@ -8,6 +8,7 @@ import { handlePointRequest } from './worker/points'
 import { handleRechargeRequest } from './worker/recharge'
 import { handleSub2ApiRequest } from './worker/sub2api'
 import { handleTurnstileRequest } from './worker/turnstile'
+import { handleUploadRequest } from './worker/uploads'
 import { handleWebhookRequest } from './worker/webhook'
 import { handleWelfareStateRequest } from './worker/welfare-state'
 
@@ -34,6 +35,8 @@ export default {
       return handleSub2ApiRequest(request, env)
     if (url.pathname.startsWith('/api/turnstile/'))
       return handleTurnstileRequest(request, env)
+    if (url.pathname.startsWith('/api/uploads/'))
+      return handleUploadRequest(request, env)
     if (url.pathname.startsWith('/api/webhooks/'))
       return handleWebhookRequest(request, env)
 
