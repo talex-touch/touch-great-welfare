@@ -2420,7 +2420,7 @@ select {
 .application-dashboard__tabs {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(8.5rem, 1fr));
-  margin-top: 1.85rem;
+  margin-top: 0;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.66);
@@ -2837,6 +2837,89 @@ select {
   font-weight: 800;
 }
 
+.application-detail-flip-mask {
+  z-index: 120 !important;
+}
+
+.application-detail-flip-dialog {
+  width: min(1120px, 100%);
+  max-height: min(88vh, 920px);
+}
+
+.review-application-flip-dialog {
+  width: min(1120px, 100%);
+  max-height: min(88vh, 920px);
+}
+
+.review-application-dialog {
+  display: grid;
+  gap: 1rem;
+  padding: 0.25rem;
+}
+
+.review-queue-entry {
+  width: 100%;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 18px;
+  color: inherit;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.review-queue-entry:hover,
+.review-queue-entry:focus-visible {
+  border-color: rgba(59, 130, 246, 0.34);
+  background: #f8fafc;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.review-queue-entry__main {
+  min-width: 0;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.review-queue-entry__title {
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 950;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-queue-entry__meta {
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.review-queue-entry__tags {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.application-detail-panel--drawer > .solid-panel {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .dark .application-dashboard {
   color: #f8fafc;
 }
@@ -2899,6 +2982,25 @@ select {
 .dark .application-type-tag {
   color: #93c5fd;
   background: rgba(37, 99, 235, 0.18);
+}
+
+.dark .review-queue-entry {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #151820;
+}
+
+.dark .review-queue-entry:hover,
+.dark .review-queue-entry:focus-visible {
+  border-color: rgba(147, 197, 253, 0.32);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dark .review-queue-entry__title {
+  color: #f8fafc;
+}
+
+.dark .review-queue-entry__meta {
+  color: #94a3b8;
 }
 
 @media (min-width: 1280px) {

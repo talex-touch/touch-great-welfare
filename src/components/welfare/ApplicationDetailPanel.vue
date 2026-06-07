@@ -9,6 +9,18 @@ import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
 import ApplicationThread from './ApplicationThread.vue'
 import RichTextView from './RichTextView.vue'
 
+const props = withDefaults(defineProps<{
+  applicationId?: string
+  drawer?: boolean
+}>(), {
+  applicationId: undefined,
+  drawer: false,
+})
+
+const emit = defineEmits<{
+  close: []
+}>()
+
 const route = useRoute()
 const router = useRouter()
 const { runSafely } = useWelfareFeedback()
@@ -17,6 +29,7 @@ const {
   state,
   currentUser,
   isAdmin,
+  canCrowdReview,
   statusText,
   statusTone,
   typeIcon,
@@ -26,6 +39,9 @@ const {
 } = useWelfareUiState()
 
 const applicationId = computed(() => {
+  if (props.applicationId)
+    return props.applicationId
+
   const raw = (route.params as Record<string, string | string[] | undefined>).id
   return Array.isArray(raw) ? raw[0] : String(raw ?? '')
 })
@@ -34,7 +50,7 @@ const application = computed(() => state.applications.find((item) => {
   if (item.id !== applicationId.value)
     return false
 
-  return isAdmin.value || item.userId === currentUser.value?.id
+  return isAdmin.value || item.userId === currentUser.value?.id || (canCrowdReview.value && item.type === 'pro' && item.userId !== currentUser.value?.id)
 }))
 
 const messages = computed(() => application.value?.messages ?? [])
@@ -49,6 +65,11 @@ const prepaidStateText = computed(() => {
 const prepaidStateTone = computed(() => application.value?.costCharged ? 'warning' : 'info')
 
 function backToList() {
+  if (props.drawer) {
+    emit('close')
+    return
+  }
+
   router.push('/dashboard/apply')
 }
 
@@ -76,7 +97,7 @@ function handleComplete() {
 </script>
 
 <template>
-  <section class="space-y-6">
+  <section class="space-y-6" :class="{ 'application-detail-panel--drawer': drawer }">
     <TxCard class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
       <div class="flex flex-wrap gap-4 items-start justify-between">
         <div>
@@ -88,7 +109,7 @@ function handleComplete() {
           </p>
         </div>
         <TxButton variant="ghost" @click="backToList">
-          返回列表
+          {{ drawer ? '关闭' : '返回列表' }}
         </TxButton>
       </div>
 

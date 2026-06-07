@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { RequestKind, WelfareApplication } from '~/composables/welfare'
-import { TxButton, TxCard, TxStatusBadge } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxFlipOverlay, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatDate } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import { richTextToPlainText } from '~/utils/rich-text'
+import ApplicationDetailPanel from './ApplicationDetailPanel.vue'
 import ReviewQueues from './ReviewQueues.vue'
 
 const {
@@ -33,6 +34,9 @@ const reviewPriority = ref('all')
 const reviewOnlyUnhandled = ref(false)
 const mineExpanded = ref(false)
 const reviewExpanded = ref(false)
+const selectedApplicationId = ref<string | undefined>()
+const isApplicationDialogOpen = ref(false)
+const applicationDialogSource = ref<HTMLElement | null>(null)
 
 interface ApplicationRow {
   item: WelfareApplication
@@ -126,8 +130,19 @@ function goCreateApplication() {
   router.push('/dashboard/apply/create')
 }
 
-function goApplicationDetail(id: string) {
-  router.push(`/dashboard/apply/${id}`)
+function openApplicationDialog(id: string, event: MouseEvent) {
+  selectedApplicationId.value = id
+  applicationDialogSource.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  isApplicationDialogOpen.value = true
+}
+
+function closeApplicationDialog() {
+  isApplicationDialogOpen.value = false
+}
+
+function handleApplicationDialogClosed() {
+  selectedApplicationId.value = undefined
+  applicationDialogSource.value = null
 }
 
 function setActiveSection(section: 'mine' | 'review') {
@@ -200,12 +215,6 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
   <section class="application-dashboard space-y-6">
     <div class="application-dashboard__hero">
       <div class="min-w-0">
-        <h2 class="application-dashboard__title">
-          我的申请与审核
-        </h2>
-        <p class="application-dashboard__subtitle">
-          查看和管理您的资源申请及审核任务，及时跟进处理进度。
-        </p>
         <div class="application-dashboard__tabs" role="tablist" aria-label="申请列表切换">
           <button
             type="button"
@@ -224,7 +233,7 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
           </button>
         </div>
       </div>
-      <div class="application-dashboard__stats">
+      <div v-if="showReviewSection && activeSection === 'review'" class="application-dashboard__stats">
         <div v-for="item in stats" :key="item.label" class="application-stat-card">
           <div>
             <span>{{ item.label }}</span>
@@ -240,14 +249,6 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
     </div>
 
     <template v-else>
-      <div class="flex flex-wrap gap-3 items-center justify-between">
-        <TxStatusBadge :text="`余额 ${currentUser.points}`" status="info" />
-        <TxButton variant="primary" @click="goCreateApplication">
-          <span class="i-carbon-add" />
-          新的申请
-        </TxButton>
-      </div>
-
       <TxCard v-show="activeSection === 'mine'" class="solid-panel application-list-panel" background="pure" shadow="soft" :padding="0" :radius="22">
         <div class="application-list-panel__header">
           <div class="application-section-title">
@@ -291,6 +292,10 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
               <input v-model="mineOnlyUnfinished" type="checkbox">
               <span>仅看未完成</span>
             </label>
+            <TxButton variant="primary" @click="goCreateApplication">
+              <span class="i-carbon-add" />
+              新的申请
+            </TxButton>
           </div>
         </div>
 
@@ -312,7 +317,7 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
             :key="row.item.id"
             type="button"
             class="application-table__row application-table__row--mine"
-            @click="goApplicationDetail(row.item.id)"
+            @click="openApplicationDialog(row.item.id, $event)"
           >
             <span class="application-cell-title">
               <b>
@@ -415,7 +420,7 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
             :key="row.item.id"
             type="button"
             class="application-table__row application-table__row--review"
-            @click="goApplicationDetail(row.item.id)"
+            @click="openApplicationDialog(row.item.id, $event)"
           >
             <span class="application-cell-title">
               <b>{{ row.item.title }}</b>
@@ -447,5 +452,23 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
 
       <ReviewQueues v-if="showReviewSection && activeSection === 'review'" kind="pro" />
     </template>
+
+    <Teleport to="body">
+      <TxFlipOverlay
+        v-if="selectedApplicationId"
+        v-model="isApplicationDialogOpen"
+        :source="applicationDialogSource"
+        :header="false"
+        :mask-closable="true"
+        :scrollable="true"
+        mask-class="application-detail-flip-mask"
+        card-class="application-detail-flip-dialog"
+        close-aria-label="关闭申请详情"
+        surface="pure"
+        @closed="handleApplicationDialogClosed"
+      >
+        <ApplicationDetailPanel :application-id="selectedApplicationId" drawer @close="closeApplicationDialog" />
+      </TxFlipOverlay>
+    </Teleport>
   </section>
 </template>
