@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RequestKind, ResourceTermId, ResourceType } from '~/composables/welfare'
-import { TxButton, TxCard, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
+import { TxButton, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -48,7 +48,6 @@ const router = useRouter()
 const { notify, runSafely } = useWelfareFeedback()
 type ApplicationCreateMode = Extract<RequestKind, 'image' | 'pro' | 'resource'>
 const applicationMode = ref<ApplicationCreateMode>('resource')
-const currentStep = ref<'types' | 'materials' | 'terms'>('types')
 const expectedDatePickerVisible = ref(false)
 const isTermsDialogOpen = ref(false)
 const activeResourceTermTab = ref<ResourceTermId | ''>('')
@@ -58,7 +57,6 @@ const applicationDraftKey = 'welfare:resource-application-draft'
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
 let stopPersistLocalDraft: (() => void) | undefined
-const activeStep = computed(() => currentStep.value === 'types' ? 0 : currentStep.value === 'materials' ? 1 : 2)
 const draftApplicationId = computed(() => {
   const raw = route.query.draft
   return Array.isArray(raw) ? String(raw[0] ?? '') : String(raw ?? '')
@@ -101,11 +99,6 @@ const activeResourceTerm = computed(() =>
   selectedResourceTerms.value.find(term => term.id === activeResourceTermTab.value)
   ?? selectedResourceTerms.value[0],
 )
-const resourceStepItems = computed(() => [
-  { key: 'types', title: '选择类型', description: '可多选资源' },
-  { key: 'materials', title: '填写材料', description: '分组添加明细' },
-  { key: 'terms', title: '结算单', description: '核对预扣' },
-])
 const resourceTermDetailMap: Record<ResourceTermId, string[]> = {
   general_resource_terms: [
     '适用范围：本条款适用于平台向申请人临时或定向提供的数据库、模型额度、网络访问、计算、存储、仓库、流水线等全部资源。申请人提交申请即视为确认资源仅用于申请单中写明的公益、研发、学习、开源或经审批认可的相关场景。',
@@ -666,19 +659,6 @@ function toggleResourceType(resourceType: ResourceType) {
   setRequiredResourceTermsAccepted(shouldKeepTermsAccepted)
 }
 
-function nextToMaterials() {
-  sanitizeSelectedResourceTypes()
-  setRequiredResourceTermsAccepted(hasAcceptedAllResourceTerms.value)
-  currentStep.value = 'materials'
-}
-
-function nextToTerms() {
-  ensureSelectedResourceItems()
-  sanitizeResourceDurations()
-  sanitizeLlmItems()
-  currentStep.value = 'terms'
-}
-
 function hasAcceptedTerm(termId: ResourceTermId) {
   return resourceApplicationForm.acceptedTermIds.includes(termId)
 }
@@ -803,6 +783,7 @@ function onSubmitClassicApplication() {
 
 function onSaveDraft() {
   runSafely(async () => {
+    sanitizeSelectedResourceTypes()
     sanitizeResourceDurations()
     sanitizeLlmItems()
     if (editingDraftApplication.value)
@@ -817,6 +798,9 @@ function onSaveDraft() {
 }
 
 function onSubmitResourceApplication() {
+  sanitizeSelectedResourceTypes()
+  sanitizeResourceDurations()
+  sanitizeLlmItems()
   const reason = resourceSubmissionBlockReason()
   if (reason) {
     notify(reason)
@@ -843,7 +827,6 @@ onMounted(() => {
   resetApplicationSecurity()
   if (editingDraftApplication.value) {
     fillResourceApplicationFormFromDraft(editingDraftApplication.value)
-    currentStep.value = 'materials'
   }
   else {
     restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
@@ -864,7 +847,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="resource-create-section">
-    <TxCard class="solid-panel resource-create-card" background="pure" shadow="soft" :padding="0" :radius="0">
+    <div class="resource-create-card">
       <div class="resource-create-header">
         <button class="resource-back-button" type="button" title="返回列表" @click="cancelCreate">
           <span class="i-carbon-chevron-left" />
@@ -980,33 +963,6 @@ onBeforeUnmount(() => {
 
       <div v-else class="resource-workbench">
         <aside class="resource-workbench-sidebar">
-          <div class="resource-progress-card" aria-label="资源申请进度">
-            <h3>申请进度</h3>
-            <div class="resource-step-track">
-              <div
-                v-for="(step, index) in resourceStepItems"
-                :key="step.key"
-                class="resource-step-item"
-                :class="{ 'is-active': index === activeStep, 'is-complete': index < activeStep }"
-              >
-                <span class="resource-step-number">{{ index + 1 }}</span>
-                <span class="resource-step-copy">
-                  <b>{{ step.title }}</b>
-                  <small>{{ step.description }}</small>
-                </span>
-                <span class="resource-step-state">{{ index < activeStep ? '已完成' : index === activeStep ? '当前' : '待填写' }}</span>
-                <span class="resource-step-indicator" aria-hidden="true">
-                  <span v-if="index < activeStep" class="i-carbon-checkmark" />
-                  <span v-else-if="index === activeStep" class="resource-step-spinner" />
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div class="verification-submit-warning resource-side-warning">
-            各类认证不是资源申请门槛。已认证会作为审核参考并可能提高通过率；未认证用户仍可按常规流程提交申请。
-          </div>
-
           <div
             class="resource-consent-card"
             :class="{ 'is-accepted': hasAcceptedAllResourceTerms }"
@@ -1054,17 +1010,15 @@ onBeforeUnmount(() => {
 
         <main class="resource-workbench-main">
           <div class="resource-workbench-scroll">
-            <template v-if="currentStep === 'types'">
-              <div class="resource-type-intro-card">
-                <span class="i-carbon-checkmark-outline" />
+            <section class="resource-form-section">
+              <div class="resource-section-heading">
+                <span>01</span>
                 <div>
-                  <b>已选择 {{ resourceApplicationForm.selectedResourceTypes.length }} 类资源</b>
-                  <p>左侧选择本次需要申请的资源类型，确认协议后进入材料填写。资源类型可多选，系统会自动合并所需协议和审批组。</p>
+                  <h3>申请信息</h3>
+                  <p>填写申请背景、紧急程度与期望生效时间。</p>
                 </div>
               </div>
-            </template>
 
-            <template v-else-if="currentStep === 'materials'">
               <div class="gap-5 grid md:grid-cols-2">
                 <label class="gap-2 grid md:col-span-2">
                   <span class="field-label">申请标题</span>
@@ -1094,6 +1048,16 @@ onBeforeUnmount(() => {
                     <input v-model="expectedTimeValue" class="form-time-input" type="time">
                   </div>
                   <TxDatePicker v-model="expectedDateValue" v-model:visible="expectedDatePickerVisible" title="选择期望生效日期" confirm-text="确定" cancel-text="取消" />
+                </div>
+              </div>
+            </section>
+
+            <section class="resource-form-section">
+              <div class="resource-section-heading">
+                <span>02</span>
+                <div>
+                  <h3>资源明细</h3>
+                  <p>按资源类型分组填写规格、额度、用途和预估成本。</p>
                 </div>
               </div>
 
@@ -1220,6 +1184,16 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
+            </section>
+
+            <section class="resource-form-section">
+              <div class="resource-section-heading">
+                <span>03</span>
+                <div>
+                  <h3>附件材料</h3>
+                  <p>上传图片、Markdown 或补充材料，也可在申请说明中填写外链。</p>
+                </div>
+              </div>
 
               <div>
                 <div class="mb-2 flex gap-3 items-center justify-between">
@@ -1228,9 +1202,17 @@ onBeforeUnmount(() => {
                 </div>
                 <TxFileUploader v-model="applicationFiles" :max="20" button-text="上传附件" drop-text="图片和补充材料都拖拽到这里" hint-text="图片、Markdown 附件和补充材料都上传到这里；全部文件总大小不超过 200MB。也可在申请说明里填写百度网盘等外链。" />
               </div>
-            </template>
+            </section>
 
-            <template v-else>
+            <section class="resource-form-section">
+              <div class="resource-section-heading">
+                <span>04</span>
+                <div>
+                  <h3>结算与提交</h3>
+                  <p>核对资源成本、优惠与安全校验后直接提交。</p>
+                </div>
+              </div>
+
               <div v-if="(resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey) || applicationSecurityForm.message" class="resource-confirm-card resource-security-card">
                 <TurnstileChallenge
                   v-if="resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey"
@@ -1342,49 +1324,26 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
-            </template>
+            </section>
           </div>
 
           <div class="resource-action-bar">
-            <span v-if="currentStep === 'types'" class="resource-action-status">已选 {{ resourceApplicationForm.selectedResourceTypes.length }} 类资源</span>
-            <span v-else-if="currentStep === 'materials'" class="resource-action-status">自动保存中 · 当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
-            <span v-else class="resource-action-status">预计冻结：{{ formatPoints(checkoutPayableEstimate) }} · 待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
+            <span class="resource-action-status">预计冻结：{{ formatPoints(checkoutPayableEstimate) }} · 当前待处理请求：{{ activeRequestCount }}/{{ MAX_ACTIVE_USER_REQUESTS }}</span>
             <div class="resource-action-buttons">
-              <template v-if="currentStep === 'types'">
-                <TxButton variant="primary" size="lg" @click="nextToMaterials">
-                  下一步：填写材料
-                </TxButton>
-              </template>
-              <template v-else-if="currentStep === 'materials'">
-                <TxButton variant="secondary" @click="onSaveDraft">
-                  保存草稿
-                </TxButton>
-                <TxButton variant="ghost" @click="currentStep = 'types'">
-                  上一步
-                </TxButton>
-                <TxButton variant="primary" @click="nextToTerms">
-                  下一步：结算单
-                </TxButton>
-              </template>
-              <template v-else>
-                <TxButton variant="secondary" @click="onSaveDraft">
-                  保存草稿
-                </TxButton>
-                <TxButton variant="ghost" @click="currentStep = 'materials'">
-                  上一步
-                </TxButton>
-                <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
-                  {{ submitReadyMessage }}
-                </span>
-                <TxButton variant="primary" @click="onSubmitResourceApplication">
-                  提交并预扣 {{ formatPoints(checkoutPayableEstimate) }}
-                </TxButton>
-              </template>
+              <TxButton variant="secondary" @click="onSaveDraft">
+                保存草稿
+              </TxButton>
+              <span v-if="submitReadyMessage" class="submit-ready-pill" role="status" aria-live="polite">
+                {{ submitReadyMessage }}
+              </span>
+              <TxButton variant="primary" @click="onSubmitResourceApplication">
+                提交并预扣 {{ formatPoints(checkoutPayableEstimate) }}
+              </TxButton>
             </div>
           </div>
         </main>
       </div>
-    </TxCard>
+    </div>
 
     <div v-if="isTermsDialogOpen" class="px-4 py-6 bg-slate-950/46 flex items-center inset-0 justify-center fixed z-50 backdrop-blur-sm" @click.self="closeTermsDialog">
       <div class="dialog-surface resource-terms-dialog solid-panel p-6 rounded-3xl max-h-[calc(100vh-3rem)] max-w-4xl w-full overflow-auto">

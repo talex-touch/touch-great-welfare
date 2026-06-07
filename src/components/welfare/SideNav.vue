@@ -16,7 +16,7 @@ interface NavItem {
 }
 
 const navItems: readonly NavItem[] = [
-  { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
+  { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '资源中心' },
   { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
   { key: 'collaboration', path: '/dashboard/collaboration', icon: 'i-carbon-task-add', label: '协作任务', roleRequired: true },
   { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人中心' },
@@ -128,21 +128,21 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
 }
 
 .cms-side-nav__item:hover {
-  color: rgb(15 23 42);
-  background: rgb(241 245 249);
+  color: rgb(4 120 87);
+  background: rgb(236 253 245);
 }
 
 .cms-side-nav__item.is-active {
   border-radius: 16px;
-  color: white;
-  background: rgb(15 23 42);
+  color: rgb(4 120 87);
+  background: linear-gradient(90deg, rgba(220, 252, 231, 0.96), rgba(236, 253, 245, 0.72));
   box-shadow: none;
 }
 
 .cms-side-nav__item.is-active-sub {
   border-radius: 16px;
-  color: rgb(15 23 42);
-  background: rgb(241 245 249);
+  color: rgb(4 120 87);
+  background: rgb(236 253 245);
 }
 
 .cms-side-nav__icon {
@@ -165,13 +165,13 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
 
 .dark .cms-side-nav__item:hover,
 .dark .cms-side-nav__item.is-active-sub {
-  color: white;
-  background: rgba(255, 255, 255, 0.08);
+  color: rgb(134 239 172);
+  background: rgba(16, 185, 129, 0.12);
 }
 
 .dark .cms-side-nav__item.is-active {
-  color: white;
-  background: rgb(15 23 42);
+  color: rgb(187 247 208);
+  background: linear-gradient(90deg, rgba(6, 78, 59, 0.55), rgba(16, 185, 129, 0.12));
   box-shadow: none;
 }
 
