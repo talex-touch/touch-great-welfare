@@ -91,8 +91,8 @@ const progressSteps = computed(() => {
       key: 'replied',
       label: '审核回复',
       description: verification.value?.reviewedAt ? formatDate(verification.value.reviewedAt) : '尚未回复',
-      done: status === 'approved' || status === 'rejected' || status === 'needs_supplement',
-      active: status === 'approved' || status === 'rejected' || status === 'needs_supplement',
+      done: status === 'approved' || status === 'rejected' || status === 'revoked' || status === 'needs_supplement',
+      active: status === 'approved' || status === 'rejected' || status === 'revoked' || status === 'needs_supplement',
     },
   ]
 })
@@ -217,7 +217,7 @@ function supplement() {
                 补充资料
               </TxButton>
             </div>
-            <div v-else-if="verification.status === 'rejected'" class="mt-4">
+            <div v-else-if="verification.status === 'rejected' || verification.status === 'revoked'" class="mt-4">
               <TxButton variant="secondary" @click="reapply">
                 重新提交
               </TxButton>

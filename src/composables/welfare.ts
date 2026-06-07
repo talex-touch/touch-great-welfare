@@ -7,7 +7,7 @@ export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
 export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'needs_supplement' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
 export type ApplicationMessageType = 'comment' | 'supplement' | 'result_submission' | 'system'
-export type StudentStatus = 'pending' | 'needs_supplement' | 'approved' | 'rejected'
+export type StudentStatus = 'pending' | 'needs_supplement' | 'approved' | 'rejected' | 'revoked'
 export type VerificationType = 'student' | 'frontline'
 export type EducationEmailVerificationSource = 'mail_auto' | 'user_confirmed_sent' | 'admin_approved'
 export type CreditTransactionType = 'recharge' | 'spend' | 'refund' | 'adjustment' | 'grant'
@@ -1883,7 +1883,7 @@ function userReviewStats(userId: string, source: Pick<WelfareState, 'application
       if (normalizeVerificationType(verification.verificationType) === 'student')
         stats.studentApproved += 1
     }
-    if (verification.status === 'rejected') {
+    if (verification.status === 'rejected' || verification.status === 'revoked') {
       stats.rejected += 1
       if (normalizeVerificationType(verification.verificationType) === 'student')
         stats.studentRejected += 1
@@ -4302,6 +4302,31 @@ export function useWelfareStore() {
     verification.reviewedAt = now()
   }
 
+  function revokeUserStudentVerification(userId: string, reason: string) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const plainReason = richTextToPlainText(reason).trim()
+    if (!plainReason)
+      throw new Error('请填写撤销学生认证原因')
+
+    const user = state.users.find(item => item.id === userId)
+    if (!user)
+      throw new Error('用户不存在')
+
+    const verification = [...state.studentVerifications]
+      .filter(item => item.userId === userId && normalizeVerificationType(item.verificationType) === 'student' && item.status === 'approved')
+      .sort((a, b) => (b.reviewedAt || b.createdAt).localeCompare(a.reviewedAt || a.createdAt))[0]
+
+    if (!verification)
+      throw new Error('没有可撤销的已通过学生认证')
+
+    verification.status = 'revoked'
+    verification.reply = `<p>管理员撤销认证。</p>${sanitizeRichText(reason)}`
+    verification.reviewedAt = now()
+    user.profile.studentVerified = false
+  }
+
   function isDeliveryApplication(application: WelfareApplication) {
     return ['code', 'pro'].includes(application.type)
       && application.status === 'answered'
@@ -4740,6 +4765,7 @@ export function useWelfareStore() {
     setUserCrowdReviewer,
     setUserSuspended,
     setUserStudentVerified,
+    revokeUserStudentVerification,
     unbindUserGitHub,
     adjustUserPoints,
     grantUserCoupon,
