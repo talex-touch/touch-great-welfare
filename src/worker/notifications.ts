@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { User, WelfareApplication, WelfareState } from '~/composables/welfare'
+import type { StudentVerification, User, WelfareApplication, WelfareState } from '~/composables/welfare'
 import type {
   AdminAnnouncementListResult,
   AdminAnnouncementSummary,
@@ -1407,6 +1407,75 @@ function supplementSubmittedNotification(application: WelfareApplication, user?:
   }
 }
 
+function verificationDisplayName(verification: StudentVerification, users: User[]) {
+  const user = users.find(item => item.id === verification.userId)
+  return user?.profile.displayName || user?.profile.email || verification.realName || verification.userId
+}
+
+function verificationNotificationTitle(verification: StudentVerification, suffix: string) {
+  const typeName = verification.verificationType === 'frontline' ? '一线认证' : '学生认证'
+  return `${typeName}${suffix}`
+}
+
+function verificationSubmittedNotification(verification: StudentVerification, users: User[]) {
+  const displayName = verificationDisplayName(verification, users)
+  return {
+    title: verificationNotificationTitle(verification, '已提交'),
+    body: `${displayName} 已提交 ${verification.category} 认证材料，请进入审核队列处理。`,
+    data: {
+      verificationId: verification.id,
+      verificationType: verification.verificationType ?? 'student',
+      userId: verification.userId,
+    },
+  }
+}
+
+function verificationSubmittedUserNotification(verification: StudentVerification) {
+  return {
+    title: verificationNotificationTitle(verification, '已提交'),
+    body: `你的 ${verification.category} 认证材料已提交，等待管理员审核。`,
+    data: {
+      verificationId: verification.id,
+      verificationType: verification.verificationType ?? 'student',
+    },
+  }
+}
+
+function verificationSupplementSubmittedNotification(verification: StudentVerification, users: User[]) {
+  const displayName = verificationDisplayName(verification, users)
+  return {
+    title: verificationNotificationTitle(verification, '已补充材料'),
+    body: `${displayName} 已补充 ${verification.category} 认证材料，请继续审核。`,
+    data: {
+      verificationId: verification.id,
+      verificationType: verification.verificationType ?? 'student',
+      userId: verification.userId,
+    },
+  }
+}
+
+function verificationSupplementSubmittedUserNotification(verification: StudentVerification) {
+  return {
+    title: verificationNotificationTitle(verification, '已补充材料'),
+    body: `你的 ${verification.category} 认证补充材料已提交，等待管理员继续审核。`,
+    data: {
+      verificationId: verification.id,
+      verificationType: verification.verificationType ?? 'student',
+    },
+  }
+}
+
+function verificationReviewNotification(verification: StudentVerification, suffix: string, fallback: string) {
+  return {
+    title: verificationNotificationTitle(verification, suffix),
+    body: verification.reply || fallback,
+    data: {
+      verificationId: verification.id,
+      verificationType: verification.verificationType ?? 'student',
+    },
+  }
+}
+
 export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, previous: Partial<WelfareState>, next: Partial<WelfareState>) {
   const users = Array.isArray(next.users) ? next.users : []
   const admins = users.filter(user => user.role === 'admin')
@@ -1461,16 +1530,56 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
   const nextVerifications = Array.isArray(next.studentVerifications) ? next.studentVerifications : []
   for (const verification of nextVerifications) {
     const before = previousVerifications.get(verification.id)
-    if (!before || before.status === verification.status)
+    if (!before) {
+      if (verification.status === 'pending') {
+        await createAndDispatchNotification(env, {
+          userId: verification.userId,
+          event: 'student_submitted',
+          ...verificationSubmittedUserNotification(verification),
+        })
+        const message = verificationSubmittedNotification(verification, users)
+        for (const admin of admins) {
+          await createAndDispatchNotification(env, {
+            userId: admin.id,
+            event: 'student_submitted',
+            ...message,
+          })
+        }
+      }
       continue
+    }
+    if (before.status === verification.status)
+      continue
+
+    if (before.status === 'needs_supplement' && verification.status === 'pending') {
+      await createAndDispatchNotification(env, {
+        userId: verification.userId,
+        event: 'student_supplement_submitted',
+        ...verificationSupplementSubmittedUserNotification(verification),
+      })
+      const message = verificationSupplementSubmittedNotification(verification, users)
+      for (const admin of admins) {
+        await createAndDispatchNotification(env, {
+          userId: admin.id,
+          event: 'student_supplement_submitted',
+          ...message,
+        })
+      }
+    }
+
+    if (before.status === 'pending' && verification.status === 'needs_supplement') {
+      await createAndDispatchNotification(env, {
+        userId: verification.userId,
+        event: 'student_needs_supplement',
+        ...verificationReviewNotification(verification, '需要补充材料', '你的认证材料需要补充，请进入认证详情查看要求。'),
+      })
+    }
 
     if (before.status === 'pending' && verification.status === 'approved') {
       await createAndDispatchNotification(env, {
         userId: verification.userId,
         event: 'student_approved',
-        title: '学生认证已通过',
-        body: verification.reply || '你的学生认证已通过，审核积分已返还。',
-        data: { verificationId: verification.id },
+        ...verificationReviewNotification(verification, '已通过', '你的认证已通过，审核积分已返还。'),
       })
     }
 
@@ -1478,9 +1587,15 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
       await createAndDispatchNotification(env, {
         userId: verification.userId,
         event: 'student_rejected',
-        title: '学生认证已退回',
-        body: verification.reply || '你的学生认证材料未通过审核，审核费不返还。',
-        data: { verificationId: verification.id },
+        ...verificationReviewNotification(verification, '已退回', '你的认证材料未通过审核，审核费不返还。'),
+      })
+    }
+
+    if (before.status === 'approved' && verification.status === 'revoked') {
+      await createAndDispatchNotification(env, {
+        userId: verification.userId,
+        event: 'student_revoked',
+        ...verificationReviewNotification(verification, '已撤销', '你的认证已被撤销，请进入认证详情查看原因。'),
       })
     }
   }

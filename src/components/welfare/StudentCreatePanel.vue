@@ -39,11 +39,12 @@ const {
   copyEducationEmailTemplate,
   openEducationEmailClient,
   confirmEducationEmailSent,
+  reloadWelfareState,
 } = useWelfareUiState()
 
 const router = useRouter()
 const route = useRoute()
-const { runSafely } = useWelfareFeedback()
+const { notify, runSafely } = useWelfareFeedback()
 const hasStudentConsent = ref(false)
 const currentStep = ref<'notice' | 'details'>('notice')
 const isCategorySuggestionsOpen = ref(false)
@@ -230,7 +231,14 @@ function resetEducationEmailProof() {
   resetEducationEmailVerificationForm()
 }
 
-onMounted(() => {
+async function initializeStudentForm() {
+  try {
+    await reloadWelfareState()
+  }
+  catch (error) {
+    notify(error instanceof Error ? error.message : '认证状态刷新失败')
+  }
+
   if (editingVerification.value) {
     fillStudentFormFromVerification(editingVerification.value)
     currentStep.value = 'details'
@@ -244,6 +252,10 @@ onMounted(() => {
     resetEducationEmailProof()
   if (!editingVerification.value)
     persistLocalDraft(studentDraftKey, studentForm)
+}
+
+onMounted(() => {
+  initializeStudentForm()
 })
 </script>
 

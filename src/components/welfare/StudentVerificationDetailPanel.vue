@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useWelfareFeedback } from '~/composables/feedback'
 import {
   educationEmailVerificationLabel,
   formatDate,
@@ -20,10 +21,12 @@ const {
   state,
   currentUser,
   isAdmin,
+  reloadWelfareState,
   statusText,
   statusTone,
   userName,
 } = useWelfareUiState()
+const { notify } = useWelfareFeedback()
 
 const verificationId = computed(() => {
   const raw = (route.params as Record<string, string | string[] | undefined>).id
@@ -123,6 +126,12 @@ function supplement() {
     },
   })
 }
+
+onMounted(() => {
+  reloadWelfareState().catch((error) => {
+    notify(error instanceof Error ? error.message : '认证状态刷新失败')
+  })
+})
 </script>
 
 <template>

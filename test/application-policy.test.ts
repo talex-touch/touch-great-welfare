@@ -243,6 +243,62 @@ describe('application policy', () => {
     })).toThrow('申请内容不得少于 200 字')
   })
 
+  it('respects the explicit rejection-fee waiver choice for resource applications', () => {
+    const store = useWelfareStore()
+    store.state.applicationPolicy.submitCooldownSeconds = 0
+
+    const withoutWaiver = store.submitResourceApplication({
+      title: '资源申请 A',
+      reason: longRichText('资源申请 A'),
+      businessBackground: 'A 项目背景',
+      urgency: 'normal',
+      duration: RESOURCE_DEFAULT_DURATION,
+      selectedResourceTypes: ['database'],
+      resourceItems: [{
+        resourceType: 'database',
+        resourceSubtype: 'mysql',
+        payload: {
+          name: 'welfare_read_model_a',
+          environment: 'prod',
+          permission: 'readonly',
+          reason: '只读公益报表分析',
+          operationScope: '查询公益统计报表',
+        },
+        requestedPermission: 'readonly',
+        duration: RESOURCE_DEFAULT_DURATION,
+      }],
+      acceptedTermIds: ['general_resource_terms', 'database_security_terms'],
+      waiveRejectionReviewFee: false,
+    })
+
+    const withWaiver = store.submitResourceApplication({
+      title: '资源申请 B',
+      reason: longRichText('资源申请 B'),
+      businessBackground: 'B 项目背景',
+      urgency: 'normal',
+      duration: RESOURCE_DEFAULT_DURATION,
+      selectedResourceTypes: ['database'],
+      resourceItems: [{
+        resourceType: 'database',
+        resourceSubtype: 'mysql',
+        payload: {
+          name: 'welfare_read_model_b',
+          environment: 'prod',
+          permission: 'readonly',
+          reason: '只读公益报表分析',
+          operationScope: '查询公益统计报表',
+        },
+        requestedPermission: 'readonly',
+        duration: RESOURCE_DEFAULT_DURATION,
+      }],
+      acceptedTermIds: ['general_resource_terms', 'database_security_terms'],
+      waiveRejectionReviewFee: true,
+    })
+
+    expect(withoutWaiver.rejectionReviewFeeWaived).toBe(false)
+    expect(withWaiver.rejectionReviewFeeWaived).toBe(true)
+  })
+
   it('requires a real name for student verification', () => {
     const store = useWelfareStore()
 
@@ -409,6 +465,45 @@ describe('application policy', () => {
     expect(store.state.studentVerifications[0].educationEmailChallengeId).toBe(challenge.id)
     expect(store.state.studentVerifications[0].educationEmailVerified).toBe(true)
     expect(store.state.transactions).toHaveLength(1)
+  })
+
+  it('allows a new student verification after the previous approval is revoked', () => {
+    const store = useWelfareStore()
+    store.state.applicationPolicy.submitCooldownSeconds = 0
+    store.state.users.push(user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@example.com',
+        studentVerified: false,
+      },
+    }))
+
+    store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      school: '北京大学',
+      notes: '<p>已上传学生证和校园材料。</p>',
+    })
+    const firstVerificationId = store.state.studentVerifications[0].id
+
+    store.state.currentUserId = 'admin_1'
+    store.approveStudentVerification(firstVerificationId, '通过')
+    store.revokeUserStudentVerification('user_1', '<p>系统架构升级，需要重新认证。</p>')
+
+    store.state.currentUserId = 'user_1'
+    store.submitStudentVerification({
+      realName: '公益同学',
+      category: '大学生',
+      school: '北京大学',
+      notes: '<p>重新上传学生证、校园系统截图和教育邮箱证明。</p>',
+    })
+
+    expect(store.state.studentVerifications).toHaveLength(2)
+    expect(store.state.studentVerifications[0].status).toBe('pending')
+    expect(store.state.studentVerifications[1].status).toBe('revoked')
+    expect(store.state.users.find(item => item.id === 'user_1')?.profile.studentVerified).toBe(false)
   })
 
   it('lets admins request frontline supplements and users resubmit the same record', () => {

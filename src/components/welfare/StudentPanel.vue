@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { TxButton, TxCard, TxStatusBadge } from '@talex-touch/tuffex'
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useWelfareFeedback } from '~/composables/feedback'
 import {
   formatDate,
   formatRetentionExpiry,
@@ -15,19 +17,30 @@ import RichTextView from './RichTextView.vue'
 const {
   currentUser,
   currentStudentVerifications,
+  reloadWelfareState,
   statusText,
   statusTone,
 } = useWelfareUiState()
 
 const router = useRouter()
+const { notify } = useWelfareFeedback()
 
 function goCreateStudentVerification() {
-  router.push('/dashboard/verification')
+  router.push({
+    path: '/dashboard/student/create',
+    query: { type: 'student' },
+  })
 }
 
 function verificationStatusText(status: string) {
   return status === 'pending' ? '处理中' : statusText(status)
 }
+
+onMounted(() => {
+  reloadWelfareState().catch((error) => {
+    notify(error instanceof Error ? error.message : '认证状态刷新失败')
+  })
+})
 </script>
 
 <template>

@@ -1,5 +1,5 @@
 export type NotificationChannel = 'in_app' | 'email' | 'feishu' | 'browser_push'
-export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_approved' | 'student_rejected' | 'ai_image_succeeded' | 'ai_image_failed' | 'admin_announcement'
+export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_submitted' | 'student_needs_supplement' | 'student_supplement_submitted' | 'student_approved' | 'student_rejected' | 'student_revoked' | 'ai_image_succeeded' | 'ai_image_failed' | 'admin_announcement'
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
 
 export interface NotificationItem {
@@ -88,8 +88,12 @@ export function notificationEventText(event: NotificationEvent) {
     application_rejected: '申请已退回',
     application_needs_supplement: '申请待补充',
     application_supplement_submitted: '申请已补充',
+    student_submitted: '认证已提交',
+    student_needs_supplement: '认证待补充',
+    student_supplement_submitted: '认证已补充',
     student_approved: '学生认证通过',
     student_rejected: '学生认证退回',
+    student_revoked: '学生认证撤销',
     ai_image_succeeded: '图片生成完成',
     ai_image_failed: '图片生成失败',
     admin_announcement: '管理员通告',

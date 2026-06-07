@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { StudentVerification, VerificationType } from '~/composables/welfare'
 import { TxButton, TxCard, TxInput, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@talex-touch/tuffex'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
@@ -26,14 +26,16 @@ const {
   approveStudentVerification,
   requestStudentSupplement,
   rejectStudentVerification,
+  reloadWelfareState,
 } = useWelfareUiState()
 
 const router = useRouter()
-const { runSafely } = useWelfareFeedback()
+const { notify, runSafely } = useWelfareFeedback()
 const activeSection = ref<'mine' | 'review'>('mine')
 const activeAdminTab = ref<'pending' | 'history'>('pending')
 const selectedVerificationId = ref('')
 const ALL_FILTER = 'all'
+const ACTIONABLE_VERIFICATION_STATUSES = new Set(['pending', 'needs_supplement', 'approved'])
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 const pendingFilters = reactive({
   query: '',
@@ -92,6 +94,13 @@ watch(
 
 function latestVerification(type: VerificationType) {
   return currentStudentVerifications.value.find(item => (item.verificationType ?? 'student') === type)
+}
+
+function latestActionableVerification(type: VerificationType) {
+  return currentStudentVerifications.value.find(item =>
+    (item.verificationType ?? 'student') === type
+    && ACTIONABLE_VERIFICATION_STATUSES.has(item.status),
+  )
 }
 
 function verificationStatusText(status: string) {
@@ -161,7 +170,9 @@ function resetPendingFilters() {
 }
 
 function verificationCardState(type: VerificationType, approved: boolean) {
-  const verification = latestVerification(type)
+  const verification = latestActionableVerification(type)
+  const latest = latestVerification(type)
+  const canResubmit = latest?.status === 'rejected' || latest?.status === 'revoked'
   const config = systemConfig.value
   const toggle = config.verification[type]
   const isOpen = config.siteEnabled && toggle.enabled
@@ -185,10 +196,14 @@ function verificationCardState(type: VerificationType, approved: boolean) {
 
   return {
     verification: undefined,
-    statusText: approved ? '已认证' : isOpen ? '可申请' : '已关闭',
-    statusTone: approved ? 'success' : isOpen ? 'available' : 'danger',
-    actionText: isOpen ? '提交材料' : '暂不开放',
-    meta: approved ? '认证记录已生效' : isOpen ? '尚未提交材料' : (toggle.reason || `${verificationTypeLabel(type)}暂未开放`),
+    statusText: approved ? '已认证' : canResubmit ? verificationStatusText(latest.status) : isOpen ? '可申请' : '已关闭',
+    statusTone: approved ? 'success' : canResubmit ? statusTone(latest.status) : isOpen ? 'available' : 'danger',
+    actionText: isOpen ? (canResubmit ? '重新认证' : '提交材料') : '暂不开放',
+    meta: approved
+      ? '认证记录已生效'
+      : canResubmit
+        ? `${latest.reviewedAt ? formatDate(latest.reviewedAt) : formatDate(latest.createdAt)} ${verificationStatusText(latest.status)}，可重新提交材料`
+        : isOpen ? '尚未提交材料' : (toggle.reason || `${verificationTypeLabel(type)}暂未开放`),
     disabled: !isOpen,
   }
 }
@@ -288,6 +303,12 @@ function onRejectStudent(id: string) {
     closeVerificationDrawer()
   }, '认证申请已退回，审核费不返还')
 }
+
+onMounted(() => {
+  reloadWelfareState().catch((error) => {
+    notify(error instanceof Error ? error.message : '认证状态刷新失败')
+  })
+})
 </script>
 
 <template>
