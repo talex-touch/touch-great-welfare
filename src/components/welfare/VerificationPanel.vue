@@ -65,6 +65,7 @@ function verificationCardState(type: VerificationType, approved: boolean) {
           : verification.reviewedAt
             ? `${formatDate(verification.reviewedAt)} 已回复`
             : `${formatDate(verification.createdAt)} 提交`,
+      disabled: false,
     }
   }
 
@@ -105,6 +106,7 @@ const verificationCards = computed(() => [
     actionText: '去授权',
     meta: openSourceConfigured.value ? `已选择 ${profileForm.selectedRepo}` : githubAppConfigForm.enabled ? '等待 GitHub App 授权' : '管理员尚未启用 GitHub App',
     verification: undefined as StudentVerification | undefined,
+    disabled: false,
     tags: ['GitHub App', '公开仓库'],
   },
 ] as const)

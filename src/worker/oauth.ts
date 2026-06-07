@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
-import { createUserInviteCode } from '~/composables/welfare'
+import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfare'
 import { assertAdminRequest, errorResponse, json, maskSecret, now, readJson } from './auth'
 import { bytesToHex, sha256Hex } from './crypto'
 import { createSessionCookie } from './session'
@@ -489,6 +489,13 @@ async function handleAuthorize(request: Request, env: WorkerEnv) {
   if (request.method !== 'POST')
     return json({ error: 'Method Not Allowed' }, 405)
 
+  const appState = await readWelfareState(env) as Partial<WelfareState>
+  const systemConfig = normalizeSystemConfig(appState.systemConfig)
+  if (!systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+  if (!systemConfig.loginEnabled)
+    throw new Error(systemConfig.loginClosedReason)
+
   const payload = await readJson<AuthorizePayload>(request)
   const providerId = normalizeProviderId(payload.providerId)
   const provider = providerId ? await getStoredProvider(env, providerId) : null
@@ -578,6 +585,12 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
   if (!Array.isArray(state.users) || !Array.isArray(state.transactions))
     throw new Error('用户状态未初始化')
 
+  const systemConfig = normalizeSystemConfig(state.systemConfig)
+  if (!systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+  if (!systemConfig.loginEnabled)
+    throw new Error(systemConfig.loginClosedReason)
+
   const subject = String(userInfo.sub ?? userInfo.id ?? '').trim()
   if (!subject)
     throw new Error('OAuth UserInfo 缺少 sub/id')
@@ -594,6 +607,9 @@ async function persistOAuthUser(env: WorkerEnv, provider: OAuthProviderRecord, o
     || state.users.find(item => item.profile.email.toLowerCase() === email)
 
   if (!localUser) {
+    if (!systemConfig.registrationEnabled)
+      throw new Error(systemConfig.registrationClosedReason)
+
     localUser = {
       id: userId,
       role: 'user',

@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
+import { normalizeSystemConfig } from '~/composables/welfare'
 import {
   buildEpaySubmitUrl,
   createEpayNotifyUrl,
@@ -13,6 +14,7 @@ import {
 } from './ldc-credit'
 import { appendPointTransaction, pointTransactionExistsByRef } from './points'
 import { authenticatedUserId } from './session'
+import { decryptSecret, encryptSecret } from './crypto'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
 interface RechargeOrder {
@@ -35,7 +37,8 @@ interface RechargeMerchantConfig {
   enabled: number | boolean
   gateway_base_url: string
   pid: string
-  key: string
+  key?: string | null
+  key_encrypted?: string | null
   points_per_ldc?: number | null
 }
 
@@ -88,6 +91,25 @@ function getRuntimeBaseUrl(request: Request) {
   return getRequestOrigin(request)
 }
 
+function encryptionSecret(env: WorkerEnv) {
+  return env.NOTIFY_SECRET_KEY ?? ''
+}
+
+async function decryptOptionalSecret(value: string | null | undefined, env: WorkerEnv) {
+  if (!value)
+    return ''
+  try {
+    return await decryptSecret(value, encryptionSecret(env))
+  }
+  catch {
+    return ''
+  }
+}
+
+async function resolveStoredRechargeKey(stored: RechargeMerchantConfig | null | undefined, env: WorkerEnv) {
+  return await decryptOptionalSecret(stored?.key_encrypted, env) || stored?.key || ''
+}
+
 async function getStoredRechargeConfig(env: WorkerEnv) {
   await ensureRechargeSchema(env)
 
@@ -107,26 +129,27 @@ async function getStoredRechargeConfig(env: WorkerEnv) {
 
 async function upsertStoredRechargeConfig(env: WorkerEnv, payload: Required<RechargeConfigPayload>) {
   await ensureRechargeSchema(env)
+  const keyEncrypted = await encryptSecret(payload.key, encryptionSecret(env))
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
-        insert into recharge_merchant_config (id, enabled, gateway_base_url, pid, key, points_per_ldc, updated_at)
-        values ('default', ?1, ?2, ?3, ?4, ?5, current_timestamp)
+        insert into recharge_merchant_config (id, enabled, gateway_base_url, pid, key, key_encrypted, points_per_ldc, updated_at)
+        values ('default', ?1, ?2, ?3, '', ?4, ?5, current_timestamp)
         on conflict (id)
-        do update set enabled = excluded.enabled, gateway_base_url = excluded.gateway_base_url, pid = excluded.pid, key = excluded.key, points_per_ldc = excluded.points_per_ldc, updated_at = current_timestamp
+        do update set enabled = excluded.enabled, gateway_base_url = excluded.gateway_base_url, pid = excluded.pid, key = '', key_encrypted = excluded.key_encrypted, points_per_ldc = excluded.points_per_ldc, updated_at = current_timestamp
       `)
-      .bind(payload.enabled ? 1 : 0, payload.gatewayBaseUrl, payload.pid, payload.key, payload.pointsPerLdc)
+      .bind(payload.enabled ? 1 : 0, payload.gatewayBaseUrl, payload.pid, keyEncrypted, payload.pointsPerLdc)
       .run()
     return
   }
 
   await getPool(env).query(`
-    insert into recharge_merchant_config (id, enabled, gateway_base_url, pid, key, points_per_ldc, updated_at)
-    values ('default', $1, $2, $3, $4, $5, now())
+    insert into recharge_merchant_config (id, enabled, gateway_base_url, pid, key, key_encrypted, points_per_ldc, updated_at)
+    values ('default', $1, $2, $3, '', $4, $5, now())
     on conflict (id)
-    do update set enabled = excluded.enabled, gateway_base_url = excluded.gateway_base_url, pid = excluded.pid, key = excluded.key, points_per_ldc = excluded.points_per_ldc, updated_at = now()
-  `, [payload.enabled, payload.gatewayBaseUrl, payload.pid, payload.key, payload.pointsPerLdc])
+    do update set enabled = excluded.enabled, gateway_base_url = excluded.gateway_base_url, pid = excluded.pid, key = '', key_encrypted = excluded.key_encrypted, points_per_ldc = excluded.points_per_ldc, updated_at = now()
+  `, [payload.enabled, payload.gatewayBaseUrl, payload.pid, keyEncrypted, payload.pointsPerLdc])
 }
 
 function normalizePointsPerLdc(value: unknown) {
@@ -145,7 +168,7 @@ async function getEffectiveRechargeSettings(env: WorkerEnv) {
       : false,
     gatewayBaseUrl: stored?.gateway_base_url || 'https://credit.linux.do/epay',
     pid: stored?.pid || '',
-    key: stored?.key || '',
+    key: await resolveStoredRechargeKey(stored, env),
     pointsPerLdc: normalizePointsPerLdc(stored?.points_per_ldc),
     source: stored ? 'admin' : 'empty',
   }
@@ -227,12 +250,17 @@ async function ensureRechargeSchema(env: WorkerEnv) {
           gateway_base_url text not null,
           pid text not null,
           key text not null,
+          key_encrypted text,
           points_per_ldc integer not null default 10,
           created_at text not null default current_timestamp,
           updated_at text not null default current_timestamp
         )
       `)
       .run()
+    await env.LOCAL_DB!
+      .prepare('alter table recharge_merchant_config add column key_encrypted text')
+      .run()
+      .catch(() => {})
     await env.LOCAL_DB!
       .prepare('alter table recharge_merchant_config add column points_per_ldc integer not null default 10')
       .run()
@@ -264,11 +292,13 @@ async function ensureRechargeSchema(env: WorkerEnv) {
       gateway_base_url text not null,
       pid text not null,
       key text not null,
+      key_encrypted text,
       points_per_ldc integer not null default 10,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
   `)
+  await pool.query('alter table recharge_merchant_config add column if not exists key_encrypted text')
   await pool.query('alter table recharge_merchant_config add column if not exists points_per_ldc integer not null default 10')
 }
 
@@ -369,14 +399,26 @@ async function getCurrentUserId(request: Request, env: WorkerEnv) {
   return userId
 }
 
-async function assertAdminRequest(request: Request, env: WorkerEnv) {
+async function getCurrentUser(request: Request, env: WorkerEnv) {
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
 
   const userId = await authenticatedUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
+
   const user = state.users.find(item => item.id === userId)
-  if (!user || user.role !== 'admin')
+  if (!user)
+    throw new Error('用户不存在')
+
+  return user
+}
+
+async function assertAdminRequest(request: Request, env: WorkerEnv) {
+  const user = await getCurrentUser(request, env)
+  if (user.role !== 'admin')
     throw new Error('需要管理员权限')
+  return user
 }
 
 async function creditRechargeOrder(env: WorkerEnv, order: RechargeOrder, notifyPayload: Record<string, string>) {
@@ -405,12 +447,17 @@ async function creditRechargeOrder(env: WorkerEnv, order: RechargeOrder, notifyP
 async function handleRechargeConfig(request: Request, env: WorkerEnv) {
   if (request.method === 'GET') {
     const settings = await getEffectiveRechargeSettings(env)
+    const userId = await authenticatedUserId(request, env)
+    const state = await readWelfareState(env) as Partial<WelfareState>
+    assertWelfareState(state)
+    const user = state.users.find(item => item.id === userId)
+    const isAdmin = user?.role === 'admin'
     return json({
       enabled: settings.enabled,
       configured: isLdcEpayConfigured({ pid: settings.pid, key: settings.key }),
-      gatewayBaseUrl: settings.gatewayBaseUrl,
-      pid: settings.pid,
-      keyMasked: maskSecret(settings.key),
+      gatewayBaseUrl: isAdmin ? settings.gatewayBaseUrl : '',
+      pid: isAdmin ? settings.pid : '',
+      keyMasked: isAdmin ? maskSecret(settings.key) : '',
       pointsPerLdc: settings.pointsPerLdc,
       paymentType: 'epay',
       source: settings.source,
@@ -459,6 +506,11 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   const settings = await getEffectiveRechargeSettings(env)
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
+  const systemConfig = normalizeSystemConfig(state.systemConfig)
+  if (!systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+  if (!systemConfig.rechargeEnabled)
+    throw new Error(systemConfig.rechargeClosedReason)
 
   const userId = await getCurrentUserId(request, env)
   const user = state.users.find(item => item.id === userId)
@@ -603,6 +655,10 @@ async function handleRechargeStatus(request: Request, env: WorkerEnv) {
   const order = await getOrder(env, outTradeNo)
   if (!order)
     return json({ error: '充值订单不存在' }, 404)
+
+  const user = await getCurrentUser(request, env)
+  if (user.role !== 'admin' && order.user_id !== user.id)
+    return json({ error: '无权读取该充值订单' }, 403)
 
   return json({
     outTradeNo: order.out_trade_no,

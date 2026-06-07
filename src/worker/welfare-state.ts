@@ -164,21 +164,22 @@ function publicSquareApplication(application: WelfareApplication): WelfareApplic
   }
 }
 
-function sanitizeApplicationItemForPublicTemplate(item: ApplicationItem): ApplicationItem {
+function sanitizeApplicationItemForPublicTemplate(item: Partial<ApplicationItem> & Pick<ApplicationItem, 'resourceType' | 'resourceSubtype' | 'payload'>): ApplicationItem {
+  const createdAt = item.createdAt || new Date().toISOString()
   return {
-    id: item.id,
-    applicationId: item.applicationId,
+    id: item.id || '',
+    applicationId: item.applicationId || '',
     resourceType: item.resourceType,
     resourceSubtype: item.resourceSubtype,
     payload: item.payload,
     requestedQuota: item.requestedQuota,
     requestedPermission: item.requestedPermission,
     duration: item.duration,
-    approverGroup: item.approverGroup,
+    approverGroup: item.approverGroup || '管理员',
     approvalStatus: 'pending',
     provisionStatus: 'not_required',
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
+    createdAt,
+    updatedAt: item.updatedAt || createdAt,
   }
 }
 
@@ -392,13 +393,77 @@ function isAdminUser(previousState: unknown, userId: string) {
   return isRecord(user) && user.role === 'admin'
 }
 
-function mergeUserScopedRecords(previousValue: unknown, nextValue: unknown, userId: string) {
-  if (!Array.isArray(previousValue) || !Array.isArray(nextValue))
-    return nextValue
+function mergeScopedRecords(
+  previousValue: unknown,
+  nextValue: unknown,
+  predicate: (item: Record<string, unknown>) => boolean,
+) {
+  if (!Array.isArray(previousValue))
+    return []
+  if (!Array.isArray(nextValue))
+    return previousValue
 
-  const nextOwnedRecords = nextValue.filter(item => isRecord(item) && item.userId === userId)
-  const previousOtherRecords = previousValue.filter(item => !isRecord(item) || item.userId !== userId)
-  return [...nextOwnedRecords, ...previousOtherRecords]
+  const nextScopedRecords = nextValue.filter((item): item is Record<string, unknown> => isRecord(item) && predicate(item))
+  const nextById = new Map(nextScopedRecords
+    .filter(item => typeof item.id === 'string')
+    .map(item => [item.id as string, item]))
+  const previousIds = new Set<string>()
+  const merged = previousValue.map((previousItem) => {
+    if (!isRecord(previousItem) || typeof previousItem.id !== 'string' || !predicate(previousItem))
+      return previousItem
+
+    previousIds.add(previousItem.id)
+    return nextById.get(previousItem.id) ?? previousItem
+  })
+
+  for (const item of nextScopedRecords) {
+    if (typeof item.id === 'string' && previousIds.has(item.id))
+      continue
+    merged.push(item)
+  }
+
+  return merged
+}
+
+function mergeSquareBoostsForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
+  if (!Array.isArray(previousValue))
+    return []
+  if (!Array.isArray(nextValue))
+    return previousValue
+
+  const nextRecords = nextValue.filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.id === 'string')
+  const nextById = new Map(nextRecords.map(item => [item.id as string, item]))
+  const previousIds = new Set<string>()
+  const merged = previousValue.map((previousItem) => {
+    if (!isRecord(previousItem) || typeof previousItem.id !== 'string')
+      return previousItem
+
+    previousIds.add(previousItem.id)
+    const nextItem = nextById.get(previousItem.id)
+    if (!nextItem)
+      return previousItem
+    if (previousItem.userId === userId && nextItem.userId === userId)
+      return nextItem
+    if (nextItem.reportedBy === userId && typeof nextItem.reportedAt === 'string') {
+      return {
+        ...previousItem,
+        reportedAt: nextItem.reportedAt,
+        reportReason: typeof nextItem.reportReason === 'string' ? nextItem.reportReason : previousItem.reportReason,
+        reportedBy: userId,
+        cooldownUntil: typeof nextItem.cooldownUntil === 'string' ? nextItem.cooldownUntil : previousItem.cooldownUntil,
+        penaltyApplied: !!nextItem.penaltyApplied || !!previousItem.penaltyApplied,
+      }
+    }
+    return previousItem
+  })
+
+  for (const item of nextRecords) {
+    if (item.userId !== userId || previousIds.has(item.id as string))
+      continue
+    merged.push(item)
+  }
+
+  return merged
 }
 
 function mergeUsersForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
@@ -434,11 +499,20 @@ async function mergeClientWritableState<T extends Record<string, unknown>>(previ
 
   const previousRecord = isRecord(previousState) ? previousState : {}
   return {
-    ...nextState,
+    ...previousRecord,
     users: mergeUsersForNonAdmin(previousRecord.users, nextState.users, userId),
-    studentVerifications: mergeUserScopedRecords(previousRecord.studentVerifications, nextState.studentVerifications, userId),
-    educationEmailChallenges: mergeUserScopedRecords(previousRecord.educationEmailChallenges, nextState.educationEmailChallenges, userId),
-  }
+    applications: mergeScopedRecords(previousRecord.applications, nextState.applications, item => item.userId === userId),
+    studentVerifications: mergeScopedRecords(previousRecord.studentVerifications, nextState.studentVerifications, item => item.userId === userId),
+    educationEmailChallenges: mergeScopedRecords(previousRecord.educationEmailChallenges, nextState.educationEmailChallenges, item => item.userId === userId),
+    coupons: mergeScopedRecords(previousRecord.coupons, nextState.coupons, item => item.userId === userId),
+    dailyCheckIns: mergeScopedRecords(previousRecord.dailyCheckIns, nextState.dailyCheckIns, item => item.userId === userId),
+    invitationBindings: mergeScopedRecords(previousRecord.invitationBindings, nextState.invitationBindings, item => item.inviteeUserId === userId || item.inviterUserId === userId),
+    crowdReviews: mergeScopedRecords(previousRecord.crowdReviews, nextState.crowdReviews, item => item.reviewerId === userId),
+    squarePosts: mergeScopedRecords(previousRecord.squarePosts, nextState.squarePosts, item => item.userId === userId),
+    squareBoosts: mergeSquareBoostsForNonAdmin(previousRecord.squareBoosts, nextState.squareBoosts, userId),
+    squareReports: mergeScopedRecords(previousRecord.squareReports, nextState.squareReports, item => item.reporterId === userId),
+    transactions: mergeScopedRecords(previousRecord.transactions, nextState.transactions, item => item.userId === userId),
+  } as T
 }
 
 async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {

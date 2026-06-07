@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/composables/welfare'
 import { createUserInviteCode } from '~/composables/welfare'
-import { bytesToHex } from './crypto'
+import { bytesToHex, decryptSecret, encryptSecret } from './crypto'
 import { authenticatedUserId, createSessionCookie } from './session'
 import { getPool, readWelfareState, shouldUseD1, writeWelfareState } from './welfare-state'
 
@@ -11,7 +11,8 @@ interface GitHubAppConfigRecord {
   app_name: string
   app_slug: string
   client_id: string
-  client_secret: string
+  client_secret?: string | null
+  client_secret_encrypted?: string | null
   callback_url: string
   authorize_url: string
   token_url: string
