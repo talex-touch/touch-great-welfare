@@ -7,7 +7,6 @@ import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
 import { formatDate } from '~/composables/welfare'
 import { pricingSummary, RECHARGE_MAX_LDC, RECHARGE_MIN_LDC, useWelfareUiState } from '~/composables/welfare-ui'
-import { richTextToPlainText } from '~/utils/rich-text'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -59,6 +58,7 @@ const PROFILE_TABS = {
   invitation: '邀请担保',
   loginHistory: '登录历史',
 } as const
+const SHOW_MEMBER_CARD_CAROUSEL = false
 const MEMBER_CARD_ASSETS = [
   {
     key: 'starter',
@@ -93,7 +93,6 @@ const isAllTransactionsVisible = ref(false)
 const activeProfileTab = ref(PROFILE_TABS.system)
 const activeMemberCardIndex = ref(0)
 let stopProfileDraft: (() => void) | undefined
-let memberCardTimer: ReturnType<typeof setInterval> | undefined
 
 const userInitial = computed(() => currentUser.value?.profile.displayName.slice(0, 1).toUpperCase() ?? '?')
 const roleText = computed(() => {
@@ -118,8 +117,6 @@ const levelProgress = computed(() => {
 
   return Math.min(100, Math.round((currentUserLevelCard.value.score / currentUserLevelCard.value.maxScore) * 100))
 })
-const profileBioText = computed(() => richTextToPlainText(currentUser.value?.profile.bio ?? ''))
-const hasProfileBio = computed(() => !!profileBioText.value)
 const currentMemberCardIndex = computed(() => {
   const key = currentUserLevelCard.value?.key ?? 'starter'
   const index = MEMBER_CARD_ASSETS.findIndex(item => item.key === key)
@@ -381,7 +378,6 @@ onMounted(async () => {
   restoreLocalDraft(profileDraftKey, profileForm)
   stopProfileDraft = persistLocalDraft(profileDraftKey, profileForm)
   window.addEventListener('keydown', onKeydown)
-  memberCardTimer = setInterval(showNextMemberCard, 5200)
 
   await Promise.all([
     refreshPointTransactions(),
@@ -407,8 +403,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopProfileDraft?.()
-  if (memberCardTimer)
-    clearInterval(memberCardTimer)
   window.removeEventListener('keydown', onKeydown)
 })
 </script>
@@ -434,68 +428,45 @@ onUnmounted(() => {
       <TxCard class="profile-card profile-card--overview" background="pure" shadow="soft" :padding="0" :radius="14">
         <div class="profile-overview-grid">
           <div class="profile-account-column">
-            <button class="profile-user-button" @click="openProfileDialog">
-              <span class="profile-avatar">
-                <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
-                <span v-else>{{ userInitial }}</span>
-              </span>
-              <span class="profile-user-copy">
-                <span class="profile-user-name-row">
+            <div class="profile-user-panel">
+              <div class="profile-avatar-column">
+                <span class="profile-avatar">
+                  <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
+                  <span v-else>{{ userInitial }}</span>
+                </span>
+                <TxButton size="sm" variant="secondary" @click="openProfileDialog">
+                  编辑资料
+                </TxButton>
+              </div>
+              <div class="profile-user-copy">
+                <div class="profile-user-name-row">
                   <span class="profile-user-name">{{ currentUser.profile.displayName }}</span>
                   <TxStatusBadge :text="roleText" :status="currentUser.role === 'admin' ? 'success' : 'info'" size="sm" />
-                </span>
+                </div>
                 <span class="profile-user-email">{{ currentUser.profile.email }}</span>
-                <span v-if="hasProfileBio" class="profile-user-bio">{{ profileBioText }}</span>
-                <span v-else class="profile-user-bio profile-user-bio--empty">暂未填写个人简介。</span>
-              </span>
-            </button>
-
-            <div class="profile-trust-panel">
-              <div class="profile-panel-head">
-                <div>
-                  <h3>信任等级</h3>
-                  <p>审核优先级参考通过记录、认证状态和退回情况。</p>
-                </div>
-                <TxStatusBadge v-if="currentUserLevelCard" :text="currentUserLevelCard.name" :status="currentUserLevelCard.tone === 'warning' ? 'warning' : currentUserLevelCard.tone" size="sm" />
               </div>
+            </div>
 
-              <div v-if="!currentUserLevelCard" class="profile-empty">
-                暂无信任等级。
+            <div class="profile-wallet-main profile-wallet-main--account">
+              <div>
+                <span class="profile-overline">可用积分</span>
+                <strong>{{ currentUserPointBalanceText }}</strong>
+                <button class="profile-rule-link" type="button" @click="openPricingDialog">
+                  查看计费规则
+                  <span class="i-carbon-chevron-right" />
+                </button>
               </div>
-              <div v-else class="profile-trust-body">
-                <div class="profile-trust-score-row">
-                  <div class="profile-trust-score">
-                    {{ currentUserLevelCard.score }}<span>/ {{ currentUserLevelCard.maxScore }}</span>
-                  </div>
-                  <div class="profile-trust-meta">
-                    <div>
-                      <span>等级</span>
-                      <strong>{{ currentUserLevelCard.name }}</strong>
-                    </div>
-                    <div>
-                      <span>优先级</span>
-                      <strong>{{ currentUserLevelCard.priority }}</strong>
-                    </div>
-                  </div>
-                </div>
-                <div class="profile-progress">
-                  <div :style="{ width: `${levelProgress}%` }" />
-                </div>
-                <div class="profile-trust-summary">
-                  {{ currentUserLevelCard.summary }}
-                </div>
-                <div class="profile-trust-reasons">
-                  {{ currentUserLevelCard.reasons.join(' / ') }}
-                </div>
-                <div class="profile-trust-next">
-                  下一等级：<b>{{ currentUserLevelCard.next?.name ?? '已达最高' }}</b>
-                </div>
+              <div class="profile-recharge-panel">
+                <TxButton class="profile-recharge-button" variant="primary" :disabled="rechargeForm.loading || !rechargeFeatureEnabled" @click="openRechargeDialog">
+                  {{ rechargeForm.loading ? '创建订单中...' : rechargeFeatureEnabled ? '充值' : '充值关闭' }}
+                </TxButton>
+                <span>{{ rechargeFeatureEnabled ? '限时倍率 1:10' : rechargeClosedReason }}</span>
               </div>
             </div>
           </div>
 
           <div class="profile-wallet-panel">
-            <div class="profile-member-carousel" :aria-label="`会员卡轮播：${activeMemberCard.title}`">
+            <div v-if="SHOW_MEMBER_CARD_CAROUSEL" class="profile-member-carousel" :aria-label="`会员卡轮播：${activeMemberCard.title}`">
               <div class="profile-member-carousel-track">
                 <button class="profile-carousel-arrow profile-carousel-arrow--prev" type="button" aria-label="上一张会员卡" @click="showPreviousMemberCard">
                   <span class="i-carbon-chevron-left" />
@@ -522,36 +493,38 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="profile-wallet-main">
-              <div>
-                <span class="profile-overline">可用积分</span>
-                <strong>{{ currentUserPointBalanceText }}</strong>
-                <button class="profile-rule-link" type="button" @click="openPricingDialog">
-                  查看计费规则
-                  <span class="i-carbon-chevron-right" />
-                </button>
+            <div v-if="currentUserLevelCard" class="profile-trust-panel profile-trust-panel--wallet">
+              <div class="profile-panel-head">
+                <div>
+                  <h3>信任等级</h3>
+                  <p>审核优先级参考通过记录、认证状态和退回情况。</p>
+                </div>
+                <TxStatusBadge :text="currentUserLevelCard.name" :status="currentUserLevelCard.tone === 'warning' ? 'warning' : currentUserLevelCard.tone" size="sm" />
               </div>
-              <div class="profile-recharge-panel">
-                <TxButton class="profile-recharge-button" variant="primary" :disabled="rechargeForm.loading || !rechargeFeatureEnabled" @click="openRechargeDialog">
-                  {{ rechargeForm.loading ? '创建订单中...' : rechargeFeatureEnabled ? '充值' : '充值关闭' }}
-                </TxButton>
-                <span>{{ rechargeFeatureEnabled ? '限时倍率 1:10' : rechargeClosedReason }}</span>
+
+              <div class="profile-trust-body">
+                <div class="profile-trust-score-row">
+                  <div class="profile-trust-score">
+                    {{ currentUserLevelCard.score }}<span>/ {{ currentUserLevelCard.maxScore }}</span>
+                  </div>
+                  <div class="profile-trust-meta">
+                    <div>
+                      <span>优先级</span>
+                      <strong>{{ currentUserLevelCard.priority }}</strong>
+                    </div>
+                    <div>
+                      <span>下一等级</span>
+                      <strong>{{ currentUserLevelCard.next?.name ?? '已达最高' }}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div class="profile-progress">
+                  <div :style="{ width: `${levelProgress}%` }" />
+                </div>
               </div>
             </div>
-
-            <div class="profile-wallet-stats">
-              <div>
-                <span>最近收入</span>
-                <strong>+{{ walletStats.income.toLocaleString('zh-CN') }}</strong>
-              </div>
-              <div>
-                <span>最近消费</span>
-                <strong>-{{ walletStats.outcome.toLocaleString('zh-CN') }}</strong>
-              </div>
-              <div>
-                <span>流水条数</span>
-                <strong>{{ walletStats.count }}</strong>
-              </div>
+            <div v-else class="profile-empty">
+              暂无信任等级。
             </div>
           </div>
         </div>
@@ -669,6 +642,21 @@ onUnmounted(() => {
               <TxButton size="sm" variant="secondary" @click="toggleTransactions">
                 {{ isAllTransactionsVisible ? '收起' : '查看全部' }}
               </TxButton>
+            </div>
+
+            <div class="profile-wallet-stats profile-wallet-stats--transactions">
+              <div>
+                <span>最近收入</span>
+                <strong>+{{ walletStats.income.toLocaleString('zh-CN') }}</strong>
+              </div>
+              <div>
+                <span>最近消费</span>
+                <strong>-{{ walletStats.outcome.toLocaleString('zh-CN') }}</strong>
+              </div>
+              <div>
+                <span>流水条数</span>
+                <strong>{{ walletStats.count }}</strong>
+              </div>
             </div>
 
             <div class="profile-table">
@@ -1039,7 +1027,7 @@ onUnmounted(() => {
   gap: 0.7rem;
 }
 
-.profile-user-button,
+.profile-user-panel,
 .profile-trust-panel,
 .profile-setting-card,
 .profile-split-panel,
@@ -1050,7 +1038,7 @@ onUnmounted(() => {
   background: rgba(248, 250, 252, 0.88);
 }
 
-.profile-user-button {
+.profile-user-panel {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
@@ -1058,19 +1046,13 @@ onUnmounted(() => {
   width: 100%;
   padding: 0.75rem;
   color: inherit;
-  cursor: pointer;
-  font: inherit;
   text-align: left;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease;
 }
 
-.profile-user-button:hover,
-.profile-user-button:focus-visible {
-  border-color: rgba(37, 99, 235, 0.36);
-  background: rgba(239, 246, 255, 0.9);
-  outline: none;
+.profile-avatar-column {
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
 }
 
 .profile-avatar {
@@ -1120,9 +1102,7 @@ onUnmounted(() => {
 }
 
 .profile-user-email,
-.profile-user-bio,
 .profile-hint,
-.profile-trust-reasons,
 .profile-trust-next,
 .profile-card-head p,
 .profile-table-title-row span,
@@ -1143,23 +1123,15 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.profile-user-bio {
-  display: -webkit-box;
-  margin-top: 0.5rem;
-  overflow: hidden;
-  color: #475569;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.profile-user-bio--empty {
-  color: #94a3b8;
-}
-
 .profile-trust-panel,
 .profile-invite-body,
 .profile-history-list {
   padding: 0.8rem;
+}
+
+.profile-trust-panel--wallet {
+  padding: 0.75rem 0.8rem;
+  background: rgba(255, 255, 255, 0.42);
 }
 
 .profile-panel-head h3,
@@ -1234,15 +1206,6 @@ onUnmounted(() => {
   background: #ffb000;
 }
 
-.profile-trust-summary {
-  margin-top: 0.6rem;
-  color: #111827;
-  font-size: 14px;
-  font-weight: 900;
-  line-height: 1.35;
-}
-
-.profile-trust-reasons,
 .profile-trust-next {
   margin-top: 0.25rem;
 }
@@ -1360,6 +1323,13 @@ onUnmounted(() => {
   gap: 1rem;
 }
 
+.profile-wallet-main--account {
+  padding: 0.8rem;
+  border: 1px solid rgba(99, 102, 241, 0.1);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.88);
+}
+
 .profile-overline,
 .profile-section-label {
   color: #1e2a4a;
@@ -1417,6 +1387,10 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
+}
+
+.profile-wallet-stats--transactions {
+  margin: 0 1rem 0.75rem;
 }
 
 .profile-wallet-stats > div {
@@ -1921,7 +1895,6 @@ onUnmounted(() => {
 .dark .profile-card-head h3,
 .dark .profile-trust-score,
 .dark .profile-trust-meta strong,
-.dark .profile-trust-summary,
 .dark .profile-row-title,
 .dark .profile-history-row strong,
 .dark .profile-trust-next b,
@@ -1937,7 +1910,6 @@ onUnmounted(() => {
 .dark .profile-hint,
 .dark .profile-panel-head p,
 .dark .profile-card-head p,
-.dark .profile-trust-reasons,
 .dark .profile-trust-next,
 .dark .profile-table-title-row span,
 .dark .profile-setting-card p,
@@ -1947,8 +1919,9 @@ onUnmounted(() => {
   color: #b6c2d3;
 }
 
-.dark .profile-user-button,
+.dark .profile-user-panel,
 .dark .profile-trust-panel,
+.dark .profile-wallet-main--account,
 .dark .profile-setting-card,
 .dark .profile-split-panel,
 .dark .profile-invitees-box,
@@ -1957,12 +1930,6 @@ onUnmounted(() => {
 .dark .profile-pricing-list > div {
   border-color: rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.06);
-}
-
-.dark .profile-user-button:hover,
-.dark .profile-user-button:focus-visible {
-  border-color: rgba(96, 165, 250, 0.42);
-  background: rgba(30, 41, 59, 0.82);
 }
 
 .dark .profile-wallet-panel {

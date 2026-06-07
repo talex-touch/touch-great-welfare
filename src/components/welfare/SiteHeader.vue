@@ -164,87 +164,94 @@ onUnmounted(() => {
           </nav>
         </div>
 
-        <div class="header-shell__right flex gap-2 items-center justify-end">
-          <button class="icon-btn" title="Toggle dark" @click="toggleDark()">
-            <span class="i-carbon-sun dark:i-carbon-moon" />
-          </button>
-          <button v-if="currentUser" class="icon-btn relative" title="消息中心" @click="goNotifications">
-            <span class="i-carbon-notification" />
-            <span v-if="unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center absolute -right-1 -top-1">
-              {{ unreadNotificationCount }}
-            </span>
-          </button>
-          <div v-if="currentUser" class="relative">
-            <button class="px-2 py-1 rounded-2xl flex gap-3 transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="toggleUserMenu">
-              <div class="text-right gap-1 hidden justify-items-end sm:grid">
-                <div class="text-sm fw-800 leading-5 max-w-36 truncate">
-                  {{ currentUser.profile.displayName }}
-                </div>
-                <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10">
-                  余额 {{ currentUserPointBalanceText }}
-                </span>
-              </div>
-              <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10 sm:hidden">
-                余额 {{ currentUserPointBalanceText }}
-              </span>
-              <span class="text-sm text-white rounded-full bg-slate-950 flex h-9 w-9 shadow-lg items-center justify-center overflow-hidden dark:text-slate-950 dark:bg-white">
-                <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
-                <span v-else>{{ userInitial }}</span>
-              </span>
+        <div class="header-shell__right flex items-center justify-end">
+          <template v-if="currentUser">
+            <button class="header-balance-pill" type="button" title="查看钱包余额" @click="router.push('/dashboard/wallet')">
+              <span class="i-carbon-favorite header-balance-pill__icon" aria-hidden="true" />
+              <span class="header-balance-pill__label">余额</span>
+              <span class="header-balance-pill__value">{{ currentUserPointBalanceText }}</span>
             </button>
 
-            <Transition name="popover-pop">
-              <div v-if="isUserMenuOpen" class="p-2 border border-black/8 rounded-2xl bg-white w-64 shadow-2xl shadow-slate-900/12 right-0 top-13 absolute z-50 dark:border-white/10 dark:bg-[#101216]">
-                <div class="px-3 py-3 border-b border-black/8 dark:border-white/10">
-                  <div class="text-sm fw-900">
-                    {{ currentUser.profile.displayName }}
-                  </div>
-                  <div class="text-xs text-slate-500 mt-1 truncate dark:text-slate-400">
-                    {{ currentUser.profile.email }}
-                  </div>
-                  <div class="mt-3 flex gap-2 items-center">
-                    <span class="text-xs text-emerald-700 px-2 py-1 rounded-full bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-400/10">{{ userRoleText }}</span>
-                    <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUserPointBalanceText }}</span>
-                  </div>
-                </div>
-                <div class="py-1 border-b border-black/8 dark:border-white/10">
-                  <button
-                    v-for="item in accountMenuNavItems"
-                    :key="item.key"
-                    class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                    :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
-                    @click="goUserMenuItem(item)"
-                  >
-                    <span :class="item.icon" />
-                    {{ item.label }}
-                    <span v-if="item.key === 'notifications' && unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 ml-auto px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center">
-                      {{ unreadNotificationCount }}
-                    </span>
-                  </button>
-                </div>
-                <div v-if="currentUser.role === 'admin'" class="py-1 border-b border-black/8 dark:border-white/10">
-                  <button
-                    v-for="item in adminMenuNavItems"
-                    :key="item.key"
-                    class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                    :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
-                    @click="goUserMenuItem(item)"
-                  >
-                    <span :class="item.icon" />
-                    {{ item.label }}
-                  </button>
-                </div>
-                <button class="text-sm fw-800 mt-1 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="onLogout">
-                  <span class="i-carbon-logout" />
-                  退出登录
-                </button>
-              </div>
-            </Transition>
-          </div>
+            <span class="header-action-separator" aria-hidden="true" />
 
-          <button v-else class="text-sm fw-800 px-4 py-2 border border-black/8 rounded-2xl transition dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10" @click="router.push('/login')">
-            登录
-          </button>
+            <button class="header-notification-btn" title="消息中心" @click="goNotifications">
+              <span class="i-carbon-notification" aria-hidden="true" />
+              <span v-if="unreadNotificationCount" class="header-notification-btn__dot" aria-hidden="true" />
+              <span class="sr-only">{{ unreadNotificationCount ? `有 ${unreadNotificationCount} 条未读消息` : '消息中心' }}</span>
+            </button>
+
+            <div class="relative">
+              <button class="header-user-trigger" type="button" @click="toggleUserMenu">
+                <span class="header-user-trigger__avatar">
+                  <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
+                  <span v-else>{{ userInitial }}</span>
+                </span>
+                <span class="header-user-trigger__name">{{ currentUser.profile.displayName }}</span>
+                <span class="i-carbon-chevron-down header-user-trigger__chevron" aria-hidden="true" />
+              </button>
+
+              <Transition name="popover-pop">
+                <div v-if="isUserMenuOpen" class="p-2 border border-black/8 rounded-2xl bg-white w-64 shadow-2xl shadow-slate-900/12 right-0 top-13 absolute z-50 dark:border-white/10 dark:bg-[#101216]">
+                  <div class="px-3 py-3 border-b border-black/8 dark:border-white/10">
+                    <div class="text-sm fw-900">
+                      {{ currentUser.profile.displayName }}
+                    </div>
+                    <div class="text-xs text-slate-500 mt-1 truncate dark:text-slate-400">
+                      {{ currentUser.profile.email }}
+                    </div>
+                    <div class="mt-3 flex gap-2 items-center">
+                      <span class="text-xs text-emerald-700 px-2 py-1 rounded-full bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-400/10">{{ userRoleText }}</span>
+                      <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUserPointBalanceText }}</span>
+                    </div>
+                  </div>
+                  <div class="py-1 border-b border-black/8 dark:border-white/10">
+                    <button
+                      v-for="item in accountMenuNavItems"
+                      :key="item.key"
+                      class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                      :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                      @click="goUserMenuItem(item)"
+                    >
+                      <span :class="item.icon" />
+                      {{ item.label }}
+                      <span v-if="item.key === 'notifications' && unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 ml-auto px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center">
+                        {{ unreadNotificationCount }}
+                      </span>
+                    </button>
+                  </div>
+                  <button class="text-sm fw-800 mt-1 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="toggleDark()">
+                    <span class="i-carbon-sun dark:i-carbon-moon" />
+                    切换主题
+                  </button>
+                  <div v-if="currentUser.role === 'admin'" class="py-1 border-b border-black/8 dark:border-white/10">
+                    <button
+                      v-for="item in adminMenuNavItems"
+                      :key="item.key"
+                      class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                      :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                      @click="goUserMenuItem(item)"
+                    >
+                      <span :class="item.icon" />
+                      {{ item.label }}
+                    </button>
+                  </div>
+                  <button class="text-sm fw-800 mt-1 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="onLogout">
+                    <span class="i-carbon-logout" />
+                    退出登录
+                  </button>
+                </div>
+              </Transition>
+            </div>
+          </template>
+
+          <template v-else>
+            <button class="icon-btn" title="Toggle dark" @click="toggleDark()">
+              <span class="i-carbon-sun dark:i-carbon-moon" />
+            </button>
+            <button class="text-sm fw-800 px-4 py-2 border border-black/8 rounded-2xl transition dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10" @click="router.push('/login')">
+              登录
+            </button>
+          </template>
         </div>
       </div>
     </header>
@@ -384,7 +391,191 @@ onUnmounted(() => {
 }
 
 .header-shell__right {
+  gap: 0.78rem;
   min-width: 0;
+}
+
+.header-balance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  height: 30px;
+  padding: 0 0.78rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  color: rgb(75 85 99);
+  background: transparent;
+  box-shadow: none;
+  transition:
+    border-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.header-balance-pill:hover {
+  transform: none;
+  border-color: rgba(251, 191, 36, 0.34);
+  background: transparent;
+  box-shadow: none;
+}
+
+.header-balance-pill__icon {
+  color: rgb(75 85 99);
+  font-size: 1rem;
+}
+
+.header-balance-pill__label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.header-balance-pill__value {
+  margin-left: 0.02rem;
+  color: #f59e0b;
+  font-size: 0.86rem;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.header-action-separator {
+  width: 1px;
+  height: 22px;
+  background: rgba(148, 163, 184, 0.28);
+}
+
+.header-notification-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  color: rgb(75 85 99);
+  font-size: 1.05rem;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.header-notification-btn:hover {
+  color: rgb(15 23 42);
+  background: rgba(148, 163, 184, 0.12);
+  transform: translateY(-1px);
+}
+
+.header-notification-btn__dot {
+  position: absolute;
+  top: 0.24rem;
+  right: 0.24rem;
+  width: 0.48rem;
+  height: 0.48rem;
+  border: 1px solid rgba(255, 255, 255, 0.96);
+  border-radius: 999px;
+  background: #fbbf24;
+  box-shadow: 0 2px 7px rgba(245, 158, 11, 0.36);
+}
+
+.header-user-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.12rem 0.05rem 0.12rem 0.12rem;
+  border-radius: 999px;
+  color: rgb(15 23 42);
+  transition:
+    background-color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.header-user-trigger:hover {
+  background: rgba(148, 163, 184, 0.1);
+  transform: translateY(-1px);
+}
+
+.header-user-trigger__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.86);
+  border-radius: 999px;
+  color: white;
+  font-size: 0.78rem;
+  font-weight: 900;
+  background: rgb(148 163 184);
+  box-shadow:
+    0 6px 14px rgba(15, 23, 42, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.header-user-trigger__name {
+  max-width: 8rem;
+  overflow: hidden;
+  color: rgb(15 23 42);
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-user-trigger__chevron {
+  flex: 0 0 auto;
+  color: rgb(148 163 184);
+  font-size: 0.95rem;
+}
+
+.dark .header-balance-pill {
+  border-color: rgba(255, 255, 255, 0.1);
+  color: rgb(203 213 225);
+  background: transparent;
+  box-shadow: none;
+}
+
+.dark .header-balance-pill:hover {
+  border-color: rgba(251, 191, 36, 0.28);
+  background: transparent;
+  box-shadow: none;
+}
+
+.dark .header-balance-pill__icon,
+.dark .header-notification-btn {
+  color: rgb(203 213 225);
+}
+
+.dark .header-action-separator {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.dark .header-notification-btn:hover,
+.dark .header-user-trigger:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dark .header-notification-btn__dot {
+  border-color: rgba(6, 7, 10, 0.95);
+}
+
+.dark .header-user-trigger,
+.dark .header-user-trigger__name {
+  color: white;
+}
+
+.dark .header-user-trigger__avatar {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgb(100 116 139);
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 .header-brand {
@@ -498,6 +689,56 @@ onUnmounted(() => {
 
   .header-shell__center {
     display: none;
+  }
+
+  .header-shell__right {
+    gap: 0.42rem;
+  }
+
+  .header-balance-pill {
+    gap: 0.28rem;
+    height: 28px;
+    padding: 0 0.62rem;
+  }
+
+  .header-balance-pill__label {
+    display: none;
+  }
+
+  .header-balance-pill__icon {
+    font-size: 0.92rem;
+  }
+
+  .header-balance-pill__value {
+    font-size: 0.78rem;
+  }
+
+  .header-action-separator {
+    display: none;
+  }
+
+  .header-notification-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 1rem;
+  }
+
+  .header-user-trigger {
+    gap: 0.35rem;
+    padding: 0.18rem;
+  }
+
+  .header-user-trigger__avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  .header-user-trigger__name {
+    display: none;
+  }
+
+  .header-user-trigger__chevron {
+    font-size: 1rem;
   }
 
   .header-brand__name {
