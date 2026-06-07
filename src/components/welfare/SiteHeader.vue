@@ -21,13 +21,12 @@ const dismissedForcedAnnouncementIds = ref<Set<string>>(new Set())
 const topNavItems = [
   { key: 'home', path: '/', icon: 'i-carbon-home', label: '首页' },
   { key: 'square', path: '/dashboard/square', icon: 'i-carbon-campsite', label: '广场' },
-  { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人信息' },
+  { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人中心' },
 ] as const
 const accountMenuNavItems = [
+  { key: 'profile', path: '/dashboard/profile', icon: 'i-carbon-user-avatar', label: '个人中心' },
   { key: 'apply', path: '/dashboard/apply', icon: 'i-carbon-document-attachment', label: '我的申请' },
   { key: 'notifications', path: '/dashboard/notifications', icon: 'i-carbon-notification', label: '消息中心' },
-  { key: 'notificationSettings', path: '/dashboard/notification-settings', icon: 'i-carbon-settings', label: '通知设置' },
-  { key: 'wallet', path: '/dashboard/wallet', icon: 'i-carbon-wallet', label: '钱包充值' },
   { key: 'verification', path: '/dashboard/verification', icon: 'i-carbon-certificate', label: '认证申请' },
 ] as const
 const adminMenuNavItems = [
@@ -129,124 +128,127 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="activeSiteBanner" class="site-banner" :class="bannerToneClass">
-    <div class="site-banner__inner mx-auto px-5 max-w-7xl lg:px-8">
-      <span class="i-carbon-information site-banner__icon" />
-      <div class="min-w-0">
-        <b v-if="activeSiteBanner.title">{{ activeSiteBanner.title }}</b>
-        <span>{{ activeSiteBanner.body }}</span>
+  <div class="site-chrome">
+    <div v-if="activeSiteBanner" class="site-banner" :class="bannerToneClass">
+      <div class="site-banner__inner mx-auto px-5 max-w-7xl lg:px-8">
+        <span class="i-carbon-information site-banner__icon" />
+        <div class="min-w-0">
+          <b v-if="activeSiteBanner.title">{{ activeSiteBanner.title }}</b>
+          <span>{{ activeSiteBanner.body }}</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <header class="border-b border-black/6 bg-[#f7f5ef]/78 top-0 sticky z-40 backdrop-blur-2xl dark:border-white/8 dark:bg-[#06070a]/72">
-    <div class="header-shell mx-auto px-5 max-w-7xl items-center lg:px-8">
-      <div class="header-shell__left">
-        <RouterLink class="header-brand" to="/">
-          <img src="/brand/icon.svg" alt="领益 Link Welfare" class="h-10 w-10">
-          <span class="header-brand__name">领益</span>
-        </RouterLink>
-      </div>
-
-      <div class="header-shell__center">
-        <nav v-if="currentUser" class="header-top-nav hidden items-center md:flex">
-          <button
-            v-for="item in topNavItems"
-            :key="item.key"
-            class="header-top-nav__item"
-            :class="isActivePath(item.path) ? 'is-active' : ''"
-            @click="goTopNavItem(item)"
-          >
-            <span :class="item.icon" />
-            {{ item.label }}
-          </button>
-        </nav>
-      </div>
-
-      <div class="header-shell__right flex gap-2 items-center justify-end">
-        <button class="icon-btn" title="Toggle dark" @click="toggleDark()">
-          <span class="i-carbon-sun dark:i-carbon-moon" />
-        </button>
-        <button v-if="currentUser" class="icon-btn relative" title="消息中心" @click="goNotifications">
-          <span class="i-carbon-notification" />
-          <span v-if="unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center absolute -right-1 -top-1">
-            {{ unreadNotificationCount }}
-          </span>
-        </button>
-        <div v-if="currentUser" class="relative">
-          <button class="px-2 py-1 rounded-2xl flex gap-3 transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="toggleUserMenu">
-            <div class="text-right gap-1 hidden justify-items-end sm:grid">
-              <div class="text-sm fw-800 leading-5 max-w-36 truncate">
-                {{ currentUser.profile.displayName }}
-              </div>
-              <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10">
-                余额 {{ currentUser.points.toLocaleString('zh-CN') }}
-              </span>
-            </div>
-            <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10 sm:hidden">
-              余额 {{ currentUser.points.toLocaleString('zh-CN') }}
-            </span>
-            <span class="text-sm text-white rounded-full bg-slate-950 flex h-9 w-9 shadow-lg items-center justify-center overflow-hidden dark:text-slate-950 dark:bg-white">
-              <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
-              <span v-else>{{ userInitial }}</span>
-            </span>
-          </button>
-
-          <Transition name="popover-pop">
-            <div v-if="isUserMenuOpen" class="p-2 border border-black/8 rounded-2xl bg-white w-64 shadow-2xl shadow-slate-900/12 right-0 top-13 absolute z-50 dark:border-white/10 dark:bg-[#101216]">
-              <div class="px-3 py-3 border-b border-black/8 dark:border-white/10">
-                <div class="text-sm fw-900">
-                  {{ currentUser.profile.displayName }}
-                </div>
-                <div class="text-xs text-slate-500 mt-1 truncate dark:text-slate-400">
-                  {{ currentUser.profile.email }}
-                </div>
-                <div class="mt-3 flex gap-2 items-center">
-                  <span class="text-xs text-emerald-700 px-2 py-1 rounded-full bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-400/10">{{ userRoleText }}</span>
-                  <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUser.points.toLocaleString('zh-CN') }}</span>
-                </div>
-              </div>
-              <div class="py-1 border-b border-black/8 dark:border-white/10">
-                <button
-                  v-for="item in accountMenuNavItems"
-                  :key="item.key"
-                  class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                  :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
-                  @click="goUserMenuItem(item)"
-                >
-                  <span :class="item.icon" />
-                  {{ item.label }}
-                  <span v-if="item.key === 'notifications' && unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 ml-auto px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center">
-                    {{ unreadNotificationCount }}
-                  </span>
-                </button>
-              </div>
-              <div v-if="currentUser.role === 'admin'" class="py-1 border-b border-black/8 dark:border-white/10">
-                <button
-                  v-for="item in adminMenuNavItems"
-                  :key="item.key"
-                  class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
-                  :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
-                  @click="goUserMenuItem(item)"
-                >
-                  <span :class="item.icon" />
-                  {{ item.label }}
-                </button>
-              </div>
-              <button class="text-sm fw-800 mt-1 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="onLogout">
-                <span class="i-carbon-logout" />
-                退出登录
-              </button>
-            </div>
-          </Transition>
+    <header class="site-header border-b border-black/6 bg-[#f7f5ef]/78 backdrop-blur-2xl dark:border-white/8 dark:bg-[#06070a]/72">
+      <div class="header-shell px-5 items-center lg:px-8">
+        <div class="header-shell__left">
+          <RouterLink class="header-brand" to="/">
+            <img src="/brand/icon.svg" alt="领益 Link Welfare" class="h-10 w-10">
+            <span class="header-brand__name">领益</span>
+          </RouterLink>
         </div>
 
-        <button v-else class="text-sm fw-800 px-4 py-2 border border-black/8 rounded-2xl transition dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10" @click="router.push('/login')">
-          登录
-        </button>
+        <div class="header-shell__center">
+          <nav v-if="currentUser" class="header-top-nav hidden items-center md:flex">
+            <button
+              v-for="item in topNavItems"
+              :key="item.key"
+              class="header-top-nav__item"
+              :class="isActivePath(item.path) ? 'is-active' : ''"
+              @click="goTopNavItem(item)"
+            >
+              <span :class="item.icon" />
+              {{ item.label }}
+            </button>
+          </nav>
+        </div>
+
+        <div class="header-shell__right flex gap-2 items-center justify-end">
+          <button class="icon-btn" title="Toggle dark" @click="toggleDark()">
+            <span class="i-carbon-sun dark:i-carbon-moon" />
+          </button>
+          <button v-if="currentUser" class="icon-btn relative" title="消息中心" @click="goNotifications">
+            <span class="i-carbon-notification" />
+            <span v-if="unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center absolute -right-1 -top-1">
+              {{ unreadNotificationCount }}
+            </span>
+          </button>
+          <div v-if="currentUser" class="relative">
+            <button class="px-2 py-1 rounded-2xl flex gap-3 transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="toggleUserMenu">
+              <div class="text-right gap-1 hidden justify-items-end sm:grid">
+                <div class="text-sm fw-800 leading-5 max-w-36 truncate">
+                  {{ currentUser.profile.displayName }}
+                </div>
+                <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10">
+                  余额 {{ currentUser.points.toLocaleString('zh-CN') }}
+                </span>
+              </div>
+              <span class="text-xs text-sky-600 px-2 py-1 border border-sky-300 rounded-full bg-sky-50 dark:text-sky-200 dark:border-sky-400/35 dark:bg-sky-400/10 sm:hidden">
+                余额 {{ currentUser.points.toLocaleString('zh-CN') }}
+              </span>
+              <span class="text-sm text-white rounded-full bg-slate-950 flex h-9 w-9 shadow-lg items-center justify-center overflow-hidden dark:text-slate-950 dark:bg-white">
+                <img v-if="currentUser.profile.avatar" :src="currentUser.profile.avatar" :alt="currentUser.profile.displayName" class="h-full w-full object-cover">
+                <span v-else>{{ userInitial }}</span>
+              </span>
+            </button>
+
+            <Transition name="popover-pop">
+              <div v-if="isUserMenuOpen" class="p-2 border border-black/8 rounded-2xl bg-white w-64 shadow-2xl shadow-slate-900/12 right-0 top-13 absolute z-50 dark:border-white/10 dark:bg-[#101216]">
+                <div class="px-3 py-3 border-b border-black/8 dark:border-white/10">
+                  <div class="text-sm fw-900">
+                    {{ currentUser.profile.displayName }}
+                  </div>
+                  <div class="text-xs text-slate-500 mt-1 truncate dark:text-slate-400">
+                    {{ currentUser.profile.email }}
+                  </div>
+                  <div class="mt-3 flex gap-2 items-center">
+                    <span class="text-xs text-emerald-700 px-2 py-1 rounded-full bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-400/10">{{ userRoleText }}</span>
+                    <span class="text-xs text-sky-700 px-2 py-1 rounded-full bg-sky-50 dark:text-sky-200 dark:bg-sky-400/10">余额 {{ currentUser.points.toLocaleString('zh-CN') }}</span>
+                  </div>
+                </div>
+                <div class="py-1 border-b border-black/8 dark:border-white/10">
+                  <button
+                    v-for="item in accountMenuNavItems"
+                    :key="item.key"
+                    class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                    :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                    @click="goUserMenuItem(item)"
+                  >
+                    <span :class="item.icon" />
+                    {{ item.label }}
+                    <span v-if="item.key === 'notifications' && unreadNotificationCount" class="text-[10px] text-slate-950 fw-900 ml-auto px-1 rounded-full bg-emerald-300 flex h-4 min-w-4 items-center justify-center">
+                      {{ unreadNotificationCount }}
+                    </span>
+                  </button>
+                </div>
+                <div v-if="currentUser.role === 'admin'" class="py-1 border-b border-black/8 dark:border-white/10">
+                  <button
+                    v-for="item in adminMenuNavItems"
+                    :key="item.key"
+                    class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
+                    :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
+                    @click="goUserMenuItem(item)"
+                  >
+                    <span :class="item.icon" />
+                    {{ item.label }}
+                  </button>
+                </div>
+                <button class="text-sm fw-800 mt-1 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10" @click="onLogout">
+                  <span class="i-carbon-logout" />
+                  退出登录
+                </button>
+              </div>
+            </Transition>
+          </div>
+
+          <button v-else class="text-sm fw-800 px-4 py-2 border border-black/8 rounded-2xl transition dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10" @click="router.push('/login')">
+            登录
+          </button>
+        </div>
       </div>
-    </div>
-  </header>
+    </header>
+  </div>
+  <div class="site-chrome-spacer" :class="activeSiteBanner ? 'site-chrome-spacer--with-banner' : ''" aria-hidden="true" />
 
   <Teleport to="body">
     <button v-if="isUserMenuOpen" class="bg-transparent cursor-default inset-0 fixed z-30" aria-label="关闭用户菜单" @click="closeUserMenu" />
@@ -282,10 +284,23 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.site-chrome {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 60;
+}
+
+.site-chrome-spacer {
+  height: 72px;
+  flex: 0 0 auto;
+}
+
+.site-chrome-spacer--with-banner {
+  height: 116px;
+}
+
 .site-banner {
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-  position: relative;
-  z-index: 45;
 }
 
 .site-banner__inner {
@@ -341,12 +356,17 @@ onUnmounted(() => {
   box-shadow: 0 24px 80px rgba(15, 23, 42, 0.2);
 }
 
+.site-header {
+  width: 100%;
+}
+
 .header-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 1rem;
   height: 72px;
   max-height: 72px;
+  width: 100%;
 }
 
 .header-shell__left {
@@ -461,10 +481,22 @@ onUnmounted(() => {
 }
 
 @media (max-width: 767px) {
+  .site-chrome-spacer {
+    height: 64px;
+  }
+
+  .site-chrome-spacer--with-banner {
+    height: 108px;
+  }
+
   .header-shell {
     grid-template-columns: minmax(0, 1fr) auto;
     height: 64px;
     max-height: 64px;
+  }
+
+  .header-shell__center {
+    display: none;
   }
 
   .header-brand__name {

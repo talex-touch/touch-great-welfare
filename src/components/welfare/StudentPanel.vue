@@ -24,6 +24,10 @@ const router = useRouter()
 function goCreateStudentVerification() {
   router.push('/dashboard/verification')
 }
+
+function verificationStatusText(status: string) {
+  return status === 'pending' ? '处理中' : statusText(status)
+}
 </script>
 
 <template>
@@ -64,6 +68,11 @@ function goCreateStudentVerification() {
             v-for="item in currentStudentVerifications"
             :key="item.id"
             class="px-5 py-4 border-t border-black/8 gap-3 grid transition dark:border-white/10 hover:bg-slate-50 md:grid-cols-[1fr_140px_130px] md:items-center dark:hover:bg-white/5"
+            role="button"
+            tabindex="0"
+            @click="router.push(`/dashboard/student/${item.id}`)"
+            @keydown.enter.prevent="router.push(`/dashboard/student/${item.id}`)"
+            @keydown.space.prevent="router.push(`/dashboard/student/${item.id}`)"
           >
             <div class="min-w-0">
               <div class="flex flex-wrap gap-2 items-center">
@@ -87,7 +96,7 @@ function goCreateStudentVerification() {
               {{ item.reviewFee }} 积分
             </div>
             <div class="md:text-right">
-              <TxStatusBadge :text="statusText(item.status)" :status="statusTone(item.status)" size="sm" />
+              <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
             </div>
             <div v-if="item.reply" class="text-sm leading-6 p-3 rounded-xl bg-slate-100 dark:bg-[#151820] md:col-span-3">
               {{ item.reply }}

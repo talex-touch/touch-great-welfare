@@ -584,7 +584,7 @@ async function handleRechargeNotify(request: Request, env: WorkerEnv) {
 async function handleRechargeReturn(request: Request) {
   const url = new URL(request.url)
   const outTradeNo = url.searchParams.get('out_trade_no') || url.searchParams.get('trade_no') || ''
-  const redirectUrl = new URL('/dashboard/wallet', url.origin)
+  const redirectUrl = new URL('/dashboard/profile', url.origin)
   if (outTradeNo)
     redirectUrl.searchParams.set('recharge', outTradeNo)
 

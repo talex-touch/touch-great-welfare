@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './worker/welfare-state'
 import { handleAiRequest } from './worker/ai'
+import { handleEducationMailRequest } from './worker/education-mail'
 import { handleGitHubAppRequest } from './worker/github-app'
 import { handleNotificationRequest } from './worker/notifications'
 import { handleOAuthRequest } from './worker/oauth'
@@ -17,6 +18,8 @@ export default {
       return handleWelfareStateRequest(request, env)
     if (url.pathname.startsWith('/api/ai/'))
       return handleAiRequest(request, env)
+    if (url.pathname.startsWith('/api/education-mail/'))
+      return handleEducationMailRequest(request, env)
     if (url.pathname.startsWith('/api/github-app/'))
       return handleGitHubAppRequest(request, env)
     if (url.pathname.startsWith('/api/oauth/'))

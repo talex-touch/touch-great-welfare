@@ -1,4 +1,5 @@
 import type { TemporaryKeyView } from './ai'
+import type { EducationMailSyncResult } from './education-mail'
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from './recharge'
@@ -8,6 +9,7 @@ import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, saveAiConfig } from './ai'
+import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig } from './education-mail'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
   createAdminAnnouncement,
@@ -222,6 +224,21 @@ export const sub2ApiKeyForm = reactive({
 
 export const sub2ApiKeys = ref<Sub2ApiKeyView[]>([])
 export const generatedSub2ApiKey = ref('')
+
+export const educationMailConfigForm = reactive({
+  enabled: true,
+  baseUrl: '',
+  adminKey: '',
+  adminKeyMasked: '',
+  inboxAddress: EDUCATION_EMAIL_REVIEW_INBOX,
+  lookbackHours: 168,
+  configured: false,
+  loading: false,
+  testing: false,
+  syncing: false,
+  message: '',
+  lastSync: null as EducationMailSyncResult | null,
+})
 
 export const notificationSettingsForm = reactive({
   emailEnabled: false,
@@ -455,6 +472,7 @@ export const ADMIN_TABS = {
   github: 'GitHub 应用',
   ai: 'AI 配置',
   sub2api: 'Sub2API',
+  educationMail: '教育邮箱',
   notifications: '通知配置',
   ldc: '充值配置',
   users: '用户管理',
@@ -468,6 +486,7 @@ export const adminTabItems = [
   { key: 'github', name: ADMIN_TABS.github, icon: 'i-carbon-logo-github' },
   { key: 'ai', name: ADMIN_TABS.ai, icon: 'i-carbon-ai-status' },
   { key: 'sub2api', name: ADMIN_TABS.sub2api, icon: 'i-carbon-api-1' },
+  { key: 'educationMail', name: ADMIN_TABS.educationMail, icon: 'i-carbon-email' },
   { key: 'notifications', name: ADMIN_TABS.notifications, icon: 'i-carbon-notification' },
   { key: 'ldc', name: ADMIN_TABS.ldc, icon: 'i-carbon-wallet' },
   { key: 'users', name: ADMIN_TABS.users, icon: 'i-carbon-user-multiple' },
@@ -1458,6 +1477,88 @@ export function useWelfareUiState() {
     }
   }
 
+  function applyEducationMailConfig(config: Awaited<ReturnType<typeof loadEducationMailConfig>>) {
+    educationMailConfigForm.enabled = config.enabled
+    educationMailConfigForm.baseUrl = config.baseUrl
+    educationMailConfigForm.adminKey = ''
+    educationMailConfigForm.adminKeyMasked = config.adminKeyMasked
+    educationMailConfigForm.inboxAddress = config.inboxAddress
+    educationMailConfigForm.lookbackHours = config.lookbackHours
+    educationMailConfigForm.configured = config.configured
+  }
+
+  async function refreshEducationMailConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    educationMailConfigForm.loading = true
+    try {
+      applyEducationMailConfig(await loadEducationMailConfig(welfare.currentUser.value.id))
+    }
+    finally {
+      educationMailConfigForm.loading = false
+    }
+  }
+
+  async function persistEducationMailConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    educationMailConfigForm.loading = true
+    educationMailConfigForm.message = ''
+    try {
+      const result = await saveEducationMailConfig(welfare.currentUser.value.id, {
+        enabled: educationMailConfigForm.enabled,
+        baseUrl: educationMailConfigForm.baseUrl,
+        adminKey: educationMailConfigForm.adminKey,
+        inboxAddress: educationMailConfigForm.inboxAddress,
+        lookbackHours: Number(educationMailConfigForm.lookbackHours),
+      })
+      applyEducationMailConfig(result)
+      educationMailConfigForm.message = '教育邮箱收件配置已保存'
+    }
+    finally {
+      educationMailConfigForm.loading = false
+    }
+  }
+
+  async function verifyEducationMailConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    educationMailConfigForm.testing = true
+    educationMailConfigForm.message = ''
+    try {
+      await testEducationMailConfig(welfare.currentUser.value.id)
+      educationMailConfigForm.message = 'DoneMail 连接测试通过'
+    }
+    finally {
+      educationMailConfigForm.testing = false
+    }
+  }
+
+  async function syncEducationMailVerifications() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    educationMailConfigForm.syncing = true
+    educationMailConfigForm.message = ''
+    try {
+      const result = await syncEducationMailChallenges(welfare.currentUser.value.id)
+      educationMailConfigForm.lastSync = result
+      educationMailConfigForm.message = `已检查 ${result.checked} 个待验证邮件，自动确认 ${result.verified} 个`
+      if (result.verified)
+        await welfare.reloadWelfareState()
+    }
+    finally {
+      educationMailConfigForm.syncing = false
+    }
+  }
+
   async function refreshSub2ApiKeys() {
     if (!welfare.currentUser.value)
       return
@@ -2066,6 +2167,7 @@ export function useWelfareUiState() {
     sub2ApiKeyForm,
     sub2ApiKeys,
     generatedSub2ApiKey,
+    educationMailConfigForm,
     notificationProviderConfigForm,
     siteBannerConfigForm,
     activeSiteBanner,
@@ -2199,6 +2301,10 @@ export function useWelfareUiState() {
     refreshSub2ApiConfig,
     persistSub2ApiConfig,
     verifySub2ApiConfig,
+    refreshEducationMailConfig,
+    persistEducationMailConfig,
+    verifyEducationMailConfig,
+    syncEducationMailVerifications,
     refreshSub2ApiKeys,
     generateSub2ApiKey,
     revokeSub2ApiKey,

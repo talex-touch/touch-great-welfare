@@ -8,7 +8,7 @@ const isStandaloneInfoPage = computed(() => route.path.startsWith('/dashboard/sq
 </script>
 
 <template>
-  <section class="mt-1 flex-1 gap-2 grid" :class="isStandaloneInfoPage ? '' : 'lg:grid-cols-[260px_minmax(0,1fr)]'">
+  <section class="dashboard-layout flex-1" :class="isStandaloneInfoPage ? 'dashboard-layout--standalone' : 'dashboard-layout--with-sidebar'">
     <SideNav v-if="!isStandaloneInfoPage" />
     <main class="dashboard-content min-w-0 space-y-2">
       <RouterView />

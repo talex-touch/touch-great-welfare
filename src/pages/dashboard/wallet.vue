@@ -1,7 +1,18 @@
 <script setup lang="ts">
-import WalletPanel from '~/components/welfare/WalletPanel.vue'
+import { onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+const route = useRoute()
+const router = useRouter()
+
+onMounted(() => {
+  router.replace({
+    path: '/dashboard/profile',
+    query: route.query,
+  })
+})
 </script>
 
 <template>
-  <WalletPanel />
+  <div />
 </template>

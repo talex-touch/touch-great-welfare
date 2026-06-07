@@ -38,6 +38,7 @@ declare module 'vue' {
     SquarePanel: typeof import('./src/components/welfare/SquarePanel.vue')['default']
     StudentCreatePanel: typeof import('./src/components/welfare/StudentCreatePanel.vue')['default']
     StudentPanel: typeof import('./src/components/welfare/StudentPanel.vue')['default']
+    StudentVerificationDetailPanel: typeof import('./src/components/welfare/StudentVerificationDetailPanel.vue')['default']
     TheCounter: typeof import('./src/components/TheCounter.vue')['default']
     TheFooter: typeof import('./src/components/TheFooter.vue')['default']
     TheInput: typeof import('./src/components/TheInput.vue')['default']

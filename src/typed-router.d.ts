@@ -56,6 +56,7 @@ declare module 'vue-router/auto-routes' {
       | '/dashboard/profile'
       | '/dashboard/square'
       | '/dashboard/student'
+      | '/dashboard/student/[id]'
       | '/dashboard/student/create'
       | '/dashboard/verification'
       | '/dashboard/wallet'
@@ -136,7 +137,15 @@ declare module 'vue-router/auto-routes' {
       '/dashboard/student',
       Record<never, never>,
       Record<never, never>,
+      | '/dashboard/student/[id]'
       | '/dashboard/student/create'
+    >,
+    '/dashboard/student/[id]': RouteRecordInfo<
+      '/dashboard/student/[id]',
+      '/dashboard/student/:id',
+      { id: ParamValue<true> },
+      { id: ParamValue<false> },
+      | never
     >,
     '/dashboard/student/create': RouteRecordInfo<
       '/dashboard/student/create',
@@ -219,6 +228,7 @@ declare module 'vue-router/auto-routes' {
         | '/dashboard/profile'
         | '/dashboard/square'
         | '/dashboard/student'
+        | '/dashboard/student/[id]'
         | '/dashboard/student/create'
         | '/dashboard/verification'
         | '/dashboard/wallet'
@@ -290,9 +300,16 @@ declare module 'vue-router/auto-routes' {
     'src/pages/dashboard/student.vue': {
       routes:
         | '/dashboard/student'
+        | '/dashboard/student/[id]'
         | '/dashboard/student/create'
       views:
         | 'default'
+    }
+    'src/pages/dashboard/student/[id].vue': {
+      routes:
+        | '/dashboard/student/[id]'
+      views:
+        | never
     }
     'src/pages/dashboard/student/create.vue': {
       routes:

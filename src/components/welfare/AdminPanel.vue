@@ -25,6 +25,7 @@ const {
   applicationPolicyConfigForm,
   aiConfigForm,
   sub2ApiConfigForm,
+  educationMailConfigForm,
   notificationProviderConfigForm,
   siteBannerConfigForm,
   adminAnnouncementForm,
@@ -45,6 +46,10 @@ const {
   refreshSub2ApiConfig,
   persistSub2ApiConfig,
   verifySub2ApiConfig,
+  refreshEducationMailConfig,
+  persistEducationMailConfig,
+  verifyEducationMailConfig,
+  syncEducationMailVerifications,
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
   refreshSiteBannerConfig,
@@ -1403,6 +1408,30 @@ function testSub2ApiProviderConfig() {
   }, 'Sub2API 连接测试通过')
 }
 
+function saveEducationMailProviderConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistEducationMailConfig()
+  }, '教育邮箱收件配置已保存')
+}
+
+function testEducationMailProviderConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await verifyEducationMailConfig()
+  }, 'DoneMail 连接测试通过')
+}
+
+function syncEducationMailProviderMessages() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await syncEducationMailVerifications()
+  }, '教育邮箱认证邮件已同步')
+}
+
 function saveNotificationProviderConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -1442,6 +1471,7 @@ onMounted(() => {
   refreshOAuthProviderConfigs().catch(() => {})
   refreshAiConfig().catch(() => {})
   refreshSub2ApiConfig().catch(() => {})
+  refreshEducationMailConfig().catch(() => {})
   refreshNotificationProviderConfig().catch(() => {})
   refreshAdminAnnouncements().catch(() => {})
   refreshPointTransactions({ limit: 200, scope: 'admin' }).catch(() => {})
@@ -2075,6 +2105,67 @@ onMounted(() => {
             </div>
             <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
               用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。
+            </div>
+          </div>
+        </TxTabItem>
+
+        <TxTabItem :name="ADMIN_TABS.educationMail" icon-class="i-carbon-email">
+          <template #name>
+            教育邮箱
+          </template>
+
+          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+              <span class="i-carbon-email" />
+              DoneMail 收件验证
+            </div>
+            <div class="text-sm mb-5 p-3 rounded-2xl" :class="educationMailConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+              {{ educationMailConfigForm.configured ? `DoneMail 已配置：${educationMailConfigForm.adminKeyMasked}` : '尚未配置 DoneMail API，学生认证邮件仍需人工核对。' }}
+            </div>
+            <div class="gap-5 grid lg:grid-cols-2">
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">DoneMail API 基础地址</span>
+                <TxInput v-model="educationMailConfigForm.baseUrl" :disabled="!isAdmin || educationMailConfigForm.loading" placeholder="https://sow.us.kg" />
+                <span class="field-hint">后台会调用 /api/mails，并使用 X-Admin-Key 鉴权。</span>
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">X-Admin-Key</span>
+                <TxInput v-model="educationMailConfigForm.adminKey" :disabled="!isAdmin || educationMailConfigForm.loading" type="password" :placeholder="educationMailConfigForm.adminKeyMasked || 'DoneMail 公开 API 密钥'" />
+                <span class="field-hint">仅保存在服务端加密配置中。</span>
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">平台收件邮箱</span>
+                <TxInput v-model="educationMailConfigForm.inboxAddress" :disabled="!isAdmin || educationMailConfigForm.loading" placeholder="welfare@tagzxia.com" />
+                <span class="field-hint">用户教育邮箱认证模板会发往该收件箱。</span>
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">同步回溯窗口（小时）</span>
+                <TxInput v-model="educationMailConfigForm.lookbackHours" type="number" :disabled="!isAdmin || educationMailConfigForm.loading" />
+              </label>
+            </div>
+            <div class="mt-5 flex flex-wrap gap-3 items-center">
+              <label class="text-sm flex gap-2 items-center">
+                <TxCheckbox v-model="educationMailConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || educationMailConfigForm.loading" aria-label="启用教育邮箱收件验证" />
+                启用自动验证
+              </label>
+              <TxButton variant="primary" :disabled="!isAdmin || educationMailConfigForm.loading" @click="saveEducationMailProviderConfig">
+                {{ educationMailConfigForm.loading ? '读取 / 保存中...' : '保存收件配置' }}
+              </TxButton>
+              <TxButton variant="secondary" :disabled="!isAdmin || educationMailConfigForm.testing || educationMailConfigForm.loading" @click="testEducationMailProviderConfig">
+                {{ educationMailConfigForm.testing ? '测试中...' : '测试连接' }}
+              </TxButton>
+              <TxButton variant="secondary" :disabled="!isAdmin || educationMailConfigForm.syncing || educationMailConfigForm.loading" @click="syncEducationMailProviderMessages">
+                {{ educationMailConfigForm.syncing ? '同步中...' : '同步待认证邮件' }}
+              </TxButton>
+            </div>
+            <div v-if="educationMailConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+              <div>{{ educationMailConfigForm.message }}</div>
+              <div v-if="educationMailConfigForm.lastSync" class="mt-2">
+                已匹配 {{ educationMailConfigForm.lastSync.verified }} / {{ educationMailConfigForm.lastSync.checked }} 个邮件认证码。
+              </div>
+            </div>
+            <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
+              自动验证只确认教育邮箱已按模板发送认证码；学生认证是否通过仍由管理员结合材料审核。
             </div>
           </div>
         </TxTabItem>

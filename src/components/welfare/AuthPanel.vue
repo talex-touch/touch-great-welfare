@@ -90,7 +90,7 @@ function onLoginAsAdmin() {
   }, '管理员已登录')
 }
 
-function goDashboard(section: 'admin' | 'apply' | 'profile' | 'wallet') {
+function goDashboard(section: 'admin' | 'apply' | 'profile') {
   selectedSection.value = section
   router.push(`/dashboard/${section}`)
 }
@@ -217,8 +217,8 @@ onMounted(() => {
           完善个人信息
         </TxButton>
       </div>
-      <TxButton v-if="!isAdmin" block variant="ghost" @click="goDashboard('wallet')">
-        私人钱包
+      <TxButton v-if="!isAdmin" block variant="ghost" @click="goDashboard('profile')">
+        个人中心
       </TxButton>
     </div>
 
