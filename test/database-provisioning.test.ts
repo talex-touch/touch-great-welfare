@@ -359,6 +359,7 @@ describe('database resource provisioning', () => {
 
     expect(poolQueries.some(item => item.sql.includes('create database "approved_orders"'))).toBe(true)
     expect(poolQueries.some(item => item.sql.includes('create role "approved_reader"'))).toBe(true)
+    expect(poolQueries.some(item => item.sql.includes('grant create on schema public to "approved_reader"'))).toBe(true)
     expect(poolQueries.some(item => item.sql.includes('grant insert, update, delete'))).toBe(true)
     expect(d1.data.bindings).toHaveLength(1)
     expect(d1.data.bindings[0]).toMatchObject({

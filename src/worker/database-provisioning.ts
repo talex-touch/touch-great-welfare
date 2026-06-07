@@ -456,6 +456,7 @@ async function ensureDatabaseAndRole(rootUrl: string, databaseName: string, user
     await pool.query(`grant select on all tables in schema public to ${quoteIdent(username)}`)
     await pool.query(`alter default privileges in schema public grant select on tables to ${quoteIdent(username)}`)
     if (permission === 'readwrite') {
+      await pool.query(`grant create on schema public to ${quoteIdent(username)}`)
       await pool.query(`grant insert, update, delete on all tables in schema public to ${quoteIdent(username)}`)
       await pool.query(`grant usage, select on all sequences in schema public to ${quoteIdent(username)}`)
       await pool.query(`alter default privileges in schema public grant insert, update, delete on tables to ${quoteIdent(username)}`)
