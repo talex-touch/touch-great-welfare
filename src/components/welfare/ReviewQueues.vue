@@ -40,6 +40,7 @@ const {
   submitImageGenerationApplication,
   resourceReviewDraftFor,
   resourceProvisionDrafts,
+  resourceAutoProvisionMessage,
   approveResourceItem,
   completeResourceProvision,
 } = useWelfareUiState()
@@ -206,6 +207,12 @@ onMounted(() => {
       <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
         {{ isAdmin ? '所有申请创建时均已完成预扣；管理员通过时完成答复，退回时返还申请预扣后按规则处理。只有明确判定造假或不实包装时，才勾选造假限制。' : '协作建议只开放 Pro 申请的 AI 初审摘要、等级和基础元数据；最终通过或退回仍由管理员处理。' }}
       </p>
+      <div v-if="isAdmin && resourceAutoProvisionMessage" class="text-xs text-amber-900 leading-5 mt-4 p-3 rounded-2xl bg-amber-50 dark:text-amber-100 dark:bg-amber-950/30">
+        <div class="fw-900">
+          自动发放一次性凭据
+        </div>
+        <pre class="mt-2 whitespace-pre-wrap break-all">{{ resourceAutoProvisionMessage }}</pre>
+      </div>
       <div class="mt-4 space-y-3">
         <div v-if="!visibleReviewApplications.length" class="text-sm text-slate-500 p-8 text-center border border-black/10 rounded-2xl border-dashed dark:border-white/10">
           暂无待审核申请

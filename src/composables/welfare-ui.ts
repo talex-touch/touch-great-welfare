@@ -1,4 +1,4 @@
-import type { TemporaryKeyView } from './ai'
+import type { ProvisionApplicationRewardResult, TemporaryKeyView } from './ai'
 import type { EducationMailSyncResult } from './education-mail'
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from './github-app'
 import type { OAuthProviderConfigView, PublicOAuthProvider } from './oauth'
@@ -535,6 +535,7 @@ export const resourceReviewDrafts = reactive<Record<string, {
 }>>({})
 
 export const resourceProvisionDrafts = reactive<Record<string, string>>({})
+export const resourceAutoProvisionMessage = ref('')
 
 export const applicationFiles = ref<UploadLikeFile[]>([])
 
@@ -1314,6 +1315,58 @@ export function useWelfareUiState() {
     return resourceReviewDrafts[itemId]
   }
 
+  function autoProvisionMessage(result: ProvisionApplicationRewardResult) {
+    if (result.status === 'provisioned' && result.provider === 'newapi')
+      return `NewAPI 自动发放：${result.key.name}\nKey: ${result.key.key}\n有效期：${result.key.expiresAt}`
+
+    if (result.status !== 'provisioned' || result.provider !== 'resource')
+      return ''
+
+    const lines: string[] = []
+    for (const item of result.items) {
+      if (item.provider === 'database') {
+        if (item.database.password) {
+          lines.push([
+            `数据库资源 ${item.itemId}`,
+            `连接串：${item.database.connectionUrl || item.database.connectionUrlMasked}`,
+            `用户名：${item.database.username}`,
+            `密码：${item.database.password}`,
+            `有效期：${item.database.expiresAt || '按默认配置'}`,
+          ].join('\n'))
+        }
+        continue
+      }
+
+      lines.push([
+        `Sub2API 资源 ${item.itemId}`,
+        `Key: ${item.key.key}`,
+        `额度：$${item.key.quotaUsd}`,
+        `有效期：${item.key.expiresAt || '按默认配置'}`,
+      ].join('\n'))
+    }
+
+    if (result.failures?.length)
+      lines.push(`待人工处理：${result.failures.map(item => `${item.itemId}（${item.error}）`).join('；')}`)
+
+    return lines.join('\n\n')
+  }
+
+  function applyAutoProvisionMessage(result: ProvisionApplicationRewardResult) {
+    const message = autoProvisionMessage(result)
+    if (!message)
+      return
+
+    resourceAutoProvisionMessage.value = message
+    if (message.includes('数据库资源'))
+      databaseProvisionConfigForm.message = message
+    if (message.includes('Sub2API 资源'))
+      sub2ApiKeyForm.message = message
+    if (message.includes('NewAPI 自动发放')) {
+      temporaryAiKey.value = result.status === 'provisioned' && result.provider === 'newapi' ? result.key.key : temporaryAiKey.value
+      temporaryAiKeyExpiresAt.value = result.status === 'provisioned' && result.provider === 'newapi' ? result.key.expiresAt : temporaryAiKeyExpiresAt.value
+    }
+  }
+
   async function approveResourceItem(applicationId: string, itemId: string) {
     const draft = resourceReviewDraftFor(itemId)
     let approvedPayload: Record<string, unknown> | undefined
@@ -1335,7 +1388,7 @@ export function useWelfareUiState() {
     delete resourceReviewDrafts[itemId]
     await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
     if (['approved', 'adjusted_approved'].includes(draft.status))
-      await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId)
+      applyAutoProvisionMessage(await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId))
     await welfare.reloadWelfareState()
   }
 
@@ -1617,7 +1670,7 @@ export function useWelfareUiState() {
   async function answerApplication(applicationId: string, answer: string) {
     welfare.answerApplication(applicationId, answer)
     await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
-    await provisionApplicationReward(welfare.currentUser.value!.id, applicationId)
+    applyAutoProvisionMessage(await provisionApplicationReward(welfare.currentUser.value!.id, applicationId))
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
@@ -2982,6 +3035,7 @@ export function useWelfareUiState() {
     resourceApplicationItems,
     resourceReviewDrafts,
     resourceProvisionDrafts,
+    resourceAutoProvisionMessage,
     applicationFiles,
     studentForm,
     educationEmailVerificationForm,
