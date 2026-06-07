@@ -74,7 +74,7 @@ import { isRichTextEmpty, richTextToPlainText } from '~/utils/rich-text'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { dispatchWelfareStateChangeNotifications } from './notifications'
-import { appendPointTransaction, applyPointTransactionsFromClientState, backfillPointTransactionsFromState, syncUserPointBalancesFromLedger } from './points'
+import { appendPointTransaction, applyPointTransactionsFromClientState, backfillPointTransactionsFromState, pointTransactionId, syncUserPointBalancesFromLedger } from './points'
 import { authenticatedUserId, clearSessionCookie, createSessionCookie } from './session'
 
 export interface WorkerEnv {
@@ -747,7 +747,7 @@ function boolField(record: Record<string, unknown>, key: string) {
 }
 
 function transactionId(scope: string, refId: string) {
-  return `srv_${scope}_${refId.replace(/[^\w-]+/g, '_')}`
+  return pointTransactionId(scope, refId)
 }
 
 function expectedApplicationBaseCost(application: Record<string, unknown>) {
@@ -3177,6 +3177,7 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
   pushApplicationMessage(application, user.id, 'system', note || `<p>管理员已复核通过协作交付，发放 ${rewardPoints} 积分奖励。</p>`)
 
   await appendPointTransaction(env, {
+    id: transactionId('delivery_reward', application.id),
     userId: application.deliveryAssigneeId,
     delta: rewardPoints,
     type: 'grant',

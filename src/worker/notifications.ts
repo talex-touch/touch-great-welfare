@@ -28,7 +28,7 @@ import {
   readJson,
 } from './auth'
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret } from './crypto'
-import { appendPointTransaction } from './points'
+import { appendPointTransaction, pointTransactionId } from './points'
 import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type NotificationStatus = 'processed' | 'failed'
@@ -1046,6 +1046,7 @@ async function chargeEmailNotification(env: WorkerEnv, userId: string, notificat
     throw new Error('邮箱通知余额不足')
 
   await appendPointTransaction(env, {
+    id: pointTransactionId('email_notification', notificationId),
     userId,
     delta: -EMAIL_NOTIFICATION_COST,
     type: 'spend',

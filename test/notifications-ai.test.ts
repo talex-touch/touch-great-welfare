@@ -203,7 +203,7 @@ function createMemoryD1() {
               count: deliveries.filter(item => item.provider === this.values[0] && item.status === 'sent').length,
             }
           }
-          if (query.includes('select id from point_transactions'))
+          if (query.includes('from point_transactions where id'))
             return pointTransactions.find(item => item.id === this.values[0]) ?? null
           return null
         },

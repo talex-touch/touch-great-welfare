@@ -9,9 +9,9 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 
 const { createEpaySign } = await import('../src/worker/ldc-credit')
 const { createSessionCookie } = await import('../src/worker/session')
-const { appendPointTransaction } = await import('../src/worker/points')
+const { appendPointTransaction, pointTransactionId } = await import('../src/worker/points')
 const { handleRechargeRequest } = await import('../src/worker/recharge')
-const { handleApplicationSubmitRequest, handleWelfareStateRequest, writeWelfareState } = await import('../src/worker/welfare-state')
+const { handleApplicationSubmitRequest, handleWelfareStateRequest, readWelfareState, writeWelfareState } = await import('../src/worker/welfare-state')
 
 function user(overrides: Partial<User> = {}): User {
   return {
@@ -115,14 +115,14 @@ function createMemoryD1(initialState: WelfareState) {
     points_per_ldc: 10,
   }
   return {
-    get pointTransactions() {
-      return pointTransactions
-    },
     get queries() {
       return queries
     },
     get rechargeOrders() {
       return rechargeOrders
+    },
+    get pointTransactions() {
+      return pointTransactions
     },
     bumpVersionAfterNextVersionRead() {
       bumpVersionAfterNextVersionRead = true
@@ -150,8 +150,8 @@ function createMemoryD1(initialState: WelfareState) {
             return rechargeConfig
           if (query.includes('select * from recharge_orders where out_trade_no'))
             return rechargeOrders.find(item => item.out_trade_no === this.values[0]) ?? null
-          if (query.includes('select id from point_transactions where id'))
-            return pointTransactions.find(item => item.id === this.values[0]) ? { id: this.values[0] } : null
+          if (query.includes('from point_transactions where id'))
+            return pointTransactions.find(item => item.id === this.values[0]) ?? null
           if (query.includes('select id from point_transactions where type'))
             return pointTransactions.find(item => item.type === this.values[0] && item.ref_id === this.values[1]) ? { id: 'exists' } : null
           if (query.includes('select balance_after from point_transactions')) {
@@ -552,6 +552,38 @@ describe('welfare state security', () => {
       item.query.includes('update welfare_app_state')
       && item.values[3] === 1,
     )).toBe(true)
+  })
+
+  it('keeps deterministic point transactions idempotent after a state write conflict', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const txId = pointTransactionId('race_grant', 'app_1')
+
+    d1.bumpVersionAfterNextVersionRead()
+
+    await expect(appendPointTransaction(env, {
+      id: txId,
+      userId: 'user_1',
+      delta: 10,
+      type: 'grant',
+      reason: '并发后重试发放',
+      refId: 'app_1',
+      createdAt: '2026-06-08T00:00:00.000Z',
+    })).rejects.toThrow('业务状态已被其他请求更新')
+
+    await appendPointTransaction(env, {
+      id: txId,
+      userId: 'user_1',
+      delta: 10,
+      type: 'grant',
+      reason: '并发后重试发放',
+      refId: 'app_1',
+      createdAt: '2026-06-08T00:00:00.000Z',
+    })
+
+    expect(d1.pointTransactions.filter(item => item.id === txId)).toHaveLength(1)
+    const latestState = await readWelfareState(env) as WelfareState
+    expect(latestState.users.find(item => item.id === 'user_1')?.points).toBe(1010)
   })
 
   it('submits applications through command API and ignores forged client fields', async () => {

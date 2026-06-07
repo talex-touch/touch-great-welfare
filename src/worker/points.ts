@@ -53,6 +53,12 @@ function createTransactionId() {
   return `tx_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+export function pointTransactionId(scope: string, refId: string) {
+  const normalizedScope = scope.replace(/[^\w-]+/g, '_') || 'tx'
+  const normalizedRef = refId.replace(/[^\w-]+/g, '_') || 'unknown'
+  return `srv_${normalizedScope}_${normalizedRef}`
+}
+
 function json(payload: unknown, status = 200) {
   return Response.json(payload, {
     status,
@@ -129,20 +135,24 @@ function sanitizeStateWithoutTransactions<T>(state: T): T {
 }
 
 async function transactionExists(env: WorkerEnv, id: string) {
+  return !!(await transactionById(env, id))
+}
+
+async function transactionById(env: WorkerEnv, id: string) {
   await ensurePointTransactionSchema(env)
   if (shouldUseD1(env)) {
     const row = await env.LOCAL_DB!
-      .prepare('select id from point_transactions where id = ?1')
+      .prepare('select id, user_id, delta, type, reason, ref_id, balance_after, created_at from point_transactions where id = ?1')
       .bind(id)
-      .first<{ id: string }>()
-    return !!row
+      .first<PointTransactionRow>()
+    return row ? transactionFromRow(row) : undefined
   }
 
-  const result = await getPool(env).query<{ id: string }>(
-    'select id from point_transactions where id = $1',
+  const result = await getPool(env).query<PointTransactionRow>(
+    'select id, user_id, delta, type, reason, ref_id, balance_after, created_at from point_transactions where id = $1',
     [id],
   )
-  return (result.rowCount ?? 0) > 0
+  return result.rows[0] ? transactionFromRow(result.rows[0]) : undefined
 }
 
 async function latestBalanceForUser(env: WorkerEnv, userId: string) {
@@ -381,18 +391,19 @@ export async function appendPointTransaction(env: WorkerEnv, input: PointTransac
 
   const currentPoints = Number(user.points)
   const currentBalance = Number.isFinite(currentPoints) ? currentPoints : 0
+  const existingTransaction = input.id ? await transactionById(env, input.id) : undefined
   const txId = input.id || createTransactionId()
-  if (input.id && await transactionExists(env, input.id)) {
-    return {
-      id: txId,
-      userId: input.userId,
-      delta,
-      type: input.type,
-      reason: input.reason.trim() || '积分变动',
-      refId: input.refId || undefined,
-      balanceAfter: currentBalance,
-      createdAt: input.createdAt || now(),
+  if (existingTransaction) {
+    const latestBalance = await latestBalanceForUser(env, input.userId)
+    if (latestBalance !== undefined)
+      user.points = latestBalance
+    const tx = {
+      ...existingTransaction,
+      balanceAfter: latestBalance ?? existingTransaction.balanceAfter,
     } satisfies CreditTransaction
+    if (stateOverride === undefined)
+      await writeWelfareState(env, state, { expectedVersion: record!.version })
+    return tx
   }
 
   const balanceAfter = currentBalance + delta

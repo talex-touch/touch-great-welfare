@@ -18,7 +18,7 @@ import {
 } from './auth'
 import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createAndDispatchNotification, ensureNotificationSchema } from './notifications'
-import { appendPointTransaction, pointTransactionExistsByRef } from './points'
+import { appendPointTransaction, pointTransactionExistsByRef, pointTransactionId } from './points'
 import { createSub2ApiKeyForUser } from './sub2api'
 import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
@@ -1188,6 +1188,7 @@ async function createImage(request: Request, env: WorkerEnv) {
   const record = await readWelfareStateRecord(env)
   const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
+  const refId = payload.applicationId || jobId
   try {
     const imageApplication = imageApplicationForRequest(state, payload.applicationId, auth.user.id, auth.user.role === 'admin')
     if (imageApplication) {
@@ -1196,22 +1197,24 @@ async function createImage(request: Request, env: WorkerEnv) {
           ? imageApplication.cost
           : calculateActivityPrice(REQUEST_COST.image)
         await appendPointTransaction(env, {
+          id: pointTransactionId('ai_image_charge', refId),
           userId: targetUserId,
           delta: -imageCost,
           type: 'spend',
           reason: 'Image 生成历史补扣',
-          refId: payload.applicationId || jobId,
+          refId,
         }, state)
         imageApplication.costCharged = true
       }
     }
     else if (!payload.applicationId) {
       await appendPointTransaction(env, {
+        id: pointTransactionId('ai_image_charge', refId),
         userId: targetUserId,
         delta: -calculateActivityPrice(REQUEST_COST.image),
         type: 'spend',
         reason: 'Image 生成预扣',
-        refId: payload.applicationId || jobId,
+        refId,
       }, state)
     }
     await writeWelfareState(env, state, { expectedVersion: record.version })
@@ -1251,11 +1254,11 @@ async function createImage(request: Request, env: WorkerEnv) {
     const rollbackRecord = await readWelfareStateRecord(env)
     const rollbackState = rollbackRecord.state as Partial<WelfareState>
     assertWelfareState(rollbackState)
-    const refId = payload.applicationId || jobId
     const alreadyRefunded = await pointTransactionExistsByRef(env, 'refund', refId)
     const imageApplication = imageApplicationForRequest(rollbackState, payload.applicationId, auth.user.id, auth.user.role === 'admin')
     if (!alreadyRefunded && imageApplication?.costCharged) {
       await appendPointTransaction(env, {
+        id: pointTransactionId('ai_image_refund', refId),
         userId: targetUserId,
         delta: imageApplication.cost,
         type: 'refund',
