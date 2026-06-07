@@ -17,6 +17,7 @@ import {
   readJson,
 } from './auth'
 import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
+import { createDatabaseForResourceItem } from './database-provisioning'
 import { createAndDispatchNotification, ensureNotificationSchema } from './notifications'
 import { appendPointTransaction, pointTransactionExistsByRef, pointTransactionId } from './points'
 import { createSub2ApiKeyForUser } from './sub2api'
@@ -1016,29 +1017,39 @@ async function provisionResourceApplication(
 ) {
   const user = findApplicationUser(state, application.userId)
   const items = (application.resourceItems ?? []).filter(item =>
-    item.resourceType === 'llm_api_quota'
+    (item.resourceType === 'llm_api_quota' || item.resourceType === 'database')
     && ['approved', 'adjusted_approved'].includes(item.approvalStatus)
     && item.provisionStatus !== 'completed'
     && (!itemId || item.id === itemId),
   )
   if (!items.length)
-    return { status: 'skipped' as const, provider: 'sub2api' as const, applicationId: application.id, items: [] }
+    return { status: 'skipped' as const, provider: 'resource' as const, applicationId: application.id, items: [] }
 
   const results = []
   for (const item of items) {
-    const key = await createSub2ApiKeyForUser(env, user, sub2ApiPayloadFromResourceItem(item))
+    if (item.resourceType === 'llm_api_quota') {
+      const key = await createSub2ApiKeyForUser(env, user, sub2ApiPayloadFromResourceItem(item))
+      item.provisionStatus = 'completed'
+      item.provisionCompletedAt = now()
+      item.provisionNote = `Sub2API 自动发放：${key.keyMasked}，额度 $${key.quotaUsd}，有效期 ${key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`
+      item.updatedAt = item.provisionCompletedAt
+      results.push({ itemId: item.id, provider: 'sub2api' as const, key })
+      continue
+    }
+
+    const database = await createDatabaseForResourceItem(env, { applicationId: application.id, item, user })
     item.provisionStatus = 'completed'
     item.provisionCompletedAt = now()
-    item.provisionNote = `Sub2API 自动发放：${key.keyMasked}，额度 $${key.quotaUsd}，有效期 ${key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`
+    item.provisionNote = `数据库自动发放：${database.databaseName} / ${database.username} / ${database.connectionUrlMasked}，权限 ${database.permission}，有效期 ${database.expiresAt || '按默认配置'}。明文密码仅在本次发放响应中返回。`
     item.updatedAt = item.provisionCompletedAt
-    results.push({ itemId: item.id, key })
+    results.push({ itemId: item.id, provider: 'database' as const, database })
   }
 
-  appendProvisionMessage(application, adminUserId, `<p><strong>Sub2API 自动发放：</strong>已完成 ${results.length} 个 LLM API 额度资源明细。</p>`)
+  appendProvisionMessage(application, adminUserId, `<p><strong>资源自动发放：</strong>已完成 ${results.length} 个资源明细。</p>`)
   await writeWelfareState(env, state, { expectedVersion })
   return {
     status: 'provisioned' as const,
-    provider: 'sub2api' as const,
+    provider: 'resource' as const,
     applicationId: application.id,
     items: results,
   }
@@ -1056,7 +1067,7 @@ async function markProvisionPending(
   const message = error instanceof Error ? error.message : '自动发放失败'
   if (application.type === 'resource') {
     for (const item of application.resourceItems ?? []) {
-      if (item.resourceType === 'llm_api_quota' && (!itemId || item.id === itemId) && item.provisionStatus !== 'completed') {
+      if ((item.resourceType === 'llm_api_quota' || item.resourceType === 'database') && (!itemId || item.id === itemId) && item.provisionStatus !== 'completed') {
         item.provisionStatus = 'pending'
         item.provisionNote = `自动发放失败，待人工处理：${message}`
         item.updatedAt = now()

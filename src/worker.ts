@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './worker/welfare-state'
 import { handleAiRequest } from './worker/ai'
+import { handleDatabaseProvisionRequest } from './worker/database-provisioning'
 import { handleEducationMailRequest } from './worker/education-mail'
 import { handleGitHubAppRequest } from './worker/github-app'
 import { handleNotificationRequest } from './worker/notifications'
@@ -55,6 +56,8 @@ export default {
       return handleApplicationSubmitRequest(request, env)
     if (url.pathname.startsWith('/api/ai/'))
       return handleAiRequest(request, env)
+    if (url.pathname.startsWith('/api/database-provision/'))
+      return handleDatabaseProvisionRequest(request, env)
     if (url.pathname.startsWith('/api/education-mail/'))
       return handleEducationMailRequest(request, env)
     if (url.pathname.startsWith('/api/github-app/'))

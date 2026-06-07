@@ -102,22 +102,41 @@ export type ProvisionApplicationRewardResult
   }
   | {
     status: 'provisioned'
-    provider: 'sub2api'
+    provider: 'sub2api' | 'resource'
     applicationId: string
-    items: Array<{
-      itemId: string
-      key: {
-        id: string
-        key: string
-        keyMasked: string
-        name: string
-        quotaUsd: number
-        expiresAt?: string
-        status: 'active' | 'revoked'
-        sub2apiUserId: string
-        sub2apiKeyId: string
+    items: Array<
+      {
+        itemId: string
+        provider?: 'sub2api'
+        key: {
+          id: string
+          key: string
+          keyMasked: string
+          name: string
+          quotaUsd: number
+          expiresAt?: string
+          status: 'active' | 'revoked'
+          sub2apiUserId: string
+          sub2apiKeyId: string
+        }
       }
-    }>
+      | {
+        itemId: string
+        provider: 'database'
+        database: {
+          id: string
+          databaseType: string
+          databaseName: string
+          username: string
+          password: string
+          connectionUrl: string
+          connectionUrlMasked: string
+          permission: string
+          expiresAt?: string
+          status: 'active'
+        }
+      }
+    >
   }
   | {
     status: 'pending_manual'
@@ -128,7 +147,7 @@ export type ProvisionApplicationRewardResult
     status: 'skipped'
     applicationId: string
     reason?: string
-    provider?: 'newapi' | 'sub2api'
+    provider?: 'newapi' | 'sub2api' | 'resource'
     items?: unknown[]
   }
 

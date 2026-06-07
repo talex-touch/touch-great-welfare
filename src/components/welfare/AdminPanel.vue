@@ -29,6 +29,7 @@ const {
   applicationPolicyConfigForm,
   aiConfigForm,
   sub2ApiConfigForm,
+  databaseProvisionConfigForm,
   educationMailConfigForm,
   notificationProviderConfigForm,
   siteBannerConfigForm,
@@ -57,6 +58,9 @@ const {
   refreshSub2ApiConfig,
   persistSub2ApiConfig,
   verifySub2ApiConfig,
+  refreshDatabaseProvisionConfig,
+  persistDatabaseProvisionConfig,
+  verifyDatabaseProvisionConfig,
   refreshEducationMailConfig,
   persistEducationMailConfig,
   verifyEducationMailConfig,
@@ -1545,6 +1549,22 @@ function testSub2ApiProviderConfig() {
   }, 'Sub2API 连接测试通过')
 }
 
+function saveDatabaseProvisionProviderConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await persistDatabaseProvisionConfig()
+  }, '数据库自动发放配置已保存')
+}
+
+function testDatabaseProvisionProviderConfig() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await verifyDatabaseProvisionConfig()
+  }, '数据库 root 连接测试通过')
+}
+
 function saveEducationMailProviderConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -1620,6 +1640,7 @@ onMounted(() => {
   refreshOAuthProviderConfigs().catch(() => {})
   refreshAiConfig().catch(() => {})
   refreshSub2ApiConfig().catch(() => {})
+  refreshDatabaseProvisionConfig().catch(() => {})
   refreshEducationMailConfig().catch(() => {})
   refreshNotificationProviderConfig().catch(() => {})
   refreshAdminAnnouncements().catch(() => {})
@@ -2282,6 +2303,64 @@ onMounted(() => {
                 </div>
                 <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
                   图片生成结果写入 AI_ASSETS R2；接口密钥保存到服务端加密配置。
+                </div>
+              </div>
+            </TxTabItem>
+
+            <TxTabItem name="database-provision" icon-class="i-carbon-data-base">
+              <template #name>
+                数据库发放
+              </template>
+
+              <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+                  <span class="i-carbon-data-base" />
+                  数据库自动发放
+                </div>
+                <div class="text-sm mb-5 p-3 rounded-2xl" :class="databaseProvisionConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+                  {{ databaseProvisionConfigForm.configured ? '数据库 root 连接已配置，审批通过的 PostgreSQL 资源可自动创建库、角色和权限。' : '尚未配置数据库 root 连接，数据库资源审批后会转人工处理。' }}
+                </div>
+                <div class="gap-5 grid lg:grid-cols-2">
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">PostgreSQL root 连接</span>
+                    <TxInput v-model="databaseProvisionConfigForm.rootUrl" :disabled="!isAdmin || databaseProvisionConfigForm.loading" type="password" :placeholder="databaseProvisionConfigForm.rootUrlMasked || 'postgresql://root:password@host:5432/postgres'" />
+                    <span class="field-hint">仅在 Worker 后端用于创建数据库、登录角色和授权；服务端加密保存。</span>
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认有效期（天）</span>
+                    <TxInput v-model="databaseProvisionConfigForm.defaultExpiresInDays" type="number" :disabled="!isAdmin || databaseProvisionConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">数据库命名前缀</span>
+                    <TxInput v-model="databaseProvisionConfigForm.databasePrefix" :disabled="!isAdmin || databaseProvisionConfigForm.loading" placeholder="twg" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">OnePanel 地址（预留）</span>
+                    <TxInput v-model="databaseProvisionConfigForm.onePanelBaseUrl" :disabled="!isAdmin || databaseProvisionConfigForm.loading" placeholder="https://panel.example.com" />
+                    <span class="field-hint">当前仅保存配置，后续可接入 OnePanel 实例、数据库和资源状态查询。</span>
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">OnePanel API Key（预留）</span>
+                    <TxInput v-model="databaseProvisionConfigForm.onePanelApiKey" :disabled="!isAdmin || databaseProvisionConfigForm.loading" type="password" :placeholder="databaseProvisionConfigForm.onePanelApiKeyMasked || 'op_...'" />
+                  </label>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-3 items-center">
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="databaseProvisionConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || databaseProvisionConfigForm.loading" aria-label="启用数据库自动发放" />
+                    启用数据库自动发放
+                  </label>
+                  <TxButton variant="primary" :disabled="!isAdmin || databaseProvisionConfigForm.loading" @click="saveDatabaseProvisionProviderConfig">
+                    {{ databaseProvisionConfigForm.loading ? '读取 / 保存中...' : '保存数据库发放配置' }}
+                  </TxButton>
+                  <TxButton variant="secondary" :disabled="!isAdmin || databaseProvisionConfigForm.testing || databaseProvisionConfigForm.loading" @click="testDatabaseProvisionProviderConfig">
+                    {{ databaseProvisionConfigForm.testing ? '测试中...' : '测试 root 连接' }}
+                  </TxButton>
+                </div>
+                <div v-if="databaseProvisionConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                  {{ databaseProvisionConfigForm.message }}
+                </div>
+                <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
+                  当前自动发放仅支持 PostgreSQL；MySQL、Redis、MongoDB 和其他 OnePanel 托管资源会保留在人工处理队列中。
                 </div>
               </div>
             </TxTabItem>

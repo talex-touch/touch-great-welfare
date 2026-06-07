@@ -483,6 +483,38 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           revoked_at text
         )
       `,
+      `
+        create table if not exists database_provision_config (
+          id text primary key,
+          enabled integer not null default 0,
+          root_url_encrypted text,
+          default_expires_in_days integer not null default 30,
+          database_prefix text not null default 'twg',
+          onepanel_base_url text not null default '',
+          onepanel_api_key_encrypted text,
+          created_at text not null default current_timestamp,
+          updated_at text not null default current_timestamp
+        )
+      `,
+      `
+        create table if not exists database_resource_bindings (
+          id text primary key,
+          user_id text not null,
+          application_id text not null,
+          item_id text not null,
+          database_type text not null,
+          database_name text not null,
+          username text not null,
+          password_hash text not null,
+          connection_url_encrypted text,
+          connection_url_masked text not null,
+          permission text not null,
+          expires_at text,
+          status text not null,
+          created_at text not null default current_timestamp,
+          revoked_at text
+        )
+      `,
     ]
 
     for (const statement of statements)
@@ -498,6 +530,8 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'status', 'text not null default \'active\'')
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'provider', 'text not null default \'newapi\'')
     await addD1ColumnIfMissing(env, 'sub2api_config', 'database_url_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'database_provision_config', 'onepanel_base_url', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'database_provision_config', 'onepanel_api_key_encrypted', 'text')
     await addD1ColumnIfMissing(env, 'notification_deliveries', 'provider', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_mail_enabled', 'integer not null default 0')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_app_id', 'text not null default \'\'')
@@ -615,6 +649,40 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       key_masked text not null,
       name text not null,
       quota_usd numeric(20,8) not null default 0,
+      expires_at timestamptz,
+      status text not null,
+      created_at timestamptz not null default now(),
+      revoked_at timestamptz
+    )
+  `)
+  await pool.query(`
+    create table if not exists database_provision_config (
+      id text primary key,
+      enabled boolean not null default false,
+      root_url_encrypted text,
+      default_expires_in_days integer not null default 30,
+      database_prefix text not null default 'twg',
+      onepanel_base_url text not null default '',
+      onepanel_api_key_encrypted text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `)
+  await pool.query('alter table database_provision_config add column if not exists onepanel_base_url text not null default $1', [''])
+  await pool.query('alter table database_provision_config add column if not exists onepanel_api_key_encrypted text')
+  await pool.query(`
+    create table if not exists database_resource_bindings (
+      id text primary key,
+      user_id text not null,
+      application_id text not null,
+      item_id text not null,
+      database_type text not null,
+      database_name text not null,
+      username text not null,
+      password_hash text not null,
+      connection_url_encrypted text,
+      connection_url_masked text not null,
+      permission text not null,
       expires_at timestamptz,
       status text not null,
       created_at timestamptz not null default now(),

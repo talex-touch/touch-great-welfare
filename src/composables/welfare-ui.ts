@@ -9,6 +9,7 @@ import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from './ai'
+import { loadDatabaseProvisionConfig, saveDatabaseProvisionConfig, testDatabaseProvisionConfig } from './database-provisioning'
 import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig, verifyEducationMailChallenge } from './education-mail'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from './github-app'
 import {
@@ -321,6 +322,21 @@ export const sub2ApiConfigForm = reactive({
   defaultRateLimit5h: 0,
   defaultRateLimit1d: 0,
   defaultRateLimit7d: 0,
+  configured: false,
+  loading: false,
+  testing: false,
+  message: '',
+})
+
+export const databaseProvisionConfigForm = reactive({
+  enabled: true,
+  rootUrl: '',
+  rootUrlMasked: '',
+  defaultExpiresInDays: 30,
+  databasePrefix: 'twg',
+  onePanelBaseUrl: '',
+  onePanelApiKey: '',
+  onePanelApiKeyMasked: '',
   configured: false,
   loading: false,
   testing: false,
@@ -2007,6 +2023,72 @@ export function useWelfareUiState() {
     }
   }
 
+  function applyDatabaseProvisionConfig(config: Awaited<ReturnType<typeof loadDatabaseProvisionConfig>>) {
+    databaseProvisionConfigForm.enabled = config.enabled
+    databaseProvisionConfigForm.rootUrl = ''
+    databaseProvisionConfigForm.rootUrlMasked = config.rootUrlMasked
+    databaseProvisionConfigForm.defaultExpiresInDays = config.defaultExpiresInDays
+    databaseProvisionConfigForm.databasePrefix = config.databasePrefix
+    databaseProvisionConfigForm.onePanelBaseUrl = config.onePanelBaseUrl
+    databaseProvisionConfigForm.onePanelApiKey = ''
+    databaseProvisionConfigForm.onePanelApiKeyMasked = config.onePanelApiKeyMasked
+    databaseProvisionConfigForm.configured = config.configured
+  }
+
+  async function refreshDatabaseProvisionConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    databaseProvisionConfigForm.loading = true
+    try {
+      applyDatabaseProvisionConfig(await loadDatabaseProvisionConfig(welfare.currentUser.value.id))
+    }
+    finally {
+      databaseProvisionConfigForm.loading = false
+    }
+  }
+
+  async function persistDatabaseProvisionConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    databaseProvisionConfigForm.loading = true
+    databaseProvisionConfigForm.message = ''
+    try {
+      const result = await saveDatabaseProvisionConfig(welfare.currentUser.value.id, {
+        enabled: databaseProvisionConfigForm.enabled,
+        rootUrl: databaseProvisionConfigForm.rootUrl,
+        defaultExpiresInDays: Number(databaseProvisionConfigForm.defaultExpiresInDays),
+        databasePrefix: databaseProvisionConfigForm.databasePrefix,
+        onePanelBaseUrl: databaseProvisionConfigForm.onePanelBaseUrl,
+        onePanelApiKey: databaseProvisionConfigForm.onePanelApiKey,
+      })
+      applyDatabaseProvisionConfig(result)
+      databaseProvisionConfigForm.message = '数据库自动发放配置已保存'
+    }
+    finally {
+      databaseProvisionConfigForm.loading = false
+    }
+  }
+
+  async function verifyDatabaseProvisionConfig() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    databaseProvisionConfigForm.testing = true
+    databaseProvisionConfigForm.message = ''
+    try {
+      await testDatabaseProvisionConfig(welfare.currentUser.value.id)
+      databaseProvisionConfigForm.message = '数据库 root 连接测试通过'
+    }
+    finally {
+      databaseProvisionConfigForm.testing = false
+    }
+  }
+
   function applyEducationMailConfig(config: Awaited<ReturnType<typeof loadEducationMailConfig>>) {
     educationMailConfigForm.enabled = config.enabled
     educationMailConfigForm.baseUrl = config.baseUrl
@@ -2865,6 +2947,7 @@ export function useWelfareUiState() {
     oauthLoginForm,
     aiConfigForm,
     sub2ApiConfigForm,
+    databaseProvisionConfigForm,
     sub2ApiKeyForm,
     sub2ApiKeys,
     generatedSub2ApiKey,
@@ -3039,6 +3122,9 @@ export function useWelfareUiState() {
     refreshSub2ApiConfig,
     persistSub2ApiConfig,
     verifySub2ApiConfig,
+    refreshDatabaseProvisionConfig,
+    persistDatabaseProvisionConfig,
+    verifyDatabaseProvisionConfig,
     refreshEducationMailConfig,
     persistEducationMailConfig,
     verifyEducationMailConfig,
