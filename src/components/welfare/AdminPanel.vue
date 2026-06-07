@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
-import { TxButton, TxCard, TxCheckbox, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatPoints, isGptProModel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { formatDate, formatPoints, isGptProModel, normalizeVerificationType, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { saveWelfareState } from '~/composables/welfare-persistence'
-import { ADMIN_TABS, useWelfareUiState } from '~/composables/welfare-ui'
+import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
 
@@ -19,6 +20,7 @@ const {
   setUserCrowdReviewer,
   setUserSuspended,
   setUserStudentVerified,
+  revokeUserStudentVerification,
   unbindUserGitHub,
   rechargeConfigForm,
   githubAppConfigForm,
@@ -70,7 +72,45 @@ const {
   sendAdminAnnouncement,
 } = useWelfareUiState()
 
-const { runSafely } = useWelfareFeedback()
+const { notify, runSafely } = useWelfareFeedback()
+const route = useRoute()
+const router = useRouter()
+
+const ADMIN_TAB_QUERY_KEY = 'tab'
+
+function currentRouteAdminTabKey() {
+  const tab = route.query[ADMIN_TAB_QUERY_KEY]
+  if (Array.isArray(tab))
+    return tab[0] ?? undefined
+  return tab ?? undefined
+}
+
+watch(
+  () => route.query[ADMIN_TAB_QUERY_KEY],
+  () => {
+    const tabName = adminTabNameFromKey(currentRouteAdminTabKey())
+    if (tabName && activeAdminTab.value !== tabName)
+      activeAdminTab.value = tabName
+  },
+  { immediate: true },
+)
+
+watch(activeAdminTab, (tabName) => {
+  if (route.path !== '/dashboard/admin')
+    return
+
+  const tabKey = adminTabKeyFromName(tabName)
+  if (currentRouteAdminTabKey() === tabKey)
+    return
+
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      [ADMIN_TAB_QUERY_KEY]: tabKey,
+    },
+  })
+})
 
 interface ListFilterState {
   query: string
@@ -95,6 +135,13 @@ const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 const USER_DETAIL_LIMIT = 6
 const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
 const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
+const USER_DRAWER_TABS = {
+  account: 'account',
+  verification: 'verification',
+  wallet: 'wallet',
+  records: 'records',
+} as const
+type UserDrawerTab = typeof USER_DRAWER_TABS[keyof typeof USER_DRAWER_TABS]
 type EditableOAuthProviderConfig = OAuthProviderConfigView & { clientSecret: string }
 
 const LINUX_DO_OAUTH_PRESET: EditableOAuthProviderConfig = {
@@ -165,6 +212,7 @@ const studentStatusText: Record<string, string> = {
   needs_supplement: '待补充资料',
   approved: '已通过',
   rejected: '已退回',
+  revoked: '已撤销',
 }
 
 const verificationTypeFilterOptions = [
@@ -234,6 +282,7 @@ const studentStatusFilterOptions = [
   { value: 'needs_supplement', label: studentStatusText.needs_supplement },
   { value: 'approved', label: studentStatusText.approved },
   { value: 'rejected', label: studentStatusText.rejected },
+  { value: 'revoked', label: studentStatusText.revoked },
 ]
 
 const transactionTypeFilterOptions = [
@@ -332,7 +381,9 @@ const auditFilters = reactive({
 const selectedUserId = ref('')
 const isUserDrawerOpen = ref(false)
 const userDrawerMode = ref<'detail' | 'points'>('detail')
+const activeUserDrawerTab = ref<UserDrawerTab>(USER_DRAWER_TABS.account)
 const pendingAdminUserAction = ref('')
+const revokeStudentReason = ref('')
 const adminTransactions = computed(() => pointTransactions.value)
 
 function userDisplayName(userId: string) {
@@ -382,7 +433,7 @@ function statusPillClass(status: string) {
     return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
   if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning'].includes(status))
     return 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'
-  if (['rejected', 'danger'].includes(status))
+  if (['rejected', 'revoked', 'danger'].includes(status))
     return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'
   return 'text-slate-700 bg-slate-100 dark:text-slate-200 dark:bg-white/10'
 }
@@ -589,13 +640,16 @@ function resetAuditFilters() {
 function openUserDrawer(userId: string, mode: 'detail' | 'points' = 'detail') {
   selectedUserId.value = userId
   userDrawerMode.value = mode
+  activeUserDrawerTab.value = mode === 'points' ? USER_DRAWER_TABS.wallet : USER_DRAWER_TABS.account
   pendingAdminUserAction.value = ''
+  revokeStudentReason.value = ''
   isUserDrawerOpen.value = true
 }
 
 function closeUserDrawer() {
   isUserDrawerOpen.value = false
   pendingAdminUserAction.value = ''
+  revokeStudentReason.value = ''
 }
 
 function openUserAudit(userId: string) {
@@ -822,6 +876,9 @@ const selectedUserRecentApplications = computed<WelfareApplication[]>(() => sele
 const selectedUserRecentStudents = computed<StudentVerification[]>(() => selectedUserDetail.value?.studentVerifications.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserRecentTransactions = computed<CreditTransaction[]>(() => selectedUserDetail.value?.transactions.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserRecentCoupons = computed<UserCoupon[]>(() => selectedUserDetail.value?.coupons.slice(0, USER_DETAIL_LIMIT) ?? [])
+const selectedUserApprovedStudentVerification = computed<StudentVerification | undefined>(() => selectedUserDetail.value?.studentVerifications
+  .filter(item => normalizeVerificationType(item.verificationType) === 'student' && item.status === 'approved')
+  .sort((a, b) => (b.reviewedAt || b.createdAt).localeCompare(a.reviewedAt || a.createdAt))[0])
 
 const selectedUserConsumptionRows = computed(() => selectedUserDetail.value?.spendTransactions.slice(0, USER_DETAIL_LIMIT).map(item => ({
   transaction: item,
@@ -947,7 +1004,7 @@ const dashboardActivityRows = computed(() => {
       title: `${verificationTypeLabel(verification.verificationType)} · ${verification.category}`,
       user: userDisplayName(verification.userId),
       detail: `${verificationOrganizationLabel(verification.verificationType)} ${verification.school || '未填写'} · ${studentStatusText[verification.status]}`,
-      tone: verification.status === 'rejected' ? 'danger' : ['pending', 'needs_supplement'].includes(verification.status) ? 'warning' : 'success',
+      tone: ['rejected', 'revoked'].includes(verification.status) ? 'danger' : ['pending', 'needs_supplement'].includes(verification.status) ? 'warning' : 'success',
       createdAt: verification.createdAt,
     })
   }
@@ -1158,7 +1215,7 @@ const auditEvents = computed(() => {
         id: `student-reviewed-${verification.id}`,
         time: verification.reviewedAt,
         area: '认证申请',
-        action: verification.status === 'rejected' ? '退回认证' : '通过认证',
+        action: verification.status === 'revoked' ? '撤销认证' : verification.status === 'rejected' ? '退回认证' : '通过认证',
         actor: '管理员',
         detail: `${verificationTypeLabel(verification.verificationType)} · ${verification.category} · ${userDisplayName(verification.userId)}`,
         tone: verification.status === 'rejected' ? 'danger' : 'success',
@@ -1405,6 +1462,22 @@ function onToggleStudentVerified(userId: string, verified: boolean) {
     setUserStudentVerified(userId, verified)
     pendingAdminUserAction.value = ''
   }, verified ? '已标记学生认证' : '已解绑学生认证')
+}
+
+function onRevokeStudentVerification(userId: string) {
+  if (!revokeStudentReason.value.trim()) {
+    notify('请填写撤销学生认证原因')
+    return
+  }
+
+  if (!confirmUserAction(userId, 'revoke-student'))
+    return
+
+  runSafely(() => {
+    revokeUserStudentVerification(userId, revokeStudentReason.value)
+    pendingAdminUserAction.value = ''
+    revokeStudentReason.value = ''
+  }, '学生认证已撤销')
 }
 
 function onUnbindGitHub(userId: string) {
@@ -2846,125 +2919,81 @@ onMounted(() => {
               </div>
             </div>
 
-            <Teleport to="body">
-              <Transition name="admin-drawer">
-                <div v-if="isUserDrawerOpen" class="admin-drawer-shell" @click.self="closeUserDrawer">
-                  <aside v-if="selectedUserDetail" class="admin-user-drawer" role="dialog" aria-modal="true" aria-labelledby="admin-user-drawer-title">
-                    <div class="admin-drawer-header">
-                      <div class="min-w-0">
-                        <div id="admin-user-drawer-title" class="text-lg fw-900 flex gap-2 items-center">
-                          <span class="i-carbon-user-profile" />
-                          {{ selectedUserDetail.user.profile.displayName }}
-                        </div>
-                        <div class="text-sm text-slate-500 leading-6 mt-2 break-all dark:text-slate-400">
-                          {{ selectedUserDetail.user.profile.email }} · ID {{ selectedUserDetail.user.id }}
-                        </div>
+            <TxDrawer
+              v-model:visible="isUserDrawerOpen"
+              class="admin-user-drawer-host"
+              direction="right"
+              size="min(1120px, 92vw)"
+              title="编辑用户"
+              mask-effect="blur"
+              @close="closeUserDrawer"
+            >
+              <template v-if="selectedUserDetail" #header>
+                <div class="admin-drawer-header">
+                  <div class="min-w-0">
+                    <div id="admin-user-drawer-title" class="text-lg fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-user-profile" />
+                      {{ selectedUserDetail.user.profile.displayName }}
+                    </div>
+                    <div class="text-sm text-slate-500 leading-6 mt-2 break-all dark:text-slate-400">
+                      {{ selectedUserDetail.user.profile.email }} · ID {{ selectedUserDetail.user.id }}
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2 items-center">
+                    <span class="admin-pill" :class="roleToneClass(selectedUserDetail.user.role)">
+                      {{ roleText(selectedUserDetail.user.role) }}
+                    </span>
+                    <span class="admin-pill" :class="accountStatusToneClass(selectedUserDetail.user.accountStatus)">
+                      {{ accountStatusText(selectedUserDetail.user.accountStatus) }}
+                    </span>
+                    <span class="admin-pill" :class="levelToneClass(selectedUserDetail.level.tone)">
+                      {{ selectedUserDetail.level.name }}
+                    </span>
+                    <TxButton size="sm" variant="secondary" aria-label="关闭用户详情" @click="closeUserDrawer">
+                      关闭
+                    </TxButton>
+                  </div>
+                </div>
+              </template>
+
+              <template v-if="selectedUserDetail">
+                <div class="admin-user-drawer-content">
+                  <div class="admin-user-stat-grid">
+                    <div v-for="item in selectedUserStatCards" :key="item.label" class="admin-metric">
+                      <div class="flex gap-3 items-center justify-between">
+                        <span class="text-sm text-slate-500 fw-800 dark:text-slate-400">{{ item.label }}</span>
+                        <span class="text-xl" :class="item.icon" />
                       </div>
-                      <div class="flex flex-wrap gap-2 items-center">
-                        <span class="admin-pill" :class="roleToneClass(selectedUserDetail.user.role)">
-                          {{ roleText(selectedUserDetail.user.role) }}
-                        </span>
-                        <span class="admin-pill" :class="accountStatusToneClass(selectedUserDetail.user.accountStatus)">
-                          {{ accountStatusText(selectedUserDetail.user.accountStatus) }}
-                        </span>
-                        <span class="admin-pill" :class="levelToneClass(selectedUserDetail.level.tone)">
-                          {{ selectedUserDetail.level.name }}
-                        </span>
-                        <TxButton size="sm" variant="secondary" aria-label="关闭用户详情" @click="closeUserDrawer">
-                          关闭
-                        </TxButton>
+                      <div class="text-xl fw-900 mt-3">
+                        {{ item.value }}
+                      </div>
+                      <div class="text-xs text-slate-500 leading-5 mt-2 dark:text-slate-400">
+                        {{ item.note }}
                       </div>
                     </div>
+                  </div>
 
-                    <div class="admin-user-stat-grid mt-5">
-                      <div v-for="item in selectedUserStatCards" :key="item.label" class="admin-metric">
-                        <div class="flex gap-3 items-center justify-between">
-                          <span class="text-sm text-slate-500 fw-800 dark:text-slate-400">{{ item.label }}</span>
-                          <span class="text-xl" :class="item.icon" />
-                        </div>
-                        <div class="text-xl fw-900 mt-3">
-                          {{ item.value }}
-                        </div>
-                        <div class="text-xs text-slate-500 leading-5 mt-2 dark:text-slate-400">
-                          {{ item.note }}
-                        </div>
-                      </div>
-                    </div>
+                  <TxTabs
+                    v-model="activeUserDrawerTab"
+                    class="admin-user-drawer-tabs"
+                    :default-value="activeUserDrawerTab"
+                    placement="top"
+                    indicator-variant="line"
+                    indicator-motion="glide"
+                    :content-padding="0"
+                    :content-scrollable="false"
+                    auto-height
+                    borderless
+                  >
+                    <TxTabItem :name="USER_DRAWER_TABS.account" icon-class="i-carbon-identification">
+                      <template #name>
+                        账号
+                      </template>
 
-                    <section class="admin-detail-section admin-points-editor mt-5" :class="{ 'is-highlighted': userDrawerMode === 'points' }">
-                      <div class="flex flex-wrap gap-3 items-start justify-between">
-                        <div>
-                          <div class="admin-detail-title">
-                            <span class="i-carbon-wallet" />
-                            积分管理
-                          </div>
-                          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-                            为当前用户直接增加或扣减积分，正数入账，负数扣减。
-                          </p>
-                        </div>
-                        <span class="admin-pill text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30">
-                          当前 {{ formatPoints(selectedUserDetail.user.points) }}
-                        </span>
-                      </div>
-                      <div class="admin-points-editor-grid mt-4">
-                        <label class="gap-2 grid">
-                          <span class="field-label">调整积分</span>
-                          <TxInput v-model="pointDrafts[selectedUserDetail.user.id]" type="number" :disabled="!isAdmin" placeholder="+/-" />
-                          <span class="field-hint">示例：100 增加积分，-50 扣减积分。</span>
-                        </label>
-                        <TxButton variant="primary" :disabled="!isAdmin" @click="onAdjustPoints(selectedUserDetail.user.id)">
-                          应用调整
-                        </TxButton>
-                      </div>
-                    </section>
-
-                    <section class="admin-detail-section mt-5">
-                      <div class="flex flex-wrap gap-3 items-start justify-between">
-                        <div>
-                          <div class="admin-detail-title">
-                            <span class="i-carbon-percentage" />
-                            优惠券管理
-                          </div>
-                          <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
-                            为当前用户手动发放可用于资源申请的优惠券，0 天有效期表示长期有效。
-                          </p>
-                        </div>
-                        <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">
-                          共 {{ selectedUserDetail.coupons.length }} 张
-                        </span>
-                      </div>
-                      <div class="mt-4 p-4 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5">
-                        <span class="text-sm text-slate-600 dark:text-slate-300">创建券种、生成兑换码和统一发放请前往独立优惠券中心。</span>
-                        <RouterLink class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30" to="/dashboard/coupons">
-                          打开优惠券中心
-                        </RouterLink>
-                      </div>
-                      <div class="mt-5 space-y-3">
-                        <div v-if="!selectedUserRecentCoupons.length" class="admin-empty">
-                          暂无优惠券记录
-                        </div>
-                        <div v-for="coupon in selectedUserRecentCoupons" :key="coupon.id" class="admin-history-row">
-                          <span class="admin-pill" :class="statusPillClass(couponStatusTone(coupon))">
-                            {{ couponStatusText(coupon) }}
-                          </span>
-                          <div class="flex-1 min-w-0">
-                            <div class="fw-900 truncate">
-                              {{ coupon.name }} · {{ couponDiscountText(coupon.discountRate) }}
-                            </div>
-                            <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                              {{ couponSourceText(coupon.source) }} · {{ coupon.expiresAt ? `有效至 ${formatDate(coupon.expiresAt)}` : '长期有效' }}
-                            </div>
-                          </div>
-                          <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(coupon.createdAt) }}</span>
-                        </div>
-                      </div>
-                    </section>
-
-                    <div class="admin-user-account-grid mt-5">
                       <section class="admin-detail-section">
                         <div class="admin-detail-title">
                           <span class="i-carbon-identification" />
-                          账号与认证
+                          账号信息
                         </div>
                         <div class="admin-detail-list mt-4">
                           <div>
@@ -3021,21 +3050,6 @@ onMounted(() => {
                             <TxCheckbox :model-value="selectedUserDetail.user.role === 'reviewer'" variant="checkmark" :disabled="!isAdmin" aria-label="协作处理员权限" @change="value => selectedUserDetail && onToggleReviewer(selectedUserDetail.user.id, value)" />
                             协作处理员权限
                           </label>
-                          <TxButton
-                            size="sm"
-                            variant="secondary"
-                            :disabled="!isAdmin"
-                            @click="onToggleStudentVerified(selectedUserDetail.user.id, !selectedUserDetail.user.profile.studentVerified)"
-                          >
-                            {{
-                              pendingAdminUserAction === userActionKey(
-                                selectedUserDetail.user.id,
-                                selectedUserDetail.user.profile.studentVerified ? 'unbind-student' : 'verify-student',
-                              )
-                                ? '确认执行'
-                                : selectedUserDetail.user.profile.studentVerified ? '解绑学生认证' : '标记学生认证'
-                            }}
-                          </TxButton>
                           <TxButton size="sm" variant="danger" :disabled="!isAdmin || !selectedUserDetail.user.profile.githubAuthorized" @click="onUnbindGitHub(selectedUserDetail.user.id)">
                             {{ pendingAdminUserAction === userActionKey(selectedUserDetail.user.id, 'unbind-github') ? '确认解绑' : '解绑 GitHub' }}
                           </TxButton>
@@ -3057,167 +3071,309 @@ onMounted(() => {
                           </TxButton>
                         </div>
                       </section>
+                    </TxTabItem>
 
-                      <section class="admin-detail-section">
-                        <div class="admin-detail-title">
-                          <span class="i-carbon-flow" />
-                          流水线消耗
-                        </div>
-                        <div class="admin-consumption-bars mt-4">
-                          <div v-for="item in selectedUserDetail.applicationCounts" :key="item.type" class="admin-consumption-bar">
-                            <div class="flex gap-3 items-center justify-between">
-                              <span>{{ item.label }}</span>
-                              <b>{{ item.count }} 次 / {{ formatPoints(item.spend) }}</b>
+                    <TxTabItem :name="USER_DRAWER_TABS.verification" icon-class="i-carbon-user-certification">
+                      <template #name>
+                        认证
+                      </template>
+
+                      <div class="admin-user-account-grid">
+                        <section class="admin-detail-section">
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-user-certification" />
+                            学生认证
+                          </div>
+                          <div class="admin-detail-list mt-4">
+                            <div>
+                              <span>当前状态</span>
+                              <b>{{ selectedUserDetail.user.profile.studentVerified ? '学生已认证' : '学生未认证' }}</b>
                             </div>
-                            <div class="admin-bar-track">
-                              <span :style="{ width: `${selectedUserDetail.stats.pipelineSpend ? Math.round((item.spend / selectedUserDetail.stats.pipelineSpend) * 100) : 0}%` }" />
+                            <div>
+                              <span>已通过记录</span>
+                              <b>{{ selectedUserApprovedStudentVerification ? selectedUserApprovedStudentVerification.category : '无' }}</b>
+                            </div>
+                            <div v-if="selectedUserApprovedStudentVerification">
+                              <span>{{ verificationOrganizationLabel(selectedUserApprovedStudentVerification.verificationType) }}</span>
+                              <b>{{ selectedUserApprovedStudentVerification.school || '-' }}</b>
+                            </div>
+                            <div v-if="selectedUserApprovedStudentVerification">
+                              <span>审核时间</span>
+                              <b>{{ formatOptionalDate(selectedUserApprovedStudentVerification.reviewedAt) }}</b>
                             </div>
                           </div>
+
+                          <div v-if="selectedUserDetail.user.profile.studentVerified && selectedUserApprovedStudentVerification" class="mt-4 gap-3 grid">
+                            <div class="field-label">
+                              撤销原因
+                            </div>
+                            <RichTextEditor v-model="revokeStudentReason" :min-height="130" placeholder="填写撤销学生认证的原因，会保存到该认证记录的审核回复中。" />
+                            <TxButton
+                              size="sm"
+                              variant="danger"
+                              :disabled="!isAdmin"
+                              @click="onRevokeStudentVerification(selectedUserDetail.user.id)"
+                            >
+                              {{ pendingAdminUserAction === userActionKey(selectedUserDetail.user.id, 'revoke-student') ? '确认撤销认证' : '撤销认证' }}
+                            </TxButton>
+                          </div>
+
+                          <div v-else class="mt-4 flex flex-wrap gap-3 items-center">
+                            <TxButton
+                              size="sm"
+                              variant="secondary"
+                              :disabled="!isAdmin || selectedUserDetail.user.profile.studentVerified"
+                              @click="onToggleStudentVerified(selectedUserDetail.user.id, true)"
+                            >
+                              {{ pendingAdminUserAction === userActionKey(selectedUserDetail.user.id, 'verify-student') ? '确认标记' : '标记学生认证' }}
+                            </TxButton>
+                          </div>
+                        </section>
+
+                        <section class="admin-detail-section">
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-education" />
+                            认证历史
+                          </div>
+                          <div class="mt-4 space-y-3">
+                            <div v-if="!selectedUserRecentStudents.length" class="admin-empty">
+                              暂无认证历史
+                            </div>
+                            <div v-for="item in selectedUserRecentStudents" :key="item.id" class="admin-history-row">
+                              <span class="admin-pill" :class="statusPillClass(item.status)">{{ studentStatusLabel(item.status) }}</span>
+                              <div class="flex-1 min-w-0">
+                                <div class="fw-900 truncate">
+                                  {{ verificationTypeLabel(item.verificationType) }} · {{ item.category }}
+                                </div>
+                                <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                                  {{ [item.school, item.grade, item.educationLevel].filter(Boolean).join(' · ') || '未填写学校信息' }}
+                                </div>
+                              </div>
+                              <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>
+                            </div>
+                          </div>
+                        </section>
+                      </div>
+                    </TxTabItem>
+
+                    <TxTabItem :name="USER_DRAWER_TABS.wallet" icon-class="i-carbon-wallet">
+                      <template #name>
+                        积分权益
+                      </template>
+
+                      <div class="admin-user-account-grid">
+                        <section class="admin-detail-section admin-points-editor" :class="{ 'is-highlighted': userDrawerMode === 'points' }">
+                          <div class="flex flex-wrap gap-3 items-start justify-between">
+                            <div>
+                              <div class="admin-detail-title">
+                                <span class="i-carbon-wallet" />
+                                积分管理
+                              </div>
+                              <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                                为当前用户直接增加或扣减积分，正数入账，负数扣减。
+                              </p>
+                            </div>
+                            <span class="admin-pill text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30">
+                              当前 {{ formatPoints(selectedUserDetail.user.points) }}
+                            </span>
+                          </div>
+                          <div class="admin-points-editor-grid mt-4">
+                            <label class="gap-2 grid">
+                              <span class="field-label">调整积分</span>
+                              <TxInput v-model="pointDrafts[selectedUserDetail.user.id]" type="number" :disabled="!isAdmin" placeholder="+/-" />
+                              <span class="field-hint">示例：100 增加积分，-50 扣减积分。</span>
+                            </label>
+                            <TxButton variant="primary" :disabled="!isAdmin" @click="onAdjustPoints(selectedUserDetail.user.id)">
+                              应用调整
+                            </TxButton>
+                          </div>
+                        </section>
+
+                        <section class="admin-detail-section">
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-flow" />
+                            流水线消耗
+                          </div>
+                          <div class="admin-consumption-bars mt-4">
+                            <div v-for="item in selectedUserDetail.applicationCounts" :key="item.type" class="admin-consumption-bar">
+                              <div class="flex gap-3 items-center justify-between">
+                                <span>{{ item.label }}</span>
+                                <b>{{ item.count }} 次 / {{ formatPoints(item.spend) }}</b>
+                              </div>
+                              <div class="admin-bar-track">
+                                <span :style="{ width: `${selectedUserDetail.stats.pipelineSpend ? Math.round((item.spend / selectedUserDetail.stats.pipelineSpend) * 100) : 0}%` }" />
+                              </div>
+                            </div>
+                          </div>
+                          <div class="admin-detail-list mt-4">
+                            <div>
+                              <span>申请消耗</span>
+                              <b>{{ formatPoints(selectedUserDetail.stats.pipelineSpend) }}</b>
+                            </div>
+                            <div>
+                              <span>学生认证消耗</span>
+                              <b>{{ formatPoints(selectedUserDetail.stats.studentSpend) }}</b>
+                            </div>
+                            <div>
+                              <span>退回申请</span>
+                              <b>{{ selectedUserDetail.stats.rejectedApplications }} 次</b>
+                            </div>
+                          </div>
+                        </section>
+                      </div>
+
+                      <section class="admin-detail-section mt-5">
+                        <div class="flex flex-wrap gap-3 items-start justify-between">
+                          <div>
+                            <div class="admin-detail-title">
+                              <span class="i-carbon-percentage" />
+                              优惠券管理
+                            </div>
+                            <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                              创建券种、生成兑换码和统一发放请前往独立优惠券中心。
+                            </p>
+                          </div>
+                          <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">
+                            共 {{ selectedUserDetail.coupons.length }} 张
+                          </span>
                         </div>
-                        <div class="admin-detail-list mt-4">
-                          <div>
-                            <span>申请消耗</span>
-                            <b>{{ formatPoints(selectedUserDetail.stats.pipelineSpend) }}</b>
+                        <div class="mt-4 p-4 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5">
+                          <span class="text-sm text-slate-600 dark:text-slate-300">当前只展示最近发放和使用状态。</span>
+                          <RouterLink class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30" to="/dashboard/coupons">
+                            打开优惠券中心
+                          </RouterLink>
+                        </div>
+                        <div class="mt-5 space-y-3">
+                          <div v-if="!selectedUserRecentCoupons.length" class="admin-empty">
+                            暂无优惠券记录
                           </div>
-                          <div>
-                            <span>学生认证消耗</span>
-                            <b>{{ formatPoints(selectedUserDetail.stats.studentSpend) }}</b>
-                          </div>
-                          <div>
-                            <span>退回申请</span>
-                            <b>{{ selectedUserDetail.stats.rejectedApplications }} 次</b>
+                          <div v-for="coupon in selectedUserRecentCoupons" :key="coupon.id" class="admin-history-row">
+                            <span class="admin-pill" :class="statusPillClass(couponStatusTone(coupon))">
+                              {{ couponStatusText(coupon) }}
+                            </span>
+                            <div class="flex-1 min-w-0">
+                              <div class="fw-900 truncate">
+                                {{ coupon.name }} · {{ couponDiscountText(coupon.discountRate) }}
+                              </div>
+                              <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                                {{ couponSourceText(coupon.source) }} · {{ coupon.expiresAt ? `有效至 ${formatDate(coupon.expiresAt)}` : '长期有效' }}
+                              </div>
+                            </div>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(coupon.createdAt) }}</span>
                           </div>
                         </div>
                       </section>
-                    </div>
+                    </TxTabItem>
 
-                    <div class="admin-detail-section mt-5">
-                      <div class="admin-detail-title">
-                        <span class="i-carbon-list" />
+                    <TxTabItem :name="USER_DRAWER_TABS.records" icon-class="i-carbon-list">
+                      <template #name>
                         使用记录
-                      </div>
-                      <div class="mt-4 space-y-3">
-                        <div v-if="!selectedUserDetail.latestRecords.length" class="admin-empty">
-                          暂无使用记录
-                        </div>
-                        <div v-for="item in selectedUserDetail.latestRecords.slice(0, USER_DETAIL_LIMIT)" :key="item.id" class="admin-history-row">
-                          <span class="admin-pill" :class="statusPillClass(item.tone)">{{ item.kind }}</span>
-                          <div class="flex-1 min-w-0">
-                            <div class="fw-900 truncate">
-                              {{ item.title }}
-                            </div>
-                            <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                              {{ item.detail }}
-                            </div>
-                          </div>
-                          <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.time) }}</span>
-                        </div>
-                      </div>
-                    </div>
+                      </template>
 
-                    <div class="admin-user-history-grid mt-5">
                       <section class="admin-detail-section">
                         <div class="admin-detail-title">
-                          <span class="i-carbon-document-attachment" />
-                          申请历史
+                          <span class="i-carbon-list" />
+                          使用记录
                         </div>
                         <div class="mt-4 space-y-3">
-                          <div v-if="!selectedUserRecentApplications.length" class="admin-empty">
-                            暂无申请历史
+                          <div v-if="!selectedUserDetail.latestRecords.length" class="admin-empty">
+                            暂无使用记录
                           </div>
-                          <div v-for="item in selectedUserRecentApplications" :key="item.id" class="admin-history-row">
-                            <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">{{ applicationTypeLabel(item.type) }}</span>
+                          <div v-for="item in selectedUserDetail.latestRecords.slice(0, USER_DETAIL_LIMIT)" :key="item.id" class="admin-history-row">
+                            <span class="admin-pill" :class="statusPillClass(item.tone)">{{ item.kind }}</span>
                             <div class="flex-1 min-w-0">
                               <div class="fw-900 truncate">
                                 {{ item.title }}
                               </div>
                               <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                                {{ item.githubRepo || '未绑定仓库' }} · {{ formatPoints(item.cost) }}
+                                {{ item.detail }}
                               </div>
                             </div>
-                            <span class="admin-pill" :class="statusPillClass(item.status)">{{ applicationStatusLabel(item.status) }}</span>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.time) }}</span>
                           </div>
                         </div>
                       </section>
 
-                      <section class="admin-detail-section">
-                        <div class="admin-detail-title">
-                          <span class="i-carbon-education" />
-                          认证历史
-                        </div>
-                        <div class="mt-4 space-y-3">
-                          <div v-if="!selectedUserRecentStudents.length" class="admin-empty">
-                            暂无认证历史
+                      <div class="admin-user-history-grid mt-5">
+                        <section class="admin-detail-section">
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-document-attachment" />
+                            申请历史
                           </div>
-                          <div v-for="item in selectedUserRecentStudents" :key="item.id" class="admin-history-row">
-                            <span class="admin-pill" :class="statusPillClass(item.status)">{{ studentStatusLabel(item.status) }}</span>
-                            <div class="flex-1 min-w-0">
-                              <div class="fw-900 truncate">
-                                {{ item.category }}
-                              </div>
-                              <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                                {{ [item.school, item.grade, item.educationLevel].filter(Boolean).join(' · ') || '未填写学校信息' }}
-                              </div>
+                          <div class="mt-4 space-y-3">
+                            <div v-if="!selectedUserRecentApplications.length" class="admin-empty">
+                              暂无申请历史
                             </div>
-                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>
+                            <div v-for="item in selectedUserRecentApplications" :key="item.id" class="admin-history-row">
+                              <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">{{ applicationTypeLabel(item.type) }}</span>
+                              <div class="flex-1 min-w-0">
+                                <div class="fw-900 truncate">
+                                  {{ item.title }}
+                                </div>
+                                <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                                  {{ item.githubRepo || '未绑定仓库' }} · {{ formatPoints(item.cost) }}
+                                </div>
+                              </div>
+                              <span class="admin-pill" :class="statusPillClass(item.status)">{{ applicationStatusLabel(item.status) }}</span>
+                            </div>
                           </div>
-                        </div>
-                      </section>
+                        </section>
 
-                      <section class="admin-detail-section">
-                        <div class="admin-detail-title">
-                          <span class="i-carbon-chart-line-data" />
-                          消耗历史
-                        </div>
-                        <div class="mt-4 space-y-3">
-                          <div v-if="!selectedUserConsumptionRows.length" class="admin-empty">
-                            暂无消耗历史
+                        <section class="admin-detail-section">
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-chart-line-data" />
+                            消耗历史
                           </div>
-                          <div v-for="item in selectedUserConsumptionRows" :key="item.transaction.id" class="admin-history-row">
-                            <span class="text-amber-700 fw-900 dark:text-amber-200">{{ signedPoints(item.transaction.delta) }}</span>
-                            <div class="flex-1 min-w-0">
-                              <div class="fw-900 truncate">
-                                {{ item.transaction.reason }}
-                              </div>
-                              <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                                {{ item.linkedTitle }}
-                              </div>
+                          <div class="mt-4 space-y-3">
+                            <div v-if="!selectedUserConsumptionRows.length" class="admin-empty">
+                              暂无消耗历史
                             </div>
-                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.transaction.createdAt) }}</span>
+                            <div v-for="item in selectedUserConsumptionRows" :key="item.transaction.id" class="admin-history-row">
+                              <span class="text-amber-700 fw-900 dark:text-amber-200">{{ signedPoints(item.transaction.delta) }}</span>
+                              <div class="flex-1 min-w-0">
+                                <div class="fw-900 truncate">
+                                  {{ item.transaction.reason }}
+                                </div>
+                                <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                                  {{ item.linkedTitle }}
+                                </div>
+                              </div>
+                              <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.transaction.createdAt) }}</span>
+                            </div>
                           </div>
-                        </div>
-                      </section>
+                        </section>
 
-                      <section class="admin-detail-section">
-                        <div class="admin-detail-title">
-                          <span class="i-carbon-wallet" />
-                          积分流水
-                        </div>
-                        <div class="mt-4 space-y-3">
-                          <div v-if="!selectedUserRecentTransactions.length" class="admin-empty">
-                            暂无积分流水
+                        <section class="admin-detail-section">
+                          <div class="admin-detail-title">
+                            <span class="i-carbon-wallet" />
+                            积分流水
                           </div>
-                          <div v-for="item in selectedUserRecentTransactions" :key="item.id" class="admin-history-row">
-                            <span class="admin-pill" :class="statusPillClass(item.delta < 0 ? 'warning' : 'success')">
-                              {{ transactionTypeLabel(item.type) }}
-                            </span>
-                            <div class="flex-1 min-w-0">
-                              <div class="fw-900" :class="item.delta < 0 ? 'text-amber-700 dark:text-amber-200' : 'text-emerald-700 dark:text-emerald-200'">
-                                {{ signedPoints(item.delta) }}
-                              </div>
-                              <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                                {{ item.reason }}
-                              </div>
+                          <div class="mt-4 space-y-3">
+                            <div v-if="!selectedUserRecentTransactions.length" class="admin-empty">
+                              暂无积分流水
                             </div>
-                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>
+                            <div v-for="item in selectedUserRecentTransactions" :key="item.id" class="admin-history-row">
+                              <span class="admin-pill" :class="statusPillClass(item.delta < 0 ? 'warning' : 'success')">
+                                {{ transactionTypeLabel(item.type) }}
+                              </span>
+                              <div class="flex-1 min-w-0">
+                                <div class="fw-900" :class="item.delta < 0 ? 'text-amber-700 dark:text-amber-200' : 'text-emerald-700 dark:text-emerald-200'">
+                                  {{ signedPoints(item.delta) }}
+                                </div>
+                                <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                                  {{ item.reason }}
+                                </div>
+                              </div>
+                              <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>
+                            </div>
                           </div>
-                        </div>
-                      </section>
-                    </div>
-                  </aside>
+                        </section>
+                      </div>
+                    </TxTabItem>
+                  </TxTabs>
                 </div>
-              </Transition>
-            </Teleport>
+              </template>
+            </TxDrawer>
           </div>
         </TxTabItem>
 

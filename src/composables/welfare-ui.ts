@@ -617,6 +617,10 @@ export const ADMIN_TABS = {
   data: '业务数据管理',
   audit: '审计日志',
 } as const
+
+export type AdminTabKey = keyof typeof ADMIN_TABS
+export type AdminTabName = (typeof ADMIN_TABS)[AdminTabKey]
+
 export const adminTabItems = [
   { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
   { key: 'policy', name: ADMIN_TABS.policy, icon: 'i-carbon-rule' },
@@ -630,7 +634,16 @@ export const adminTabItems = [
   { key: 'data', name: ADMIN_TABS.data, icon: 'i-carbon-data-table' },
   { key: 'audit', name: ADMIN_TABS.audit, icon: 'i-carbon-cloud-auditing' },
 ] as const
-export const activeAdminTab = ref<(typeof ADMIN_TABS)[keyof typeof ADMIN_TABS]>(ADMIN_TABS.login)
+
+export function adminTabNameFromKey(tabKey?: string): AdminTabName | undefined {
+  return adminTabItems.find(item => item.key === tabKey)?.name
+}
+
+export function adminTabKeyFromName(tabName: AdminTabName): AdminTabKey {
+  return adminTabItems.find(item => item.name === tabName)?.key ?? 'login'
+}
+
+export const activeAdminTab = ref<AdminTabName>(ADMIN_TABS.login)
 export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
 export const pointTransactions = ref<Awaited<ReturnType<typeof loadPointTransactions>>['rows']>([])
 export const pointTransactionSummary = reactive({
@@ -937,6 +950,7 @@ export function useWelfareUiState() {
       submitted: '已提交',
       in_review: '资源审批中',
       approved: '已通过',
+      revoked: '已撤销',
       partial_approved: '部分通过',
       cancelled: '已取消',
       draft: '草稿',
@@ -954,7 +968,7 @@ export function useWelfareUiState() {
       return 'info'
     if (['pending_review', 'needs_supplement', 'processing', 'pending', 'submitted', 'in_review', 'draft'].includes(status))
       return 'warning'
-    if (['rejected', 'cancelled'].includes(status))
+    if (['rejected', 'revoked', 'cancelled'].includes(status))
       return 'danger'
     return 'info'
   }

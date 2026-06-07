@@ -36,8 +36,10 @@ function isActive(path: string) {
 function selectAdminTab(tab: typeof adminTabItems[number]) {
   activeAdminTab.value = tab.name
   selectedSection.value = 'admin'
-  if (!isActive('/dashboard/admin'))
-    router.push('/dashboard/admin')
+  router.push({
+    path: '/dashboard/admin',
+    query: { tab: tab.key },
+  })
 }
 </script>
 
