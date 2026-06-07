@@ -146,8 +146,8 @@ function normalizeSchoolQuery(value: string) {
 }
 
 function onSubmitStudentVerification() {
-  runSafely(() => {
-    submitStudentVerification({
+  runSafely(async () => {
+    await submitStudentVerification({
       realName: studentForm.realName,
       verificationType: studentForm.verificationType,
       category: studentForm.category,

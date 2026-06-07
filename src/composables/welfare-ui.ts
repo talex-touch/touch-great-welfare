@@ -1973,6 +1973,13 @@ export function useWelfareUiState() {
     return result
   }
 
+  async function submitStudentVerification(payload: Parameters<typeof welfare.submitStudentVerification>[0]) {
+    await welfare.reloadWelfareState()
+    welfare.submitStudentVerification(payload)
+    await saveWelfareState(welfare.state)
+    await welfare.reloadWelfareState()
+  }
+
   return {
     ...welfare,
     adminForm,
@@ -2090,6 +2097,7 @@ export function useWelfareUiState() {
     approveResourceItem,
     completeResourceProvision,
     resetStudentFiles,
+    submitStudentVerification,
     generateEducationEmailChallenge,
     copyEducationEmailTemplate,
     openEducationEmailClient,
