@@ -71,6 +71,11 @@ interface CreateSub2ApiKeyPayload {
   rateLimit5h?: number
   rateLimit1d?: number
   rateLimit7d?: number
+  ipWhitelist?: string[]
+  ipBlacklist?: string[]
+  maxActiveIps?: number
+  ipIdleTimeoutSeconds?: number
+  maxConcurrency?: number
 }
 
 interface UpstreamEnvelope<T> {
@@ -100,6 +105,13 @@ const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_KEY_QUOTA_USD = 10
 const SUB2API_CONFIG_ID = 'default'
 
+class Sub2ApiHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'Sub2ApiHttpError'
+  }
+}
+
 function encryptionSecret(env: WorkerEnv) {
   return env.NOTIFY_SECRET_KEY ?? ''
 }
@@ -120,6 +132,15 @@ function optionalInt(value: unknown) {
     return null
   const numeric = Number(value)
   if (!Number.isFinite(numeric) || numeric <= 0)
+    return null
+  return Math.trunc(numeric)
+}
+
+function optionalNonNegativeInt(value: unknown) {
+  if (value === undefined || value === null || value === '')
+    return null
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric) || numeric < 0)
     return null
   return Math.trunc(numeric)
 }
@@ -200,7 +221,7 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
     defaultRateLimit5h: normalizeRateLimit(stored?.default_rate_limit_5h),
     defaultRateLimit1d: normalizeRateLimit(stored?.default_rate_limit_1d),
     defaultRateLimit7d: normalizeRateLimit(stored?.default_rate_limit_7d),
-    configured: !!(stored?.base_url && databaseUrl),
+    configured: !!(stored?.base_url && (adminApiKey || databaseUrl)),
     source: stored ? 'admin' as const : 'empty' as const,
   }
 }
@@ -367,9 +388,13 @@ async function callSub2Api<T>(
     const message = payload && typeof payload === 'object' && 'message' in payload
       ? String((payload as UpstreamEnvelope<T>).message)
       : `Sub2API 请求失败：${response.status}`
-    throw new Error(message)
+    throw new Sub2ApiHttpError(message, response.status)
   }
   return normalizeResponseData(payload)
+}
+
+function isUnsupportedAdminKeyEndpoint(error: unknown) {
+  return error instanceof Sub2ApiHttpError && [404, 405].includes(error.status)
 }
 
 async function findSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
@@ -483,6 +508,11 @@ function buildSub2ApiKeyPayload(
     rate_limit_5h: normalizeRateLimit(payload.rateLimit5h ?? config.defaultRateLimit5h),
     rate_limit_1d: normalizeRateLimit(payload.rateLimit1d ?? config.defaultRateLimit1d),
     rate_limit_7d: normalizeRateLimit(payload.rateLimit7d ?? config.defaultRateLimit7d),
+    ip_whitelist: payload.ipWhitelist ?? [],
+    ip_blacklist: payload.ipBlacklist ?? [],
+    max_active_ips: optionalNonNegativeInt(payload.maxActiveIps) ?? 0,
+    ip_idle_timeout_seconds: optionalNonNegativeInt(payload.ipIdleTimeoutSeconds) ?? 0,
+    max_concurrency: optionalNonNegativeInt(payload.maxConcurrency) ?? 0,
   }
 }
 
@@ -499,12 +529,14 @@ async function createSub2ApiKeyByDatabase(
       insert into api_keys (
         user_id, key, name, group_id, status, ip_whitelist, ip_blacklist,
         quota, quota_used, expires_at, rate_limit_5h, rate_limit_1d, rate_limit_7d,
-        usage_5h, usage_1d, usage_7d, created_at, updated_at
+        usage_5h, usage_1d, usage_7d, max_active_ips, ip_idle_timeout_seconds,
+        max_concurrency, created_at, updated_at
       )
       values (
-        $1, $2, $3, $4, 'active', '[]'::jsonb, '[]'::jsonb,
+        $1, $2, $3, $4, 'active', $10::jsonb, $11::jsonb,
         $5, 0, $6, $7, $8, $9,
-        0, 0, 0, now(), now()
+        0, 0, 0, $12, $13,
+        $14, now(), now()
       )
       returning id
     `, [
@@ -517,6 +549,11 @@ async function createSub2ApiKeyByDatabase(
       request.rate_limit_5h,
       request.rate_limit_1d,
       request.rate_limit_7d,
+      JSON.stringify(request.ip_whitelist),
+      JSON.stringify(request.ip_blacklist),
+      request.max_active_ips,
+      request.ip_idle_timeout_seconds,
+      request.max_concurrency,
     ])
     const createdId = result.rows[0]?.id
     if (!createdId)
@@ -531,6 +568,18 @@ async function createSub2ApiKeyByDatabase(
     quota: request.quota,
     expires_at: expiresAt,
   } satisfies UpstreamApiKey
+}
+
+async function createSub2ApiKeyByAdminApi(
+  config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
+  sub2apiUserId: string,
+  payload: CreateSub2ApiKeyPayload,
+) {
+  const request = buildSub2ApiKeyPayload(config, payload)
+  return await callSub2Api<UpstreamApiKey>(config, `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}/api-keys`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
 }
 
 async function insertBinding(
@@ -654,6 +703,12 @@ async function deleteSub2ApiKeyByDatabase(config: Awaited<ReturnType<typeof getE
   })
 }
 
+async function deleteSub2ApiKeyByAdminApi(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, sub2apiKeyId: string) {
+  await callSub2Api(config, `/api/v1/admin/api-keys/${encodeURIComponent(sub2apiKeyId)}`, {
+    method: 'DELETE',
+  })
+}
+
 async function createKey(request: Request, env: WorkerEnv) {
   const auth = await getAuthenticatedRequest(request, env)
   const payload = await readJson<CreateSub2ApiKeyPayload>(request)
@@ -669,7 +724,22 @@ export async function createSub2ApiKeyForUser(env: WorkerEnv, user: User, payloa
 
   const sub2apiUserId = await ensureSub2ApiUser(config, user)
   const quotaUsd = normalizeQuota(payload.quotaUsd, config.defaultQuotaUsd)
-  const upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
+  let upstreamKey: UpstreamApiKey
+  if (config.adminApiKey) {
+    try {
+      upstreamKey = await createSub2ApiKeyByAdminApi(config, sub2apiUserId, payload)
+    }
+    catch (error) {
+      if (!isUnsupportedAdminKeyEndpoint(error))
+        throw error
+      if (!config.databaseUrl)
+        throw new Error('Sub2API Admin API 不支持创建 API Key，且数据库连接未配置')
+      upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
+    }
+  }
+  else {
+    upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
+  }
 
   return await insertBinding(env, user.id, sub2apiUserId, upstreamKey, quotaUsd)
 }
@@ -686,8 +756,23 @@ async function deleteKey(request: Request, env: WorkerEnv) {
     throw new Error('API Key 不存在或已删除')
 
   const config = await getEffectiveSub2ApiConfig(env)
-  if (binding.sub2api_key_id)
-    await deleteSub2ApiKeyByDatabase(config, binding.sub2api_key_id)
+  if (binding.sub2api_key_id) {
+    if (config.adminApiKey) {
+      try {
+        await deleteSub2ApiKeyByAdminApi(config, binding.sub2api_key_id)
+      }
+      catch (error) {
+        if (!isUnsupportedAdminKeyEndpoint(error))
+          throw error
+        if (!config.databaseUrl)
+          throw new Error('Sub2API Admin API 不支持删除 API Key，且数据库连接未配置')
+        await deleteSub2ApiKeyByDatabase(config, binding.sub2api_key_id)
+      }
+    }
+    else {
+      await deleteSub2ApiKeyByDatabase(config, binding.sub2api_key_id)
+    }
+  }
 
   await revokeBinding(env, binding.id)
   return { ok: true }
@@ -701,14 +786,18 @@ async function testSub2ApiConfig(env: WorkerEnv) {
     throw new Error('Sub2API 尚未配置完成')
 
   let adminApiReachable = false
+  let databaseReachable = false
   if (config.adminApiKey) {
     await callSub2Api(config, '/api/v1/admin/users?page=1&page_size=1')
     adminApiReachable = true
   }
-  await withSub2ApiDatabase(config, async (pool) => {
-    await pool.query('select 1')
-  })
-  return { ok: true, adminApiReachable, databaseReachable: true }
+  if (config.databaseUrl) {
+    await withSub2ApiDatabase(config, async (pool) => {
+      await pool.query('select 1')
+    })
+    databaseReachable = true
+  }
+  return { ok: true, adminApiReachable, databaseReachable }
 }
 
 export async function handleSub2ApiRequest(request: Request, env: WorkerEnv) {

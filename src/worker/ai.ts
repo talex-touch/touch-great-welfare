@@ -908,9 +908,75 @@ function findApplicationUser(state: WelfareState, userId: string) {
   return user
 }
 
-function quotaFromResourceItem(item: NonNullable<WelfareApplication['resourceItems']>[number]) {
-  const budget = Number(item.approvedPayload?.budgetLimit ?? item.payload?.budgetLimit)
-  return Number.isFinite(budget) && budget > 0 ? budget : undefined
+function resourceProvisionValue(item: NonNullable<WelfareApplication['resourceItems']>[number], ...keys: string[]) {
+  for (const source of [item.approvedPayload, item.payload]) {
+    if (!source)
+      continue
+    for (const key of keys) {
+      const value = source[key]
+      if (value !== undefined && value !== null && value !== '')
+        return value
+    }
+  }
+  return undefined
+}
+
+function optionalProvisionNumber(value: unknown) {
+  if (value === undefined || value === null || value === '')
+    return undefined
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
+}
+
+function optionalProvisionInt(value: unknown) {
+  const numeric = optionalProvisionNumber(value)
+  return numeric === undefined ? undefined : Math.trunc(numeric)
+}
+
+function provisionStringList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => String(item).trim())
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[\s,，;；]+/)
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+  return undefined
+}
+
+function expiresInDaysFromDuration(duration: unknown) {
+  if (typeof duration !== 'string')
+    return undefined
+  const match = duration.match(/(\d+)\s*天/)
+  return match ? Number(match[1]) : undefined
+}
+
+function llmModelForResourceItem(item: NonNullable<WelfareApplication['resourceItems']>[number]) {
+  const modelKey = String(resourceProvisionValue(item, 'model') || item.resourceSubtype || '')
+  return DEFAULT_LLM_API_MODELS.find(model => model.key === modelKey)
+}
+
+function sub2ApiPayloadFromResourceItem(item: NonNullable<WelfareApplication['resourceItems']>[number]) {
+  const model = llmModelForResourceItem(item)
+  const duration = resourceProvisionValue(item, 'duration') ?? item.duration
+  return {
+    name: `TGW ${item.applicationId}-${item.id}`,
+    quotaUsd: optionalProvisionNumber(resourceProvisionValue(item, 'quotaUsd', 'budgetLimit')),
+    expiresInDays: optionalProvisionInt(resourceProvisionValue(item, 'expiresInDays', 'expires_in_days')) ?? expiresInDaysFromDuration(duration),
+    groupId: resourceProvisionValue(item, 'groupId', 'group_id') as number | string | null | undefined,
+    rateLimit5h: optionalProvisionNumber(resourceProvisionValue(item, 'rateLimit5h', 'rate_limit_5h')),
+    rateLimit1d: optionalProvisionNumber(resourceProvisionValue(item, 'rateLimit1d', 'rate_limit_1d')),
+    rateLimit7d: optionalProvisionNumber(resourceProvisionValue(item, 'rateLimit7d', 'rate_limit_7d')),
+    ipWhitelist: provisionStringList(resourceProvisionValue(item, 'ipWhitelist', 'ip_whitelist', 'allowedIps', 'allowed_ips')),
+    ipBlacklist: provisionStringList(resourceProvisionValue(item, 'ipBlacklist', 'ip_blacklist', 'blockedIps', 'blocked_ips')),
+    maxActiveIps: optionalProvisionInt(resourceProvisionValue(item, 'maxActiveIps', 'maxActiveIPs', 'max_active_ips', 'ipLimit')) ?? model?.ipLimit,
+    ipIdleTimeoutSeconds: optionalProvisionInt(resourceProvisionValue(item, 'ipIdleTimeoutSeconds', 'ip_idle_timeout_seconds')),
+    maxConcurrency: optionalProvisionInt(resourceProvisionValue(item, 'maxConcurrency', 'max_concurrency', 'concurrencyLimit')) ?? model?.concurrencyLimit,
+  }
 }
 
 async function provisionCodeApplication(
@@ -960,13 +1026,7 @@ async function provisionResourceApplication(
 
   const results = []
   for (const item of items) {
-    const quotaUsd = quotaFromResourceItem(item)
-    const key = await createSub2ApiKeyForUser(env, user, {
-      name: `TGW ${application.id}-${item.id}`,
-      quotaUsd,
-      expiresInDays: undefined,
-      groupId: undefined,
-    })
+    const key = await createSub2ApiKeyForUser(env, user, sub2ApiPayloadFromResourceItem(item))
     item.provisionStatus = 'completed'
     item.provisionCompletedAt = now()
     item.provisionNote = `Sub2API 自动发放：${key.keyMasked}，额度 $${key.quotaUsd}，有效期 ${key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`

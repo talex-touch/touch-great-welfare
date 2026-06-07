@@ -58,6 +58,11 @@ export interface CreateSub2ApiKeyPayload {
   rateLimit5h?: number
   rateLimit1d?: number
   rateLimit7d?: number
+  ipWhitelist?: string[]
+  ipBlacklist?: string[]
+  maxActiveIps?: number
+  ipIdleTimeoutSeconds?: number
+  maxConcurrency?: number
 }
 
 async function readErrorMessage(response: Response) {
