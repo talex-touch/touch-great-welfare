@@ -1040,7 +1040,8 @@ async function provisionResourceApplication(
     const database = await createDatabaseForResourceItem(env, { applicationId: application.id, item, user })
     item.provisionStatus = 'completed'
     item.provisionCompletedAt = now()
-    item.provisionNote = `数据库自动发放：${database.databaseName} / ${database.username} / ${database.connectionUrlMasked}，权限 ${database.permission}，有效期 ${database.expiresAt || '按默认配置'}。明文密码仅在本次发放响应中返回。`
+    const secretNotice = database.password ? '明文密码仅在本次发放响应中返回。' : '已复用现有活跃绑定，明文密码不再返回。'
+    item.provisionNote = `数据库自动发放：${database.databaseName} / ${database.username} / ${database.connectionUrlMasked}，权限 ${database.permission}，有效期 ${database.expiresAt || '按默认配置'}。${secretNotice}`
     item.updatedAt = item.provisionCompletedAt
     results.push({ itemId: item.id, provider: 'database' as const, database })
   }

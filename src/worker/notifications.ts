@@ -519,6 +519,30 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
 
     for (const statement of statements)
       await env.LOCAL_DB!.prepare(statement).run()
+    const indexStatements = [
+      'create index if not exists idx_database_resource_bindings_user_created on database_resource_bindings (user_id, created_at desc, id desc)',
+      'create index if not exists idx_database_resource_bindings_item on database_resource_bindings (application_id, item_id)',
+      `
+        update database_resource_bindings
+        set status = 'revoked',
+            revoked_at = coalesce(revoked_at, current_timestamp)
+        where status = 'active'
+          and exists (
+            select 1
+            from database_resource_bindings newer
+            where newer.application_id = database_resource_bindings.application_id
+              and newer.item_id = database_resource_bindings.item_id
+              and newer.status = 'active'
+              and (
+                newer.created_at > database_resource_bindings.created_at
+                or (newer.created_at = database_resource_bindings.created_at and newer.id > database_resource_bindings.id)
+              )
+          )
+      `,
+      'create unique index if not exists idx_database_resource_bindings_active_item on database_resource_bindings (application_id, item_id) where status = \'active\'',
+    ]
+    for (const statement of indexStatements)
+      await env.LOCAL_DB!.prepare(statement).run()
     await addD1ColumnIfMissing(env, 'ai_provider_config', 'review_model', 'text not null default \'gpt-4.1-mini\'')
     await addD1ColumnIfMissing(env, 'ai_provider_config', 'api_key_encrypted', 'text')
     await addD1ColumnIfMissing(env, 'ai_provider_config', 'newapi_key_encrypted', 'text')
@@ -689,6 +713,26 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       revoked_at timestamptz
     )
   `)
+  await pool.query('create index if not exists idx_database_resource_bindings_user_created on database_resource_bindings (user_id, created_at desc, id desc)')
+  await pool.query('create index if not exists idx_database_resource_bindings_item on database_resource_bindings (application_id, item_id)')
+  await pool.query(`
+    update database_resource_bindings
+    set status = 'revoked',
+        revoked_at = coalesce(revoked_at, current_timestamp)
+    where status = 'active'
+      and exists (
+        select 1
+        from database_resource_bindings newer
+        where newer.application_id = database_resource_bindings.application_id
+          and newer.item_id = database_resource_bindings.item_id
+          and newer.status = 'active'
+          and (
+            newer.created_at > database_resource_bindings.created_at
+            or (newer.created_at = database_resource_bindings.created_at and newer.id > database_resource_bindings.id)
+          )
+      )
+  `)
+  await pool.query('create unique index if not exists idx_database_resource_bindings_active_item on database_resource_bindings (application_id, item_id) where status = \'active\'')
   await pool.query(`
     create table if not exists notifications (
       id text primary key,

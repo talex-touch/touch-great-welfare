@@ -51,6 +51,20 @@ interface DatabaseProvisionPayload {
   user: User
 }
 
+interface DatabaseProvisionResult {
+  id: string
+  databaseType: string
+  databaseName: string
+  username: string
+  password?: string
+  connectionUrl?: string
+  connectionUrlMasked: string
+  permission: string
+  expiresAt?: string
+  status: 'active'
+  reused?: boolean
+}
+
 const DATABASE_PROVISION_CONFIG_ID = 'default'
 const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_DATABASE_PREFIX = 'twg'
@@ -376,7 +390,7 @@ async function insertDatabaseResourceBinding(
     permission: string
     expiresAt: string
   },
-) {
+): Promise<DatabaseProvisionResult> {
   const id = createId('dbp')
   const passwordHash = await sha256Hex(input.password)
   const connectionUrlEncrypted = await encryptSecret(input.connectionUrl, encryptionSecret(env))
@@ -446,6 +460,38 @@ async function insertDatabaseResourceBinding(
   }
 }
 
+async function findActiveDatabaseResourceBinding(env: WorkerEnv, applicationId: string, itemId: string) {
+  await ensureNotificationSchema(env)
+
+  if (shouldUseD1(env)) {
+    return await env.LOCAL_DB!
+      .prepare(`
+        select * from database_resource_bindings
+        where application_id = ?1 and item_id = ?2 and status = 'active'
+        order by created_at desc, id desc
+        limit 1
+      `)
+      .bind(applicationId, itemId)
+      .first<DatabaseResourceBindingRow>()
+  }
+
+  const result = await getPool(env).query<DatabaseResourceBindingRow>(`
+    select * from database_resource_bindings
+    where application_id = $1 and item_id = $2 and status = 'active'
+    order by created_at desc, id desc
+    limit 1
+  `, [applicationId, itemId])
+  return result.rows[0] ?? null
+}
+
+function existingDatabaseProvisionResult(row: DatabaseResourceBindingRow): DatabaseProvisionResult {
+  return {
+    ...serializeDatabaseResourceBinding(row),
+    status: 'active',
+    reused: true,
+  }
+}
+
 async function testDatabaseProvisionConfig(env: WorkerEnv) {
   const config = await getEffectiveDatabaseProvisionConfig(env)
   if (!config.enabled)
@@ -460,6 +506,10 @@ async function testDatabaseProvisionConfig(env: WorkerEnv) {
 }
 
 export async function createDatabaseForResourceItem(env: WorkerEnv, payload: DatabaseProvisionPayload) {
+  const existing = await findActiveDatabaseResourceBinding(env, payload.applicationId, payload.item.id)
+  if (existing)
+    return existingDatabaseProvisionResult(existing)
+
   const config = await getEffectiveDatabaseProvisionConfig(env)
   if (!config.enabled)
     throw new Error('数据库自动发放未启用')

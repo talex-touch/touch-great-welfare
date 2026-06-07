@@ -33,3 +33,23 @@ create index if not exists idx_database_resource_bindings_user_created
 
 create index if not exists idx_database_resource_bindings_item
   on database_resource_bindings (application_id, item_id);
+
+update database_resource_bindings
+set status = 'revoked',
+    revoked_at = coalesce(revoked_at, current_timestamp)
+where status = 'active'
+  and exists (
+    select 1
+    from database_resource_bindings newer
+    where newer.application_id = database_resource_bindings.application_id
+      and newer.item_id = database_resource_bindings.item_id
+      and newer.status = 'active'
+      and (
+        newer.created_at > database_resource_bindings.created_at
+        or (newer.created_at = database_resource_bindings.created_at and newer.id > database_resource_bindings.id)
+      )
+  );
+
+create unique index if not exists idx_database_resource_bindings_active_item
+  on database_resource_bindings (application_id, item_id)
+  where status = 'active';

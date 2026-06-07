@@ -40,6 +40,9 @@ function createMemoryD1(state: WelfareState) {
       get state() {
         return appState
       },
+      set state(value: WelfareState) {
+        appState = value
+      },
       bindings,
     },
     prepare(query: string) {
@@ -99,6 +102,13 @@ function createMemoryD1(state: WelfareState) {
             return { version: appVersion }
           if (query.includes('select * from database_provision_config'))
             return databaseConfig
+          if (query.includes('select * from database_resource_bindings')) {
+            return bindings.find(item =>
+              item.application_id === this.values[0]
+              && item.item_id === this.values[1]
+              && item.status === 'active',
+            ) ?? null
+          }
           if (query.includes('from point_transactions where id'))
             return null
           return null
@@ -299,5 +309,29 @@ describe('database resource provisioning', () => {
     expect(resourceItem?.provisionNote).toContain('approved_orders')
     expect(resourceItem?.provisionNote).toContain('postgresql://approved_reader:****@db.example.com')
     expect(resourceItem?.provisionNote).not.toContain(result.items[0].database.password)
+
+    updatedState.applications[0].resourceItems![0].provisionStatus = 'pending'
+    d1.data.state = updatedState
+    poolQueries.length = 0
+
+    const retryResponse = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+
+    expect(retryResponse.ok).toBe(true)
+    const retryResult = await retryResponse.json() as {
+      status: string
+      items: Array<{ provider: string, database: { reused?: boolean, password?: string, connectionUrl?: string } }>
+    }
+    expect(retryResult.status).toBe('provisioned')
+    expect(retryResult.items[0].database.reused).toBe(true)
+    expect(retryResult.items[0].database.password).toBeUndefined()
+    expect(retryResult.items[0].database.connectionUrl).toBeUndefined()
+    expect(poolQueries).toHaveLength(0)
+    expect(d1.data.bindings).toHaveLength(1)
+    const retryState = await readWelfareState(env)
+    expect(retryState.applications[0].resourceItems?.[0].provisionNote).toContain('明文密码不再返回')
   })
 })

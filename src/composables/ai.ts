@@ -128,12 +128,13 @@ export type ProvisionApplicationRewardResult
           databaseType: string
           databaseName: string
           username: string
-          password: string
-          connectionUrl: string
+          password?: string
+          connectionUrl?: string
           connectionUrlMasked: string
           permission: string
           expiresAt?: string
           status: 'active'
+          reused?: boolean
         }
       }
     >
