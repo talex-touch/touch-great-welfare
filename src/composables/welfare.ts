@@ -4544,6 +4544,7 @@ export function useWelfareStore() {
       assertVerifiedEducationEmailChallenge(emailChallenge, !!payload.educationEmailVerified)
 
     const supplementedAt = now()
+    const previousNotes = verification.notes.trim() || '<p>（此前未填写材料说明）</p>'
     verification.verificationType = verificationType
     verification.realName = realName
     verification.category = payload.category.trim()
@@ -4556,9 +4557,10 @@ export function useWelfareStore() {
     verification.educationEmailVerifiedAt = emailChallenge?.verifiedAt
     verification.educationEmailVerificationSource = emailChallenge?.verifiedAt ? 'mail_auto' : undefined
     verification.educationEmailChallengeId = emailChallenge?.id
-    verification.notes = notes
+    verification.notes = `${previousNotes}<h3>补充资料（${formatDate(supplementedAt)}）</h3>${notes}`
     verification.attachments = [...existingAttachments, ...newAttachments]
     verification.status = 'pending'
+    verification.reply = undefined
     verification.supplementedAt = supplementedAt
     verification.reviewedAt = undefined
 

@@ -223,7 +223,7 @@ onMounted(() => {
             <RichTextView :content="replyText" class="rich-text-preview" />
             <div v-if="verification.status === 'needs_supplement'" class="mt-4">
               <TxButton variant="primary" @click="supplement">
-                补充资料
+                重新认证
               </TxButton>
             </div>
             <div v-else-if="verification.status === 'rejected' || verification.status === 'revoked'" class="mt-4">

@@ -7,6 +7,7 @@ import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composa
 import {
   EDUCATION_EMAIL_REVIEW_INBOX,
   formatBytes,
+  formatDate,
   MAX_ATTACHMENT_BYTES,
   STUDENT_REVIEW_FEE,
   verificationOrganizationLabel,
@@ -16,6 +17,7 @@ import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
+import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
 const {
   state,
@@ -94,7 +96,7 @@ const filteredStudentSchoolSuggestions = computed(() => {
 const filteredStudentGradeOptions = computed(() => isStudentVerification.value ? [...studentGradeOptions] : ['3 个月内', '半年内', '1 年', '2 年', '3 年及以上', '长期服务'])
 
 function continueToDetails() {
-  if (!isVerificationEntryOpen.value)
+  if (!isSupplementMode.value && !isVerificationEntryOpen.value)
     return
 
   currentStep.value = 'details'
@@ -241,6 +243,7 @@ async function initializeStudentForm() {
 
   if (editingVerification.value) {
     fillStudentFormFromVerification(editingVerification.value)
+    studentForm.notes = ''
     currentStep.value = 'details'
     hasStudentConsent.value = true
   }
@@ -297,7 +300,7 @@ onMounted(() => {
             <span>我确认认证资料由我自愿提供，已按需脱敏；继续填写即表示同意提交成功后生成云端记录、审核费规则、管理员审核处理和上述免责说明。</span>
           </label>
           <div class="flex justify-end">
-            <TxButton variant="primary" :disabled="!hasStudentConsent || !isVerificationEntryOpen" @click="continueToDetails">
+            <TxButton variant="primary" :disabled="!hasStudentConsent || (!isSupplementMode && !isVerificationEntryOpen)" @click="continueToDetails">
               继续填写
             </TxButton>
           </div>
@@ -327,6 +330,15 @@ onMounted(() => {
 
           <div class="verification-submit-warning">
             认证不是申请门槛。提交认证材料可以帮助管理员更快判断身份背景和公益属性，但未通过或未提交认证也可以继续按常规流程申请资源。
+          </div>
+
+          <div v-if="isSupplementMode && editingVerification" class="verification-detail-section">
+            <div class="flex flex-wrap gap-2 items-center justify-between">
+              <h3>此前提交内容</h3>
+              <span class="field-hint">{{ formatDate(editingVerification.createdAt) }} 提交 · {{ editingVerification.attachments.length }} 个材料</span>
+            </div>
+            <RichTextView :content="editingVerification.notes" class="rich-text-preview mt-3" />
+            <VerificationAttachmentGrid v-if="editingVerification.attachments.length" :files="editingVerification.attachments" />
           </div>
 
           <div class="verification-type-lock">
@@ -482,13 +494,13 @@ onMounted(() => {
             </div>
             <div class="gap-2 grid md:col-span-2">
               <div class="flex flex-wrap gap-2 items-center justify-between">
-                <span class="field-label">材料说明</span>
+                <span class="field-label">{{ isSupplementMode ? '本次补充说明' : '材料说明' }}</span>
                 <span class="field-hint">所见即所得 · 草稿已本地保存</span>
               </div>
               <RichTextEditor
                 v-model="studentForm.notes"
                 :min-height="260"
-                placeholder="请说明身份背景、材料清单和需要管理员注意的补充信息。建议脱敏填写，不要提交身份证件原图、密码、密钥或涉密科研材料。"
+                :placeholder="isSupplementMode ? '只填写本次新增或修正的补充资料；原提交内容会保留在上方，提交后按时间追加到材料记录下方。' : '请说明身份背景、材料清单和需要管理员注意的补充信息。建议脱敏填写，不要提交身份证件原图、密码、密钥或涉密科研材料。'"
               />
             </div>
             <div class="md:col-span-2">

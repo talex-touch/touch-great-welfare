@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import type { StudentVerification } from '~/composables/welfare'
 import { TxButton, TxCard, TxStatusBadge } from '@talex-touch/tuffex'
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import {
@@ -11,7 +12,6 @@ import {
   verificationTypeLabel,
 } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
-import ReviewQueues from './ReviewQueues.vue'
 import RichTextView from './RichTextView.vue'
 
 const {
@@ -24,11 +24,32 @@ const {
 
 const router = useRouter()
 const { notify } = useWelfareFeedback()
+const supplementVerification = computed(() => currentStudentVerifications.value.find(item => item.status === 'needs_supplement'))
+const headerStatusText = computed(() => {
+  if (supplementVerification.value)
+    return '待补充资料'
+  return currentUser.value?.profile.studentVerified ? '学生已认证' : '待认证'
+})
+const headerStatusTone = computed(() => {
+  if (supplementVerification.value)
+    return 'warning'
+  return currentUser.value?.profile.studentVerified ? 'success' : 'warning'
+})
 
 function goCreateStudentVerification() {
   router.push({
     path: '/dashboard/student/create',
     query: { type: 'student' },
+  })
+}
+
+function goSupplementStudentVerification(verification: StudentVerification) {
+  router.push({
+    path: '/dashboard/student/create',
+    query: {
+      type: verification.verificationType ?? 'student',
+      edit: verification.id,
+    },
   })
 }
 
@@ -56,8 +77,8 @@ onMounted(() => {
           </p>
         </div>
         <div class="flex flex-wrap gap-3 items-center">
-          <TxStatusBadge :text="currentUser?.profile.studentVerified ? '学生已认证' : '待认证'" :status="currentUser?.profile.studentVerified ? 'success' : 'warning'" />
-          <TxButton variant="primary" :disabled="!currentUser" @click="goCreateStudentVerification">
+          <TxStatusBadge :text="headerStatusText" :status="headerStatusTone" />
+          <TxButton v-if="!supplementVerification" variant="primary" :disabled="!currentUser" @click="goCreateStudentVerification">
             <span class="i-carbon-add" />
             选择认证
           </TxButton>
@@ -110,6 +131,9 @@ onMounted(() => {
             </div>
             <div class="md:text-right">
               <TxStatusBadge :text="verificationStatusText(item.status)" :status="statusTone(item.status)" size="sm" />
+              <TxButton v-if="item.status === 'needs_supplement'" class="mt-2" size="sm" variant="secondary" @click.stop="goSupplementStudentVerification(item)">
+                重新认证
+              </TxButton>
             </div>
             <div v-if="item.reply" class="text-sm leading-6 p-3 rounded-xl bg-slate-100 dark:bg-[#151820] md:col-span-3">
               {{ item.reply }}
@@ -119,7 +143,5 @@ onMounted(() => {
         </div>
       </div>
     </TxCard>
-
-    <ReviewQueues kind="student" />
   </section>
 </template>

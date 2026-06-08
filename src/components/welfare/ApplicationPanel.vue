@@ -416,7 +416,7 @@ function applicationRowTags(item: WelfareApplication) {
                 待审核
               </option>
               <option value="needs_supplement">
-                待补充材料
+                待补充资料
               </option>
               <option value="processing">
                 处理中

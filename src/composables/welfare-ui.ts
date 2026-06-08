@@ -992,7 +992,7 @@ export function useWelfareUiState() {
     const map: Record<string, string> = {
       reserved: '已提交',
       pending_review: '待审核',
-      needs_supplement: '待补充材料',
+      needs_supplement: '待补充资料',
       processing: '处理中',
       answered: '已答复',
       completed: '已结束',

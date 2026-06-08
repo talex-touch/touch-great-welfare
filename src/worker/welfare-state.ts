@@ -1654,6 +1654,18 @@ function sanitizeWorkerRichText(value: unknown) {
   return escaped
 }
 
+function formatWorkerDate(value?: string) {
+  if (!value)
+    return '-'
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
 function stateUsers(state: Partial<WelfareState>) {
   return Array.isArray(state.users) ? state.users : []
 }
@@ -2820,16 +2832,19 @@ async function supplementStudentVerificationAction(request: Request, env: Worker
     if (totalAttachmentBytes([...(verification.attachments ?? []), ...newAttachments]) > MAX_ATTACHMENT_BYTES)
       throw new Error('材料附件总大小不能超过 200MB')
 
+    const supplementedAt = now()
+    const previousNotes = verification.notes.trim() || '<p>（此前未填写材料说明）</p>'
     verification.realName = realName
     verification.category = input.category.trim()
     verification.school = input.school?.trim()
     verification.identity = input.identity?.trim()
     verification.grade = input.grade?.trim()
     verification.educationLevel = input.educationLevel?.trim()
-    verification.notes = notes
+    verification.notes = `${previousNotes}<h3>补充资料（${formatWorkerDate(supplementedAt)}）</h3>${notes}`
     verification.attachments = [...(verification.attachments ?? []), ...newAttachments]
     verification.status = 'pending'
     verification.reply = undefined
+    verification.supplementedAt = supplementedAt
     verification.reviewedAt = undefined
     return { verificationId: verification.id }
   })

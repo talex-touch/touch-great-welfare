@@ -182,7 +182,7 @@ function verificationCardState(type: VerificationType, approved: boolean) {
       verification,
       statusText: verificationStatusText(verification.status),
       statusTone: statusTone(verification.status),
-      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '补充资料' : verification.status === 'revoked' ? '查看原因' : verification.status === 'rejected' ? '查看回复' : '查看详情',
+      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '重新认证' : verification.status === 'revoked' ? '查看原因' : verification.status === 'rejected' ? '查看回复' : '查看详情',
       meta: verification.status === 'pending'
         ? `${formatDate(verification.createdAt)} 提交，等待审核回复`
         : verification.status === 'needs_supplement'
