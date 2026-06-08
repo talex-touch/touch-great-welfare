@@ -139,6 +139,14 @@ const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 const USER_DETAIL_LIMIT = 6
 const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
 const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
+const DAY_MS = 24 * 60 * 60 * 1000
+const DASHBOARD_TREND_DAY_COUNT = 7
+const DASHBOARD_TREND_WIDTH = 320
+const DASHBOARD_TREND_HEIGHT = 128
+const DASHBOARD_TREND_PADDING = 14
+const DONE_APPLICATION_STATUSES = new Set(['answered', 'completed', 'closed', 'approved', 'partial_approved'])
+const WAITING_APPLICATION_STATUSES = new Set(['reserved', 'pending_review', 'needs_supplement', 'submitted'])
+const PROCESSING_APPLICATION_STATUSES = new Set(['processing', 'in_review'])
 const USER_DRAWER_TABS = {
   account: 'account',
   verification: 'verification',
@@ -504,6 +512,46 @@ function transactionTypeLabel(type: string) {
 
 function sumTransactions(rows: CreditTransaction[]) {
   return rows.reduce((sum, item) => sum + item.delta, 0)
+}
+
+function percentOf(value: number, total: number) {
+  if (total <= 0)
+    return 0
+  return Math.round((value / total) * 100)
+}
+
+function barPercent(value: number, total: number) {
+  if (value <= 0 || total <= 0)
+    return 0
+  return Math.max(7, percentOf(value, total))
+}
+
+function percentLabel(value: number, total: number) {
+  return `${percentOf(value, total)}%`
+}
+
+function safeDateTime(value?: string) {
+  if (!value)
+    return 0
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function shortDateLabel(time: number) {
+  return new Date(time).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+function isWithinDay(value: string | undefined, dayStart: number) {
+  const time = safeDateTime(value)
+  return time >= dayStart && time < dayStart + DAY_MS
+}
+
+function lineChartPoint(value: number, maxValue: number, index: number, total: number) {
+  const chartWidth = DASHBOARD_TREND_WIDTH - DASHBOARD_TREND_PADDING * 2
+  const chartHeight = DASHBOARD_TREND_HEIGHT - DASHBOARD_TREND_PADDING * 2
+  const x = DASHBOARD_TREND_PADDING + (total <= 1 ? 0 : (chartWidth / (total - 1)) * index)
+  const y = DASHBOARD_TREND_PADDING + chartHeight - (maxValue <= 0 ? 0 : (value / maxValue) * chartHeight)
+  return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) }
 }
 
 function isApplicationRef(refId?: string) {
@@ -1039,38 +1087,165 @@ const dashboardActivityRows = computed(() => {
 
 const dashboardActivityPagination = computed(() => paginateRows(dashboardActivityRows.value, dashboardActivityFilters))
 
-const dashboardConfigRows = computed(() => [
-  {
-    name: 'OAuth 登录',
-    status: state.oauth.enabled ? '已启用' : '未启用',
-    detail: `${state.oauth.provider.toUpperCase()} · ${state.oauth.clientId || '未填写 Client ID'}`,
-    tone: state.oauth.enabled ? 'success' : 'warning',
-  },
-  {
-    name: 'GitHub 应用',
-    status: githubAppConfigForm.configured ? '已配置' : '未配置',
-    detail: githubAppConfigForm.appName || githubAppConfigForm.callbackUrl,
-    tone: githubAppConfigForm.configured ? 'success' : 'warning',
-  },
-  {
-    name: 'AI Provider',
-    status: aiConfigForm.configured ? '已配置' : '未配置',
-    detail: `${aiConfigForm.baseUrl} · 图片 ${aiConfigForm.imageModel} · 审核 ${aiConfigForm.reviewModel}`,
-    tone: aiConfigForm.configured ? 'success' : 'warning',
-  },
-  {
-    name: '通知供应商',
-    status: notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置',
-    detail: `邮件 ${notificationProviderConfigForm.emailConfigured ? '可用' : '未配置'} · 飞书邮件 ${notificationProviderConfigForm.feishuMailConfigured ? '可用' : '未配置'} · 推送 ${notificationProviderConfigForm.pushConfigured ? '可用' : '未配置'}`,
-    tone: notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? 'success' : 'warning',
-  },
-  {
-    name: 'LINUX DO Credit',
-    status: rechargeConfigForm.configured ? '已配置' : '未配置',
-    detail: rechargeConfigForm.gatewayBaseUrl,
-    tone: rechargeConfigForm.configured ? 'success' : 'warning',
-  },
-])
+const dashboardApplicationTypeChart = computed(() => {
+  const applications = dashboardMetricScope.value.applications
+  const total = applications.length
+  return REQUEST_TYPE_ORDER.map((type) => {
+    const rows = applications.filter(item => item.type === type)
+    return {
+      key: type,
+      label: applicationTypeLabel(type),
+      value: rows.length,
+      percent: percentLabel(rows.length, total),
+      width: `${barPercent(rows.length, total)}%`,
+      points: rows.reduce((sum, item) => sum + item.cost + (item.storageExtended ? item.storageExtensionCost : 0), 0),
+    }
+  })
+})
+
+const dashboardApplicationFunnel = computed(() => {
+  const applications = dashboardMetricScope.value.applications
+  const total = applications.length
+  const done = applications.filter(item => DONE_APPLICATION_STATUSES.has(item.status)).length
+  const rejected = applications.filter(item => item.status === 'rejected' || item.status === 'cancelled').length
+  const rows = [
+    { key: 'submitted', label: '已进入流程', value: total, tone: 'info' },
+    { key: 'waiting', label: '待审核/补充', value: applications.filter(item => WAITING_APPLICATION_STATUSES.has(item.status)).length, tone: 'warning' },
+    { key: 'processing', label: '处理中', value: applications.filter(item => PROCESSING_APPLICATION_STATUSES.has(item.status)).length, tone: 'info' },
+    { key: 'done', label: '已交付/完成', value: done, tone: 'success' },
+    { key: 'rejected', label: '退回/取消', value: rejected, tone: 'danger' },
+  ]
+
+  return rows.map(item => ({
+    ...item,
+    percent: percentLabel(item.value, total),
+    width: `${barPercent(item.value, total)}%`,
+  }))
+})
+
+const dashboardVerificationChart = computed(() => {
+  const verifications = dashboardMetricScope.value.studentVerifications
+  const total = verifications.length
+  return studentStatusFilterOptions
+    .filter(option => option.value !== ALL_FILTER)
+    .map((option) => {
+      const count = verifications.filter(item => item.status === option.value).length
+      return {
+        key: option.value,
+        label: option.label.replace('全部', ''),
+        value: count,
+        percent: percentLabel(count, total),
+        width: `${barPercent(count, total)}%`,
+        tone: option.value,
+      }
+    })
+})
+
+const dashboardPointFlowChart = computed(() => {
+  const transactions = dashboardMetricScope.value.transactions
+  const income = transactions.filter(item => item.delta > 0).reduce((sum, item) => sum + item.delta, 0)
+  const outcome = Math.abs(transactions.filter(item => item.delta < 0).reduce((sum, item) => sum + item.delta, 0))
+  const maxValue = Math.max(income, outcome, 1)
+  return [
+    {
+      key: 'income',
+      label: '积分入账',
+      value: income,
+      text: formatPoints(income),
+      width: `${barPercent(income, maxValue)}%`,
+      tone: 'success',
+    },
+    {
+      key: 'outcome',
+      label: '积分消耗',
+      value: outcome,
+      text: formatPoints(outcome),
+      width: `${barPercent(outcome, maxValue)}%`,
+      tone: 'warning',
+    },
+  ]
+})
+
+const dashboardTrendRows = computed(() => {
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  const startTime = todayStart.getTime() - (DASHBOARD_TREND_DAY_COUNT - 1) * DAY_MS
+
+  return Array.from({ length: DASHBOARD_TREND_DAY_COUNT }, (_, index) => {
+    const dayStart = startTime + index * DAY_MS
+    const applications = state.applications.filter(item => isWithinDay(item.createdAt, dayStart)).length
+    const users = state.users.filter(item => isWithinDay(item.createdAt, dayStart)).length
+    const verifications = state.studentVerifications.filter(item => isWithinDay(item.createdAt, dayStart)).length
+    const pointFlow = adminTransactions.value
+      .filter(item => isWithinDay(item.createdAt, dayStart))
+      .reduce((sum, item) => sum + Math.abs(item.delta), 0)
+
+    return {
+      key: new Date(dayStart).toISOString(),
+      label: shortDateLabel(dayStart),
+      applications,
+      users,
+      verifications,
+      pointFlow,
+      total: applications + users + verifications,
+    }
+  })
+})
+
+const dashboardTrendMax = computed(() => Math.max(...dashboardTrendRows.value.map(item => item.total), 1))
+
+const dashboardTrendPoints = computed(() => dashboardTrendRows.value
+  .map((item, index) => lineChartPoint(item.total, dashboardTrendMax.value, index, dashboardTrendRows.value.length)))
+
+const dashboardTrendPolyline = computed(() => dashboardTrendPoints.value
+  .map(point => `${point.x},${point.y}`)
+  .join(' '))
+
+const dashboardTrendAreaPath = computed(() => {
+  const points = dashboardTrendPoints.value
+  if (!points.length)
+    return ''
+  const baseline = DASHBOARD_TREND_HEIGHT - DASHBOARD_TREND_PADDING
+  const lastPoint = points[points.length - 1]
+  return `M ${points[0].x} ${baseline} L ${points.map(point => `${point.x} ${point.y}`).join(' L ')} L ${lastPoint.x} ${baseline} Z`
+})
+
+const dashboardInsightCards = computed(() => {
+  const { users, applications, studentVerifications, transactions } = dashboardMetricScope.value
+  const doneApplications = applications.filter(item => DONE_APPLICATION_STATUSES.has(item.status)).length
+  const verifiedUsers = users.filter(user => user.profile.studentVerified || user.profile.githubAuthorized).length
+  const activeUsers = users.filter(user => applications.some(item => item.userId === user.id) || transactions.some(item => item.userId === user.id)).length
+  const approvalRate = percentLabel(doneApplications, applications.length)
+  const verificationRate = percentLabel(verifiedUsers, users.length)
+  const pendingVerifications = studentVerifications.filter(item => ['pending', 'needs_supplement'].includes(item.status)).length
+
+  return [
+    {
+      label: '申请完成率',
+      value: approvalRate,
+      note: `${doneApplications}/${applications.length} 个申请已交付或完成`,
+      icon: 'i-carbon-checkmark-outline',
+    },
+    {
+      label: '认证覆盖率',
+      value: verificationRate,
+      note: `${verifiedUsers}/${users.length} 位用户已有学生或 GitHub 认证`,
+      icon: 'i-carbon-user-certification',
+    },
+    {
+      label: '活跃用户',
+      value: activeUsers.toLocaleString('zh-CN'),
+      note: `有申请或积分流水的用户，占 ${percentLabel(activeUsers, users.length)}`,
+      icon: 'i-carbon-chart-relationship',
+    },
+    {
+      label: '认证待办',
+      value: pendingVerifications.toLocaleString('zh-CN'),
+      note: `认证队列压力：${percentLabel(pendingVerifications, studentVerifications.length)}`,
+      icon: 'i-carbon-time',
+    },
+  ]
+})
 
 const dataGroups = computed(() => [
   {
@@ -1690,7 +1865,7 @@ onMounted(() => {
       <TxTabs
         v-model="activeAdminTab"
         class="admin-config-tabs admin-config-tabs--content-only mt-6"
-        :default-value="ADMIN_TABS.login"
+        :default-value="ADMIN_TABS.dashboard"
         placement="top"
         indicator-variant="block"
         indicator-motion="glide"
@@ -3558,24 +3733,120 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-              <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
-                <span class="i-carbon-dashboard" />
-                系统配置状态
-              </div>
-              <div class="gap-3 grid lg:grid-cols-2">
-                <div v-for="item in dashboardConfigRows" :key="item.name" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
-                  <div class="flex gap-3 items-center justify-between">
-                    <span class="fw-900">{{ item.name }}</span>
-                    <span class="admin-pill" :class="statusPillClass(item.tone)">
-                      {{ item.status }}
-                    </span>
-                  </div>
-                  <div class="text-xs text-slate-500 leading-5 mt-2 break-all dark:text-slate-400">
-                    {{ item.detail }}
-                  </div>
+            <div class="gap-4 grid sm:grid-cols-2 xl:grid-cols-4">
+              <div v-for="insight in dashboardInsightCards" :key="insight.label" class="admin-insight-card">
+                <div class="admin-insight-card__icon" :class="insight.icon" />
+                <div class="min-w-0">
+                  <span>{{ insight.label }}</span>
+                  <b>{{ insight.value }}</b>
+                  <p>{{ insight.note }}</p>
                 </div>
               </div>
+            </div>
+
+            <div class="dashboard-chart-grid">
+              <section class="admin-chart-card admin-chart-card--wide">
+                <div class="admin-chart-head">
+                  <div>
+                    <h3>近 7 天业务趋势</h3>
+                    <p>统计用户注册、业务申请和认证申请的每日新增。</p>
+                  </div>
+                  <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">
+                    {{ dashboardTrendRows.reduce((sum, item) => sum + item.total, 0) }} 条活动
+                  </span>
+                </div>
+                <svg class="admin-line-chart" :viewBox="`0 0 ${DASHBOARD_TREND_WIDTH} ${DASHBOARD_TREND_HEIGHT}`" role="img" aria-label="近 7 天业务趋势图">
+                  <path class="admin-line-chart__grid" :d="`M ${DASHBOARD_TREND_PADDING} ${DASHBOARD_TREND_HEIGHT - DASHBOARD_TREND_PADDING} H ${DASHBOARD_TREND_WIDTH - DASHBOARD_TREND_PADDING}`" />
+                  <path class="admin-line-chart__area" :d="dashboardTrendAreaPath" />
+                  <polyline class="admin-line-chart__line" :points="dashboardTrendPolyline" />
+                  <circle v-for="(point, index) in dashboardTrendPoints" :key="dashboardTrendRows[index].key" class="admin-line-chart__dot" :cx="point.x" :cy="point.y" r="3.2" />
+                </svg>
+                <div class="admin-trend-labels">
+                  <span v-for="day in dashboardTrendRows" :key="day.key">
+                    <b>{{ day.total }}</b>
+                    {{ day.label }}
+                  </span>
+                </div>
+              </section>
+
+              <section class="admin-chart-card">
+                <div class="admin-chart-head">
+                  <div>
+                    <h3>申请类型分布</h3>
+                    <p>按当前筛选范围统计业务申请类型。</p>
+                  </div>
+                </div>
+                <div class="admin-bar-chart">
+                  <div v-for="item in dashboardApplicationTypeChart" :key="item.key" class="admin-bar-chart__row">
+                    <div class="admin-bar-chart__meta">
+                      <span>{{ item.label }}</span>
+                      <b>{{ item.value }} · {{ item.percent }}</b>
+                    </div>
+                    <div class="admin-bar-track">
+                      <span :style="{ width: item.width }" />
+                    </div>
+                    <small>消耗 {{ formatPoints(item.points) }}</small>
+                  </div>
+                </div>
+              </section>
+
+              <section class="admin-chart-card">
+                <div class="admin-chart-head">
+                  <div>
+                    <h3>审核处理漏斗</h3>
+                    <p>展示申请从进入流程到完成/退回的分布。</p>
+                  </div>
+                </div>
+                <div class="admin-funnel-chart">
+                  <div v-for="item in dashboardApplicationFunnel" :key="item.key" class="admin-funnel-chart__row">
+                    <span>{{ item.label }}</span>
+                    <div class="admin-funnel-chart__bar">
+                      <i :class="statusPillClass(item.tone)" :style="{ width: item.width }" />
+                    </div>
+                    <b>{{ item.value }} · {{ item.percent }}</b>
+                  </div>
+                </div>
+              </section>
+
+              <section class="admin-chart-card">
+                <div class="admin-chart-head">
+                  <div>
+                    <h3>认证状态分析</h3>
+                    <p>对学生/一线认证队列做状态拆分。</p>
+                  </div>
+                </div>
+                <div class="admin-bar-chart">
+                  <div v-for="item in dashboardVerificationChart" :key="item.key" class="admin-bar-chart__row">
+                    <div class="admin-bar-chart__meta">
+                      <span>{{ item.label }}</span>
+                      <b>{{ item.value }} · {{ item.percent }}</b>
+                    </div>
+                    <div class="admin-bar-track">
+                      <span :class="statusPillClass(item.tone)" :style="{ width: item.width }" />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="admin-chart-card">
+                <div class="admin-chart-head">
+                  <div>
+                    <h3>积分流向</h3>
+                    <p>对比当前范围内积分入账和消耗。</p>
+                  </div>
+                </div>
+                <div class="admin-bar-chart admin-bar-chart--large">
+                  <div v-for="item in dashboardPointFlowChart" :key="item.key" class="admin-bar-chart__row">
+                    <div class="admin-bar-chart__meta">
+                      <span>{{ item.label }}</span>
+                      <b>{{ item.text }}</b>
+                    </div>
+                    <div class="admin-bar-track">
+                      <span :class="statusPillClass(item.tone)" :style="{ width: item.width }" />
+                    </div>
+                  </div>
+                </div>
+              </section>
             </div>
 
             <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">

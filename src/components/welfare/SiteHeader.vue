@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { TxDrawer } from '@talex-touch/tuffex'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { toggleDark } from '~/composables/dark'
 import { useWelfareUiState } from '~/composables/welfare-ui'
+import NotificationsPanel from './NotificationsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,6 +18,7 @@ const {
   refreshNotifications,
   readNotification,
   selectedSection,
+  isNotificationDrawerOpen,
 } = useWelfareUiState()
 const isUserMenuOpen = ref(false)
 const dismissedForcedAnnouncementIds = ref<Set<string>>(new Set())
@@ -63,9 +66,11 @@ function closeUserMenu() {
   isUserMenuOpen.value = false
 }
 
-function goNotifications() {
+function openNotificationDrawer() {
+  selectedSection.value = 'notifications'
   closeUserMenu()
-  router.push('/dashboard/notifications')
+  isNotificationDrawerOpen.value = true
+  refreshNotifications().catch(() => {})
 }
 
 function isActivePath(path: string) {
@@ -174,7 +179,7 @@ onUnmounted(() => {
 
             <span class="header-action-separator" aria-hidden="true" />
 
-            <button class="header-notification-btn" title="消息中心" @click="goNotifications">
+            <button class="header-notification-btn" title="消息中心" @click="openNotificationDrawer">
               <span class="i-carbon-notification" aria-hidden="true" />
               <span v-if="unreadNotificationCount" class="header-notification-btn__dot" aria-hidden="true" />
               <span class="sr-only">{{ unreadNotificationCount ? `有 ${unreadNotificationCount} 条未读消息` : '消息中心' }}</span>
@@ -210,7 +215,7 @@ onUnmounted(() => {
                       :key="item.key"
                       class="text-sm fw-800 px-3 py-3 text-left rounded-xl flex gap-2 w-full transition items-center hover:bg-slate-100 dark:hover:bg-white/10"
                       :class="isActivePath(item.path) ? 'text-slate-950 bg-slate-100 dark:text-white dark:bg-white/10' : 'text-slate-700 dark:text-slate-200'"
-                      @click="goUserMenuItem(item)"
+                      @click="item.key === 'notifications' ? openNotificationDrawer() : goUserMenuItem(item)"
                     >
                       <span :class="item.icon" />
                       {{ item.label }}
@@ -261,6 +266,17 @@ onUnmounted(() => {
   <Teleport to="body">
     <button v-if="isUserMenuOpen" class="bg-transparent cursor-default inset-0 fixed z-30" aria-label="关闭用户菜单" @click="closeUserMenu" />
   </Teleport>
+
+  <TxDrawer
+    v-model:visible="isNotificationDrawerOpen"
+    class="notification-drawer-host"
+    direction="right"
+    size="min(520px, 94vw)"
+    title="消息中心"
+    mask-effect="blur"
+  >
+    <NotificationsPanel embedded />
+  </TxDrawer>
 
   <Teleport to="body">
     <div v-if="forcedAnnouncement" class="announcement-modal">

@@ -23,6 +23,8 @@ const navItems: readonly NavItem[] = [
 ] as const
 
 const visibleNavItems = computed(() => navItems.filter(item => !item.roleRequired || currentUser.value?.role === 'reviewer' || isAdmin.value))
+const primaryAdminTabItems = computed(() => adminTabItems.filter(tab => ['dashboard', 'data', 'users', 'audit'].includes(tab.key)))
+const configAdminTabItems = computed(() => adminTabItems.filter(tab => !['dashboard', 'data', 'users', 'audit'].includes(tab.key)))
 
 function go(item: typeof visibleNavItems.value[number]) {
   selectedSection.value = item.key
@@ -61,8 +63,19 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
 
       <div v-if="isAdmin" class="cms-side-nav__section">
         <div class="cms-side-nav__label">
-          管理员 NAV
+          管理员
         </div>
+        <button
+          v-for="tab in primaryAdminTabItems"
+          :key="tab.key"
+          class="cms-side-nav__item cms-side-nav__item--admin"
+          :class="activeAdminTab === tab.name && isActive('/dashboard/admin') ? 'is-active-sub' : ''"
+          @click="selectAdminTab(tab)"
+        >
+          <span class="cms-side-nav__icon" :class="tab.icon" />
+          <span class="flex-1 truncate">{{ tab.name }}</span>
+          <span v-if="activeAdminTab === tab.name && isActive('/dashboard/admin')" class="i-carbon-chevron-right text-xs" />
+        </button>
         <button
           class="cms-side-nav__item cms-side-nav__item--admin"
           :class="isActive('/dashboard/coupons') ? 'is-active' : ''"
@@ -72,7 +85,7 @@ function selectAdminTab(tab: typeof adminTabItems[number]) {
           <span class="flex-1 truncate">优惠券中心</span>
         </button>
         <button
-          v-for="tab in adminTabItems"
+          v-for="tab in configAdminTabItems"
           :key="tab.key"
           class="cms-side-nav__item cms-side-nav__item--admin"
           :class="activeAdminTab === tab.name && isActive('/dashboard/admin') ? 'is-active-sub' : ''"

@@ -44,6 +44,199 @@
   background: rgba(255, 255, 255, 0.92);
 }
 
+.admin-insight-card,
+.admin-chart-card {
+  min-width: 0;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.admin-insight-card {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  padding: 1rem;
+  border-radius: 22px;
+}
+
+.admin-insight-card__icon {
+  display: grid;
+  flex: 0 0 2.45rem;
+  width: 2.45rem;
+  height: 2.45rem;
+  border-radius: 16px;
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+  place-items: center;
+  font-size: 1.15rem;
+}
+
+.admin-insight-card span {
+  display: block;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.admin-insight-card b {
+  display: block;
+  margin-top: 0.2rem;
+  color: #0f172a;
+  font-size: 1.45rem;
+  font-weight: 900;
+}
+
+.admin-insight-card p {
+  margin-top: 0.25rem;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.dashboard-chart-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-chart-card {
+  padding: 1.15rem;
+  border-radius: 26px;
+}
+
+.admin-chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.admin-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.admin-chart-head h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.admin-chart-head p {
+  margin-top: 0.3rem;
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.admin-line-chart {
+  width: 100%;
+  height: 160px;
+  display: block;
+}
+
+.admin-line-chart__grid {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.32);
+  stroke-width: 1;
+}
+
+.admin-line-chart__area {
+  fill: rgba(16, 185, 129, 0.14);
+}
+
+.admin-line-chart__line {
+  fill: none;
+  stroke: #10b981;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.admin-line-chart__dot {
+  fill: #fff;
+  stroke: #10b981;
+  stroke-width: 2;
+}
+
+.admin-trend-labels {
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  color: #64748b;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.admin-trend-labels b {
+  display: block;
+  color: #0f172a;
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.admin-bar-chart,
+.admin-funnel-chart {
+  display: grid;
+  gap: 0.95rem;
+}
+
+.admin-bar-chart--large {
+  gap: 1.25rem;
+}
+
+.admin-bar-chart__row,
+.admin-funnel-chart__row {
+  min-width: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.admin-bar-chart__meta,
+.admin-funnel-chart__row {
+  color: #64748b;
+  font-size: 0.82rem;
+}
+
+.admin-bar-chart__meta {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.admin-bar-chart__meta span,
+.admin-funnel-chart__row span {
+  font-weight: 900;
+}
+
+.admin-bar-chart__meta b,
+.admin-funnel-chart__row b {
+  color: #0f172a;
+  font-weight: 900;
+}
+
+.admin-bar-chart small {
+  color: #94a3b8;
+  font-size: 0.74rem;
+}
+
+.admin-funnel-chart__bar {
+  overflow: hidden;
+  height: 0.78rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.admin-funnel-chart__bar i {
+  display: block;
+  height: 100%;
+  min-width: 0.28rem;
+  border-radius: inherit;
+}
+
 .admin-table {
   overflow-x: auto;
 }
@@ -175,16 +368,19 @@
   box-shadow: 0 28px 80px rgba(15, 23, 42, 0.24);
 }
 
-.admin-user-drawer-host .tx-drawer__panel {
+.admin-user-drawer-host .tx-drawer__panel,
+.notification-drawer-host .tx-drawer__panel {
   border-left: 1px solid rgba(15, 23, 42, 0.08);
   background: #f8fafc;
 }
 
-.admin-user-drawer-host .tx-drawer__header {
+.admin-user-drawer-host .tx-drawer__header,
+.notification-drawer-host .tx-drawer__header {
   padding: 1.1rem 1.25rem;
 }
 
-.admin-user-drawer-host .tx-drawer__body {
+.admin-user-drawer-host .tx-drawer__body,
+.notification-drawer-host .tx-drawer__body {
   padding: 1.25rem;
 }
 
@@ -425,6 +621,8 @@
 }
 
 .dark .admin-metric,
+.dark .admin-insight-card,
+.dark .admin-chart-card,
 .dark .admin-user-detail,
 .dark .admin-detail-section,
 .dark .audit-row {
@@ -432,12 +630,43 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+.dark .admin-insight-card b,
+.dark .admin-chart-head h3,
+.dark .admin-trend-labels b,
+.dark .admin-bar-chart__meta b,
+.dark .admin-funnel-chart__row b {
+  color: #f8fafc;
+}
+
+.dark .admin-insight-card span,
+.dark .admin-insight-card p,
+.dark .admin-chart-head p,
+.dark .admin-trend-labels,
+.dark .admin-bar-chart__meta,
+.dark .admin-funnel-chart__row {
+  color: #94a3b8;
+}
+
+.dark .admin-insight-card__icon {
+  color: #86efac;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.dark .admin-line-chart__area {
+  fill: rgba(16, 185, 129, 0.16);
+}
+
+.dark .admin-line-chart__dot {
+  fill: #0f172a;
+}
+
 .dark .admin-user-drawer {
   border-color: rgba(255, 255, 255, 0.1);
   background: #0f172a;
 }
 
-.dark .admin-user-drawer-host .tx-drawer__panel {
+.dark .admin-user-drawer-host .tx-drawer__panel,
+.dark .notification-drawer-host .tx-drawer__panel {
   border-left-color: rgba(255, 255, 255, 0.1);
   background: #0f172a;
 }
@@ -556,7 +785,9 @@
   }
 
   .admin-user-drawer-host .tx-drawer__header,
-  .admin-user-drawer-host .tx-drawer__body {
+  .admin-user-drawer-host .tx-drawer__body,
+  .notification-drawer-host .tx-drawer__header,
+  .notification-drawer-host .tx-drawer__body {
     padding: 1rem;
   }
 
@@ -581,10 +812,16 @@
     grid-template-columns: 1fr;
   }
 
+  .dashboard-chart-grid,
   .admin-user-stat-grid,
   .admin-user-account-grid,
   .admin-user-history-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-trend-labels {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    text-align: left;
   }
 
   .admin-detail-list > div {
@@ -605,6 +842,10 @@
 @media (min-width: 768px) and (max-width: 1180px) {
   .admin-user-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-chart-grid {
+    grid-template-columns: 1fr;
   }
 
   .admin-user-account-grid,

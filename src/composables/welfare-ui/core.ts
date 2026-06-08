@@ -487,6 +487,7 @@ export const adminAnnouncements = ref<Awaited<ReturnType<typeof loadAdminAnnounc
 export const notificationList = ref<Awaited<ReturnType<typeof loadNotifications>>['notifications']>([])
 export const unreadNotificationCount = ref(0)
 export const notificationsLoading = ref(false)
+export const isNotificationDrawerOpen = ref(false)
 
 export const applicationSecurityForm = reactive({
   powNonce: '',
@@ -693,17 +694,17 @@ export type AdminTabKey = keyof typeof ADMIN_TABS
 export type AdminTabName = (typeof ADMIN_TABS)[AdminTabKey]
 
 export const adminTabItems = [
-  { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
+  { key: 'dashboard', name: ADMIN_TABS.dashboard, icon: 'i-carbon-dashboard' },
+  { key: 'data', name: ADMIN_TABS.data, icon: 'i-carbon-data-table' },
+  { key: 'users', name: ADMIN_TABS.users, icon: 'i-carbon-user-multiple' },
+  { key: 'audit', name: ADMIN_TABS.audit, icon: 'i-carbon-cloud-auditing' },
   { key: 'policy', name: ADMIN_TABS.policy, icon: 'i-carbon-rule' },
+  { key: 'login', name: ADMIN_TABS.login, icon: 'i-carbon-login' },
   { key: 'github', name: ADMIN_TABS.github, icon: 'i-carbon-logo-github' },
   { key: 'ai', name: ADMIN_TABS.ai, icon: 'i-carbon-ai-status' },
   { key: 'educationMail', name: ADMIN_TABS.educationMail, icon: 'i-carbon-email' },
   { key: 'notifications', name: ADMIN_TABS.notifications, icon: 'i-carbon-notification' },
   { key: 'ldc', name: ADMIN_TABS.ldc, icon: 'i-carbon-wallet' },
-  { key: 'users', name: ADMIN_TABS.users, icon: 'i-carbon-user-multiple' },
-  { key: 'dashboard', name: ADMIN_TABS.dashboard, icon: 'i-carbon-dashboard' },
-  { key: 'data', name: ADMIN_TABS.data, icon: 'i-carbon-data-table' },
-  { key: 'audit', name: ADMIN_TABS.audit, icon: 'i-carbon-cloud-auditing' },
 ] as const
 
 export function adminTabNameFromKey(tabKey?: string): AdminTabName | undefined {
@@ -711,10 +712,10 @@ export function adminTabNameFromKey(tabKey?: string): AdminTabName | undefined {
 }
 
 export function adminTabKeyFromName(tabName: AdminTabName): AdminTabKey {
-  return adminTabItems.find(item => item.name === tabName)?.key ?? 'login'
+  return adminTabItems.find(item => item.name === tabName)?.key ?? 'dashboard'
 }
 
-export const activeAdminTab = ref<AdminTabName>(ADMIN_TABS.login)
+export const activeAdminTab = ref<AdminTabName>(ADMIN_TABS.dashboard)
 export const lastRechargeStatus = ref<RechargeStatusResult | null>(null)
 export const pointTransactions = ref<Awaited<ReturnType<typeof loadPointTransactions>>['rows']>([])
 export const pointTransactionSummary = reactive({
@@ -3107,6 +3108,7 @@ export function useWelfareUiState() {
     notificationList,
     unreadNotificationCount,
     notificationsLoading,
+    isNotificationDrawerOpen,
     applicationSecurityForm,
     applicationPolicyConfigForm,
     lastRechargeStatus,
