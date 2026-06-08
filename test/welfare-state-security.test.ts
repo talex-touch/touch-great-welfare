@@ -247,7 +247,9 @@ function createMemoryD1(initialState: WelfareState) {
         },
       }
     },
+    batchCalls: [] as number[],
     async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      this.batchCalls.push(statements.length)
       const results = []
       for (const statement of statements)
         results.push(await statement.run())
@@ -282,6 +284,17 @@ function codeApplication(overrides: Partial<WelfareApplication> = {}): WelfareAp
 }
 
 describe('welfare state security', () => {
+  it('initializes the welfare schema once per D1 binding', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    await readWelfareState(env)
+    await readWelfareState(env)
+
+    const schemaQueries = d1.queries.filter(item => item.method === 'run' && item.query.includes('create table if not exists welfare_app_state'))
+    expect(schemaQueries).toHaveLength(1)
+  })
+
   it('allows admin password login without an existing session', async () => {
     const admin = user({
       id: 'admin_1',
@@ -333,6 +346,32 @@ describe('welfare state security', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('set-cookie')).toContain('tg_welfare_session=')
     await expect(response.json()).resolves.toMatchObject({ ok: true, userId: 'admin_1', state: { currentUserId: 'admin_1' } })
+  })
+
+  it('syncs welfare snapshots through one D1 batch', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      applications: [
+        codeApplication({ id: 'app_1' }),
+        codeApplication({ id: 'app_2', title: '第二个申请' }),
+      ],
+      coupons: [
+        {
+          id: 'coupon_1',
+          userId: 'user_1',
+          name: '测试券',
+          scope: 'all',
+          discountType: 'rate',
+          discountRate: 0.9,
+          createdAt: '2026-06-03T00:00:00.000Z',
+        },
+      ],
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    await writeWelfareState(env, await readWelfareState(env))
+
+    expect(d1.batchCalls).toContain(3)
   })
 
   it('keeps anonymous bootstrap reads off the point ledger', async () => {

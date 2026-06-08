@@ -77,6 +77,7 @@ function createMemoryD1() {
   const deliveries: Record<string, unknown>[] = []
   const settings: Record<string, unknown>[] = []
   const pointTransactions: Record<string, unknown>[] = []
+  const queries: Array<{ method: 'all' | 'first' | 'run', query: string, values: unknown[] }> = []
   let providerConfig: Record<string, unknown> | null = null
   let appState: WelfareState | undefined
   let appVersion = 1
@@ -87,6 +88,7 @@ function createMemoryD1() {
       deliveries,
       settings,
       pointTransactions,
+      queries,
       get providerConfig() {
         return providerConfig
       },
@@ -112,6 +114,7 @@ function createMemoryD1() {
           return this
         },
         async run() {
+          queries.push({ method: 'run', query, values: [...this.values] })
           if (query.includes('insert into notifications')) {
             notifications.push({
               id: this.values[0],
@@ -190,6 +193,7 @@ function createMemoryD1() {
           }
         },
         async first() {
+          queries.push({ method: 'first', query, values: [...this.values] })
           if (query.includes('select state') && query.includes('welfare_app_state'))
             return appState ? { state: JSON.stringify(appState), version: appVersion } : null
           if (query.includes('select version') && query.includes('welfare_app_state'))
@@ -208,6 +212,7 @@ function createMemoryD1() {
           return null
         },
         async all() {
+          queries.push({ method: 'all', query, values: [...this.values] })
           if (query.includes('pragma table_info'))
             return { results: [] }
           if (query.includes('from point_transactions'))
@@ -294,6 +299,7 @@ describe('notification dispatch', () => {
     expect(d1.data.notifications[0].event).toBe('application_answered')
     expect(d1.data.deliveries).toHaveLength(1)
     expect(d1.data.deliveries[0].channel).toBe('in_app')
+    expect(d1.data.queries.some(item => item.query.includes('select state') && item.query.includes('welfare_app_state'))).toBe(false)
   })
 
   it('notifies applicant when an application needs supplementary material', async () => {

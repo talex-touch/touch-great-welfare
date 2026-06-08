@@ -111,7 +111,7 @@ export type ProvisionApplicationRewardResult
         provider?: 'sub2api'
         key: {
           id: string
-          key: string
+          key?: string
           keyMasked: string
           name: string
           quotaUsd: number
@@ -119,6 +119,7 @@ export type ProvisionApplicationRewardResult
           status: 'active' | 'revoked'
           sub2apiUserId: string
           sub2apiKeyId: string
+          reused?: boolean
         }
       }
       | {

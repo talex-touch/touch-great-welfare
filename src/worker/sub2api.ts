@@ -36,6 +36,8 @@ interface Sub2ApiConfigRow {
 interface Sub2ApiKeyBindingRow {
   id: string
   user_id: string
+  application_id?: string | null
+  item_id?: string | null
   sub2api_user_id: string
   sub2api_key_id?: string | null
   key_hash: string
@@ -78,6 +80,11 @@ interface CreateSub2ApiKeyPayload {
   maxConcurrency?: number
 }
 
+interface ResourceProvisionRef {
+  applicationId: string
+  itemId: string
+}
+
 interface UpstreamEnvelope<T> {
   code?: number
   message?: string
@@ -104,6 +111,7 @@ interface UpstreamApiKey {
 const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_KEY_QUOTA_USD = 10
 const SUB2API_CONFIG_ID = 'default'
+const RESOURCE_LOCK_TTL_SECONDS = 60
 
 class Sub2ApiHttpError extends Error {
   constructor(message: string, readonly status: number) {
@@ -176,6 +184,10 @@ function buildUserEmail(user: User) {
 
 function buildUserName(user: User) {
   return user.profile.displayName.trim() || user.profile.githubUsername || user.id
+}
+
+function resourceLockId(ref: ResourceProvisionRef) {
+  return `${ref.applicationId}:${ref.itemId}`
 }
 
 async function decryptOptionalSecret(value: string | null | undefined, env: WorkerEnv) {
@@ -596,6 +608,7 @@ async function insertBinding(
   sub2apiUserId: string,
   key: UpstreamApiKey,
   quotaUsd: number,
+  resourceRef?: ResourceProvisionRef,
 ) {
   const rawKey = key.key?.trim()
   if (!rawKey)
@@ -611,22 +624,48 @@ async function insertBinding(
     await env.LOCAL_DB!
       .prepare(`
         insert into sub2api_key_bindings (
-          id, user_id, sub2api_user_id, sub2api_key_id, key_hash, key_masked,
-          name, quota_usd, expires_at, status, created_at
+          id, user_id, application_id, item_id, sub2api_user_id, sub2api_key_id,
+          key_hash, key_masked, name, quota_usd, expires_at, status, created_at
         )
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, current_timestamp)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, current_timestamp)
       `)
-      .bind(id, userId, sub2apiUserId, key.id ? String(key.id) : null, keyHash, maskKey(rawKey), name, quotaUsd, expiresAt || null, status)
+      .bind(
+        id,
+        userId,
+        resourceRef?.applicationId || null,
+        resourceRef?.itemId || null,
+        sub2apiUserId,
+        key.id ? String(key.id) : null,
+        keyHash,
+        maskKey(rawKey),
+        name,
+        quotaUsd,
+        expiresAt || null,
+        status,
+      )
       .run()
   }
   else {
     await getPool(env).query(`
       insert into sub2api_key_bindings (
-        id, user_id, sub2api_user_id, sub2api_key_id, key_hash, key_masked,
-        name, quota_usd, expires_at, status, created_at
+        id, user_id, application_id, item_id, sub2api_user_id, sub2api_key_id,
+        key_hash, key_masked, name, quota_usd, expires_at, status, created_at
       )
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-    `, [id, userId, sub2apiUserId, key.id ? String(key.id) : null, keyHash, maskKey(rawKey), name, quotaUsd, expiresAt || null, status])
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+    `, [
+      id,
+      userId,
+      resourceRef?.applicationId || null,
+      resourceRef?.itemId || null,
+      sub2apiUserId,
+      key.id ? String(key.id) : null,
+      keyHash,
+      maskKey(rawKey),
+      name,
+      quotaUsd,
+      expiresAt || null,
+      status,
+    ])
   }
 
   return {
@@ -639,6 +678,7 @@ async function insertBinding(
     status,
     sub2apiUserId,
     sub2apiKeyId: key.id ? String(key.id) : '',
+    reused: false,
   }
 }
 
@@ -654,6 +694,96 @@ function mapBinding(row: Sub2ApiKeyBindingRow) {
     status: row.status,
     createdAt: toIso(row.created_at) ?? now(),
     revokedAt: toIso(row.revoked_at),
+  }
+}
+
+function existingResourceBinding(row: Sub2ApiKeyBindingRow) {
+  return {
+    ...mapBinding(row),
+    reused: true,
+  }
+}
+
+async function getActiveResourceBinding(env: WorkerEnv, ref: ResourceProvisionRef) {
+  await ensureNotificationSchema(env)
+  if (shouldUseD1(env)) {
+    return await env.LOCAL_DB!
+      .prepare(`
+        select * from sub2api_key_bindings
+        where application_id = ?1 and item_id = ?2 and status = ?3
+        order by created_at desc, id desc
+        limit 1
+      `)
+      .bind(ref.applicationId, ref.itemId, 'active')
+      .first<Sub2ApiKeyBindingRow>()
+  }
+
+  const result = await getPool(env).query<Sub2ApiKeyBindingRow>(`
+    select * from sub2api_key_bindings
+    where application_id = $1 and item_id = $2 and status = $3
+    order by created_at desc, id desc
+    limit 1
+  `, [ref.applicationId, ref.itemId, 'active'])
+  return result.rows[0] ?? null
+}
+
+async function acquireResourceProvisionLock(env: WorkerEnv, ref: ResourceProvisionRef) {
+  await ensureNotificationSchema(env)
+  const id = resourceLockId(ref)
+  const owner = createId('s2l')
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare('delete from sub2api_resource_provision_locks where id = ?1 and expires_at <= current_timestamp')
+      .bind(id)
+      .run()
+    const result = await env.LOCAL_DB!
+      .prepare(`
+        insert into sub2api_resource_provision_locks (id, owner, expires_at, created_at)
+        values (?1, ?2, datetime(current_timestamp, '+' || ?3 || ' seconds'), current_timestamp)
+        on conflict (id) do nothing
+      `)
+      .bind(id, owner, RESOURCE_LOCK_TTL_SECONDS)
+      .run() as { meta?: { changes?: number } }
+    if (result.meta?.changes === 0)
+      throw new Error('该资源正在自动发放，请稍后刷新重试')
+    return { id, owner }
+  }
+
+  const pool = getPool(env)
+  await pool.query('delete from sub2api_resource_provision_locks where id = $1 and expires_at <= now()', [id])
+  const result = await pool.query<{ id: string }>(`
+    insert into sub2api_resource_provision_locks (id, owner, expires_at, created_at)
+    values ($1, $2, now() + ($3::text || ' seconds')::interval, now())
+    on conflict (id) do nothing
+    returning id
+  `, [id, owner, RESOURCE_LOCK_TTL_SECONDS])
+  if (!result.rows[0])
+    throw new Error('该资源正在自动发放，请稍后刷新重试')
+  return { id, owner }
+}
+
+async function releaseResourceProvisionLock(env: WorkerEnv, lock: { id: string, owner: string }) {
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare('delete from sub2api_resource_provision_locks where id = ?1 and owner = ?2')
+      .bind(lock.id, lock.owner)
+      .run()
+    return
+  }
+
+  await getPool(env).query(
+    'delete from sub2api_resource_provision_locks where id = $1 and owner = $2',
+    [lock.id, lock.owner],
+  )
+}
+
+async function withResourceProvisionLock<T>(env: WorkerEnv, ref: ResourceProvisionRef, run: () => Promise<T>) {
+  const lock = await acquireResourceProvisionLock(env, ref)
+  try {
+    return await run()
+  }
+  finally {
+    await releaseResourceProvisionLock(env, lock).catch(() => undefined)
   }
 }
 
@@ -724,6 +854,10 @@ async function createKey(request: Request, env: WorkerEnv) {
 }
 
 export async function createSub2ApiKeyForUser(env: WorkerEnv, user: User, payload: CreateSub2ApiKeyPayload) {
+  return await createSub2ApiKey(env, user, payload)
+}
+
+async function createSub2ApiKey(env: WorkerEnv, user: User, payload: CreateSub2ApiKeyPayload, resourceRef?: ResourceProvisionRef) {
   const config = await getEffectiveSub2ApiConfig(env)
   if (!config.enabled)
     throw new Error('Sub2API 未启用')
@@ -749,7 +883,21 @@ export async function createSub2ApiKeyForUser(env: WorkerEnv, user: User, payloa
     upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
   }
 
-  return await insertBinding(env, user.id, sub2apiUserId, upstreamKey, quotaUsd)
+  return await insertBinding(env, user.id, sub2apiUserId, upstreamKey, quotaUsd, resourceRef)
+}
+
+export async function createSub2ApiKeyForResourceItem(env: WorkerEnv, user: User, payload: CreateSub2ApiKeyPayload, resourceRef: ResourceProvisionRef) {
+  const existing = await getActiveResourceBinding(env, resourceRef)
+  if (existing)
+    return existingResourceBinding(existing)
+
+  return await withResourceProvisionLock(env, resourceRef, async () => {
+    const existingAfterLock = await getActiveResourceBinding(env, resourceRef)
+    if (existingAfterLock)
+      return existingResourceBinding(existingAfterLock)
+
+    return await createSub2ApiKey(env, user, payload, resourceRef)
+  })
 }
 
 async function deleteKey(request: Request, env: WorkerEnv) {

@@ -428,15 +428,15 @@ function buildUserConnectionUrl(rootUrl: string, databaseName: string, username:
 async function ensureDatabaseAndRole(rootUrl: string, databaseName: string, username: string, password: string, permission: string, expiresAt: string) {
   await withRootPool(rootUrl, async (pool) => {
     const existingDatabase = await pool.query('select 1 from pg_database where datname = $1', [databaseName])
-    if (!existingDatabase.rowCount)
-      await pool.query(`create database ${quoteIdent(databaseName)}`)
+    if (existingDatabase.rowCount)
+      throw new Error(`数据库 ${databaseName} 已存在，自动发放只能创建新的受控数据库`)
 
     const existingRole = await pool.query('select 1 from pg_roles where rolname = $1', [username])
-    if (!existingRole.rowCount)
-      await pool.query(`create role ${quoteIdent(username)} with login password ${quoteLiteral(password)} valid until ${quoteLiteral(expiresAt)}`)
-    else
-      await pool.query(`alter role ${quoteIdent(username)} with login password ${quoteLiteral(password)} valid until ${quoteLiteral(expiresAt)}`)
+    if (existingRole.rowCount)
+      throw new Error(`数据库角色 ${username} 已存在，自动发放不会修改既有角色`)
 
+    await pool.query(`create database ${quoteIdent(databaseName)}`)
+    await pool.query(`create role ${quoteIdent(username)} with login password ${quoteLiteral(password)} valid until ${quoteLiteral(expiresAt)}`)
     await pool.query(`grant connect on database ${quoteIdent(databaseName)} to ${quoteIdent(username)}`)
     if (permission === 'admin' || permission === 'temporary_ops')
       await pool.query(`grant all privileges on database ${quoteIdent(databaseName)} to ${quoteIdent(username)}`)

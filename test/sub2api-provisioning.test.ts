@@ -21,6 +21,9 @@ function createMemoryD1(state: WelfareState) {
       get state() {
         return appState
       },
+      set state(value: WelfareState) {
+        appState = value
+      },
       bindings,
     },
     prepare(query: string) {
@@ -62,14 +65,16 @@ function createMemoryD1(state: WelfareState) {
             bindings.push({
               id: this.values[0],
               user_id: this.values[1],
-              sub2api_user_id: this.values[2],
-              sub2api_key_id: this.values[3],
-              key_hash: this.values[4],
-              key_masked: this.values[5],
-              name: this.values[6],
-              quota_usd: this.values[7],
-              expires_at: this.values[8],
-              status: this.values[9],
+              application_id: this.values[2],
+              item_id: this.values[3],
+              sub2api_user_id: this.values[4],
+              sub2api_key_id: this.values[5],
+              key_hash: this.values[6],
+              key_masked: this.values[7],
+              name: this.values[8],
+              quota_usd: this.values[9],
+              expires_at: this.values[10],
+              status: this.values[11],
             })
           }
           return { meta: { changes: 1 } }
@@ -81,6 +86,13 @@ function createMemoryD1(state: WelfareState) {
             return { version: appVersion }
           if (query.includes('select * from sub2api_config'))
             return sub2apiConfig
+          if (query.includes('select * from sub2api_key_bindings')) {
+            return bindings.find(item =>
+              item.application_id === this.values[0]
+              && item.item_id === this.values[1]
+              && item.status === this.values[2],
+            ) ?? null
+          }
           if (query.includes('from point_transactions where id'))
             return null
           return null
@@ -99,6 +111,7 @@ function createMemoryD1(state: WelfareState) {
 
 function createState(): WelfareState {
   const createdAt = '2026-06-08T00:00:00.000Z'
+  const retentionExpiresAt = '2099-01-01T00:00:00.000Z'
   return {
     users: [
       {
@@ -145,7 +158,7 @@ function createState(): WelfareState {
       rejectionFraudulent: false,
       storageExtended: false,
       storageExtensionCost: 0,
-      retentionExpiresAt: createdAt,
+      retentionExpiresAt,
       standardProcessingHours: 24,
       processingDueAt: createdAt,
       contextAppendUntil: createdAt,
@@ -285,7 +298,82 @@ describe('sub2api resource provisioning', () => {
     })
     const updatedState = await readWelfareState(env) as WelfareState
     expect(d1.data.bindings).toHaveLength(1)
+    expect(d1.data.bindings[0]).toMatchObject({
+      application_id: 'app_1',
+      item_id: 'item_1',
+    })
     expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('completed')
+  })
+
+  it('reuses an existing Sub2API resource binding when resource state is retried', async () => {
+    const d1 = createMemoryD1(createState())
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-sub2api',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+    let createKeyCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/v1/admin/users?'))
+        return Response.json({ data: { items: [{ id: 42, email: 'user@example.com' }] } })
+      if (url.endsWith('/api/v1/admin/users/42/api-keys')) {
+        createKeyCalls += 1
+        const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+        return Response.json({
+          data: {
+            id: 99,
+            key: 'sk-test-created',
+            name: body.name,
+            status: 'active',
+            quota: body.quota,
+            expires_at: '2026-06-22T00:00:00.000Z',
+          },
+        })
+      }
+      return Response.json({ message: 'not found' }, { status: 404 })
+    }))
+
+    await handleSub2ApiRequest(new Request('https://welfare.example.com/api/sub2api/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        baseUrl: 'https://sub2api.example.com',
+        adminApiKey: 'admin-key',
+        clearDatabaseUrl: true,
+        defaultQuotaUsd: 10,
+        defaultExpiresInDays: 30,
+        defaultRateLimit5h: 0,
+        defaultRateLimit1d: 0,
+        defaultRateLimit7d: 0,
+      }),
+    }), env)
+
+    const first = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+    expect(first.ok).toBe(true)
+
+    const state = await readWelfareState(env) as WelfareState
+    state.applications[0].resourceItems![0].provisionStatus = 'pending'
+    d1.data.state = state
+
+    const retry = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+    const retryResult = await retry.json() as { items: Array<{ key: { reused?: boolean, key?: string } }> }
+
+    expect(retry.ok).toBe(true)
+    expect(createKeyCalls).toBe(1)
+    expect(d1.data.bindings).toHaveLength(1)
+    expect(retryResult.items[0].key.reused).toBe(true)
+    expect(retryResult.items[0].key.key).toBeUndefined()
   })
 
   it('treats non-JSON 404 responses as unsupported admin key endpoints', async () => {

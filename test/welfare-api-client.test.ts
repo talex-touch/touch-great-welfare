@@ -1,10 +1,32 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { bootstrapAdmin, endSession, loginAdmin } = await import('../src/composables/welfare-persistence')
+const { bootstrapAdmin, endSession, loadWelfareState, loginAdmin } = await import('../src/composables/welfare-persistence')
 
 describe('welfare API client', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('loads the current user state through one aggregated endpoint', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      state: {
+        currentUserId: 'user_1',
+        users: [],
+        applications: [],
+      },
+      currentUserId: 'user_1',
+      version: 2,
+    }), {
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await loadWelfareState('user')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith('/api/welfare-state/me', expect.objectContaining({
+      credentials: 'same-origin',
+    }))
   })
 
   it('uses explicit session endpoints without the legacy action bus', async () => {

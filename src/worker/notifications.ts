@@ -471,6 +471,8 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
         create table if not exists sub2api_key_bindings (
           id text primary key,
           user_id text not null,
+          application_id text,
+          item_id text,
           sub2api_user_id text not null,
           sub2api_key_id text,
           key_hash text not null,
@@ -481,6 +483,14 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           status text not null,
           created_at text not null default current_timestamp,
           revoked_at text
+        )
+      `,
+      `
+        create table if not exists sub2api_resource_provision_locks (
+          id text primary key,
+          owner text not null,
+          expires_at text not null,
+          created_at text not null default current_timestamp
         )
       `,
       `
@@ -522,6 +532,7 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     const indexStatements = [
       'create index if not exists idx_database_resource_bindings_user_created on database_resource_bindings (user_id, created_at desc, id desc)',
       'create index if not exists idx_database_resource_bindings_item on database_resource_bindings (application_id, item_id)',
+      'create index if not exists idx_sub2api_key_bindings_resource_item on sub2api_key_bindings (application_id, item_id, status)',
       `
         update database_resource_bindings
         set status = 'revoked',
@@ -554,6 +565,8 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'status', 'text not null default \'active\'')
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'provider', 'text not null default \'newapi\'')
     await addD1ColumnIfMissing(env, 'sub2api_config', 'database_url_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'application_id', 'text')
+    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'item_id', 'text')
     await addD1ColumnIfMissing(env, 'database_provision_config', 'onepanel_base_url', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'database_provision_config', 'onepanel_api_key_encrypted', 'text')
     await addD1ColumnIfMissing(env, 'notification_deliveries', 'provider', 'text not null default \'\'')
@@ -667,6 +680,8 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     create table if not exists sub2api_key_bindings (
       id text primary key,
       user_id text not null,
+      application_id text,
+      item_id text,
       sub2api_user_id text not null,
       sub2api_key_id text,
       key_hash text not null,
@@ -677,6 +692,17 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       status text not null,
       created_at timestamptz not null default now(),
       revoked_at timestamptz
+    )
+  `)
+  await pool.query('alter table sub2api_key_bindings add column if not exists application_id text')
+  await pool.query('alter table sub2api_key_bindings add column if not exists item_id text')
+  await pool.query('create index if not exists idx_sub2api_key_bindings_resource_item on sub2api_key_bindings (application_id, item_id, status)')
+  await pool.query(`
+    create table if not exists sub2api_resource_provision_locks (
+      id text primary key,
+      owner text not null,
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now()
     )
   `)
   await pool.query(`
@@ -1955,6 +1981,14 @@ async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: Cre
   return listAdminAnnouncements(env)
 }
 
+async function createAndDispatchNotificationForUser(env: WorkerEnv, user: User, input: CreateNotificationInput) {
+  const notificationId = await insertNotification(env, input)
+  await recordDelivery(env, notificationId, 'in_app', 'sent')
+  const settings = await getSettingsRow(env, user.id)
+  await dispatchOptionalChannels(env, user, settings, notificationId, input)
+  return notificationId
+}
+
 export async function createAndDispatchNotification(env: WorkerEnv, input: CreateNotificationInput) {
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
@@ -1962,11 +1996,7 @@ export async function createAndDispatchNotification(env: WorkerEnv, input: Creat
   if (!user)
     throw new Error('通知用户不存在')
 
-  const notificationId = await insertNotification(env, input)
-  await recordDelivery(env, notificationId, 'in_app', 'sent')
-  const settings = await getSettingsRow(env, user.id)
-  await dispatchOptionalChannels(env, user, settings, notificationId, input)
-  return notificationId
+  return createAndDispatchNotificationForUser(env, user, input)
 }
 
 function applicationNotification(application: WelfareApplication, event: NotificationEvent) {
@@ -2092,7 +2122,15 @@ function verificationReviewNotification(verification: StudentVerification, suffi
 
 export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, previous: Partial<WelfareState>, next: Partial<WelfareState>) {
   const users = Array.isArray(next.users) ? next.users : []
+  const usersById = new Map(users.map(user => [user.id, user]))
   const admins = users.filter(user => user.role === 'admin')
+
+  async function notify(input: CreateNotificationInput) {
+    const user = usersById.get(input.userId)
+    if (!user)
+      throw new Error('通知用户不存在')
+    return createAndDispatchNotificationForUser(env, user, input)
+  }
   const previousApplications = new Map((Array.isArray(previous.applications) ? previous.applications : []).map(item => [item.id, item]))
   const nextApplications = Array.isArray(next.applications) ? next.applications : []
   for (const application of nextApplications) {
@@ -2102,7 +2140,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
 
     if (['pending_review', 'processing'].includes(before.status) && ['answered', 'completed', 'closed'].includes(application.status)) {
       const message = applicationNotification(application, 'application_answered')
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: application.userId,
         event: 'application_answered',
         ...message,
@@ -2111,7 +2149,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
 
     if (['pending_review', 'processing'].includes(before.status) && application.status === 'rejected') {
       const message = applicationNotification(application, 'application_rejected')
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: application.userId,
         event: 'application_rejected',
         ...message,
@@ -2120,7 +2158,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
 
     if (['pending_review', 'processing'].includes(before.status) && application.status === 'needs_supplement') {
       const message = supplementRequestNotification(application)
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: application.userId,
         event: 'application_needs_supplement',
         ...message,
@@ -2131,7 +2169,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
       const applicant = users.find(user => user.id === application.userId)
       const message = supplementSubmittedNotification(application, applicant)
       for (const admin of admins) {
-        await createAndDispatchNotification(env, {
+        await notify({
           userId: admin.id,
           event: 'application_supplement_submitted',
           ...message,
@@ -2146,14 +2184,14 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     const before = previousVerifications.get(verification.id)
     if (!before) {
       if (verification.status === 'pending') {
-        await createAndDispatchNotification(env, {
+        await notify({
           userId: verification.userId,
           event: 'student_submitted',
           ...verificationSubmittedUserNotification(verification),
         })
         const message = verificationSubmittedNotification(verification, users)
         for (const admin of admins) {
-          await createAndDispatchNotification(env, {
+          await notify({
             userId: admin.id,
             event: 'student_submitted',
             ...message,
@@ -2166,14 +2204,14 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
       continue
 
     if (before.status === 'needs_supplement' && verification.status === 'pending') {
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: verification.userId,
         event: 'student_supplement_submitted',
         ...verificationSupplementSubmittedUserNotification(verification),
       })
       const message = verificationSupplementSubmittedNotification(verification, users)
       for (const admin of admins) {
-        await createAndDispatchNotification(env, {
+        await notify({
           userId: admin.id,
           event: 'student_supplement_submitted',
           ...message,
@@ -2182,7 +2220,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     }
 
     if (before.status === 'pending' && verification.status === 'needs_supplement') {
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: verification.userId,
         event: 'student_needs_supplement',
         ...verificationReviewNotification(verification, '需要补充材料', '你的认证材料需要补充，请进入认证详情查看要求。'),
@@ -2190,7 +2228,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     }
 
     if (before.status === 'pending' && verification.status === 'approved') {
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: verification.userId,
         event: 'student_approved',
         ...verificationReviewNotification(verification, '已通过', '你的认证已通过，审核积分已返还。'),
@@ -2198,7 +2236,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     }
 
     if (before.status === 'pending' && verification.status === 'rejected') {
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: verification.userId,
         event: 'student_rejected',
         ...verificationReviewNotification(verification, '已退回', '你的认证材料未通过审核，审核费不返还。'),
@@ -2206,7 +2244,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     }
 
     if (before.status === 'approved' && verification.status === 'revoked') {
-      await createAndDispatchNotification(env, {
+      await notify({
         userId: verification.userId,
         event: 'student_revoked',
         ...verificationReviewNotification(verification, '已撤销', '你的认证已被撤销，请进入认证详情查看原因。'),

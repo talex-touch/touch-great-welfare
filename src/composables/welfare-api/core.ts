@@ -3,8 +3,6 @@ import type { ApplicationMessageType, ApplicationPolicyConfig, CompleteProvision
 const STATE_ENDPOINT = '/api/welfare-state'
 const BOOTSTRAP_ENDPOINT = '/api/bootstrap'
 const SESSION_ENDPOINT = '/api/session'
-const CONFIG_PUBLIC_ENDPOINT = '/api/config/public'
-const ME_ENDPOINT = '/api/me'
 const APPLICATION_SUBMIT_ENDPOINT = '/api/applications/submit'
 const STATE_REQUEST_TIMEOUT_MS = 10000
 let currentWelfareStateVersion = 0
@@ -20,31 +18,6 @@ interface WelfareStatePayload {
   state: Partial<WelfareState>
   currentUserId?: string
   version?: number
-}
-
-interface VersionedPayload {
-  version?: number
-}
-
-interface DomainStatePayload extends VersionedPayload {
-  currentUserId?: string
-  currentUser?: User
-  users?: WelfareState['users']
-  applications?: WelfareState['applications']
-  studentVerifications?: WelfareState['studentVerifications']
-  educationEmailChallenges?: WelfareState['educationEmailChallenges']
-  coupons?: WelfareState['coupons']
-  dailyCheckIns?: WelfareState['dailyCheckIns']
-  invitationBindings?: WelfareState['invitationBindings']
-  transactions?: WelfareState['transactions']
-  squarePosts?: WelfareState['squarePosts']
-  squareBoosts?: WelfareState['squareBoosts']
-  squareReports?: WelfareState['squareReports']
-  crowdReviews?: WelfareState['crowdReviews']
-  collaborationApplications?: WelfareState['collaborationApplications']
-  claimableDeliveryApplications?: WelfareState['applications']
-  currentUserDeliveryApplications?: WelfareState['applications']
-  pendingDeliveryReviewApplications?: WelfareState['applications']
 }
 
 export type SubmitApplicationCommand
@@ -147,47 +120,6 @@ export async function loadInitialWelfareState() {
   return mergeBootstrapAndSession(bootstrap, session.currentUser)
 }
 
-function mergeById<T extends { id: string }>(...groups: Array<T[] | undefined>) {
-  const byId = new Map<string, T>()
-  for (const group of groups) {
-    for (const item of group ?? [])
-      byId.set(item.id, item)
-  }
-  return Array.from(byId.values())
-}
-
-function mergeDomainPayloads(config: Partial<WelfareState>, profile: DomainStatePayload, ...domains: DomainStatePayload[]) {
-  const latestVersion = Math.max(0, ...[profile, ...domains].map(item => Math.trunc(Number(item.version || 0))))
-  if (latestVersion)
-    currentWelfareStateVersion = latestVersion
-
-  return {
-    ...config,
-    currentUserId: profile.currentUserId,
-    users: mergeById(
-      profile.currentUser ? [profile.currentUser] : [],
-      ...domains.map(item => item.users),
-    ),
-    applications: mergeById(...domains.map(item => [
-      ...(item.applications ?? []),
-      ...(item.claimableDeliveryApplications ?? []),
-      ...(item.currentUserDeliveryApplications ?? []),
-      ...(item.pendingDeliveryReviewApplications ?? []),
-    ])),
-    studentVerifications: mergeById(...domains.map(item => item.studentVerifications)),
-    educationEmailChallenges: mergeById(...domains.map(item => item.educationEmailChallenges)),
-    coupons: mergeById(...domains.map(item => item.coupons)),
-    dailyCheckIns: mergeById(...domains.map(item => item.dailyCheckIns)),
-    invitationBindings: mergeById(...domains.map(item => item.invitationBindings)),
-    transactions: mergeById(...domains.map(item => item.transactions)),
-    squarePosts: mergeById(...domains.map(item => item.squarePosts)),
-    squareBoosts: mergeById(...domains.map(item => item.squareBoosts)),
-    squareReports: mergeById(...domains.map(item => item.squareReports)),
-    crowdReviews: mergeById(...domains.map(item => item.crowdReviews)),
-    collaborationApplications: mergeById(...domains.map(item => item.collaborationApplications)),
-  } satisfies Partial<WelfareState>
-}
-
 export async function loadLegacyWelfareState(role?: UserRole) {
   const endpoint = role === 'admin' ? `${STATE_ENDPOINT}/admin` : `${STATE_ENDPOINT}/me`
   const result = await requestState<WelfareStatePayload>(endpoint)
@@ -199,26 +131,13 @@ export async function loadLegacyWelfareState(role?: UserRole) {
 }
 
 export async function loadWelfareState(role?: UserRole) {
-  if (role === 'admin') {
-    const result = await requestState<WelfareStatePayload>('/api/admin/welfare/state')
-    currentWelfareStateVersion = Math.trunc(Number(result.version || 0))
-    return {
-      ...result.state,
-      currentUserId: result.currentUserId,
-    }
+  const endpoint = role === 'admin' ? '/api/admin/welfare/state' : `${STATE_ENDPOINT}/me`
+  const result = await requestState<WelfareStatePayload>(endpoint)
+  currentWelfareStateVersion = Math.trunc(Number(result.version || 0))
+  return {
+    ...result.state,
+    currentUserId: result.currentUserId,
   }
-
-  const [config, profile, applications, verifications, wallet, square, collaboration] = await Promise.all([
-    requestState<Partial<WelfareState>>(CONFIG_PUBLIC_ENDPOINT),
-    requestState<DomainStatePayload>(ME_ENDPOINT),
-    requestState<DomainStatePayload>('/api/applications/mine'),
-    requestState<DomainStatePayload>('/api/verifications/mine'),
-    requestState<DomainStatePayload>('/api/wallet/summary'),
-    requestState<DomainStatePayload>('/api/square/posts'),
-    requestState<DomainStatePayload>('/api/collaboration/mine'),
-  ])
-
-  return mergeDomainPayloads(config, profile, applications, verifications, wallet, square, collaboration)
 }
 
 export async function saveWelfareState(state: WelfareState, userId?: string) {

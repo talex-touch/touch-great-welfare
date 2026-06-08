@@ -20,7 +20,7 @@ import { decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createDatabaseForResourceItem } from './database-provisioning'
 import { createAndDispatchNotification, ensureNotificationSchema } from './notifications'
 import { appendPointTransaction, pointTransactionExistsByRef, pointTransactionId } from './points'
-import { createSub2ApiKeyForUser } from './sub2api'
+import { createSub2ApiKeyForResourceItem } from './sub2api'
 import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type AiImageJobStatus = 'pending' | 'succeeded' | 'failed'
@@ -115,7 +115,7 @@ type ResourceProvisionResultItem
   = | {
     itemId: string
     provider: 'sub2api'
-    key: Awaited<ReturnType<typeof createSub2ApiKeyForUser>>
+    key: Awaited<ReturnType<typeof createSub2ApiKeyForResourceItem>>
   }
   | {
     itemId: string
@@ -1047,7 +1047,10 @@ async function provisionResourceApplication(
   for (const item of items) {
     try {
       if (item.resourceType === 'llm_api_quota') {
-        const key = await createSub2ApiKeyForUser(env, user, sub2ApiPayloadFromResourceItem(item))
+        const key = await createSub2ApiKeyForResourceItem(env, user, sub2ApiPayloadFromResourceItem(item), {
+          applicationId: application.id,
+          itemId: item.id,
+        })
         const result = { itemId: item.id, provider: 'sub2api' as const, key }
         applyResourceProvisionResult(item, result)
         results.push(result)

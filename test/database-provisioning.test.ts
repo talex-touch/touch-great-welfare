@@ -14,7 +14,7 @@ vi.mock('pg', () => {
         if (sql.includes('from pg_database'))
           return { rowCount: 0, rows: [] }
         if (sql.includes('from pg_roles'))
-          return { rowCount: 0, rows: [] }
+          return values?.[0] === 'postgres' ? { rowCount: 1, rows: [{ '?column?': 1 }] } : { rowCount: 0, rows: [] }
         return { rowCount: 1, rows: [] }
       }
 
@@ -136,6 +136,7 @@ function createMemoryD1(state: WelfareState) {
 
 function createState(): WelfareState {
   const createdAt = '2026-06-08T00:00:00.000Z'
+  const retentionExpiresAt = '2099-01-01T00:00:00.000Z'
   return {
     users: [
       {
@@ -184,7 +185,7 @@ function createState(): WelfareState {
       rejectionFraudulent: false,
       storageExtended: false,
       storageExtensionCost: 0,
-      retentionExpiresAt: createdAt,
+      retentionExpiresAt,
       standardProcessingHours: 24,
       processingDueAt: createdAt,
       contextAppendUntil: createdAt,
@@ -574,6 +575,48 @@ describe('database resource provisioning', () => {
     })
     expect(poolQueries.some(item => item.sql.includes('create database "x_2026_orders"'))).toBe(true)
     expect(poolQueries.some(item => item.sql.includes('create role "x_123_reader"'))).toBe(true)
+  })
+
+  it('does not alter existing PostgreSQL roles during automatic provisioning', async () => {
+    const state = createState()
+    const item = state.applications[0].resourceItems![0]
+    item.approvedPayload = {
+      databaseName: 'fresh_orders',
+      username: 'postgres',
+      permission: 'readonly',
+      expiresInDays: 14,
+    }
+    const d1 = createMemoryD1(state)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-database-provisioning',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-database-provisioning',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    await handleDatabaseProvisionRequest(new Request('https://welfare.example.com/api/database-provision/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        rootUrl: 'postgresql://root:secret@db.example.com:5432/postgres',
+        defaultExpiresInDays: 30,
+        databasePrefix: 'twg',
+      }),
+    }), env)
+
+    poolQueries.length = 0
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    expect(poolQueries.some(query => query.sql.includes('alter role'))).toBe(false)
+    const result = await response.json() as { status: string, error: string }
+    expect(result.status).toBe('pending_manual')
+    expect(result.error).toContain('数据库角色 postgres 已存在')
   })
 
   it('keeps successful database secrets when another resource item falls back to manual provisioning', async () => {
