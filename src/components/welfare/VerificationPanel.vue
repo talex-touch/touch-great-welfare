@@ -178,33 +178,39 @@ function verificationCardState(type: VerificationType, approved: boolean) {
   const isOpen = config.siteEnabled && toggle.enabled
 
   if (verification) {
+    const isApproved = verification.status === 'approved'
     return {
       verification,
-      statusText: verificationStatusText(verification.status),
+      actionMode: isApproved ? 'detail' : 'verification',
+      statusText: isApproved ? '认证成功' : verificationStatusText(verification.status),
       statusTone: statusTone(verification.status),
-      actionText: verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '重新认证' : verification.status === 'revoked' ? '查看原因' : verification.status === 'rejected' ? '查看回复' : '查看详情',
-      meta: verification.status === 'pending'
-        ? `${formatDate(verification.createdAt)} 提交，等待审核回复`
-        : verification.status === 'needs_supplement'
-          ? `${verification.reviewedAt ? formatDate(verification.reviewedAt) : formatDate(verification.createdAt)} 需要补充资料`
-          : verification.reviewedAt
-            ? `${formatDate(verification.reviewedAt)} 已回复`
-            : `${formatDate(verification.createdAt)} 提交`,
+      actionText: isApproved ? '查看认证详情' : verification.status === 'pending' ? '查看进度' : verification.status === 'needs_supplement' ? '重新认证' : '查看详情',
+      meta: isApproved
+        ? '认证成功'
+        : verification.status === 'pending'
+          ? `${formatDate(verification.createdAt)} 提交，等待审核回复`
+          : verification.status === 'needs_supplement'
+            ? `${verification.reviewedAt ? formatDate(verification.reviewedAt) : formatDate(verification.createdAt)} 需要补充资料`
+            : verification.reviewedAt
+              ? `${formatDate(verification.reviewedAt)} 已回复`
+              : `${formatDate(verification.createdAt)} 提交`,
       disabled: false,
     }
   }
 
+  const approvedVerification = approved ? latest : undefined
   return {
-    verification: undefined,
-    statusText: approved ? '已认证' : canResubmit ? verificationStatusText(latest.status) : isOpen ? '可申请' : '已关闭',
-    statusTone: approved ? 'success' : canResubmit ? statusTone(latest.status) : isOpen ? 'available' : 'danger',
-    actionText: isOpen ? (canResubmit ? '重新认证' : '提交材料') : '暂不开放',
+    verification: approvedVerification,
+    actionMode: approvedVerification ? 'detail' : 'create',
+    statusText: approved ? '认证成功' : canResubmit ? '认证失败' : isOpen ? '可申请' : '已关闭',
+    statusTone: approved ? 'success' : canResubmit ? 'danger' : isOpen ? 'available' : 'danger',
+    actionText: approved ? '查看认证详情' : isOpen ? (canResubmit ? '重新发起认证' : '提交材料') : '暂不开放',
     meta: approved
-      ? '认证记录已生效'
+      ? '认证成功'
       : canResubmit
-        ? `${latest.reviewedAt ? formatDate(latest.reviewedAt) : formatDate(latest.createdAt)} ${verificationStatusText(latest.status)}，可重新提交材料`
+        ? `${latest.reviewedAt ? formatDate(latest.reviewedAt) : formatDate(latest.createdAt)} 认证失败，可重新提交材料`
         : isOpen ? '尚未提交材料' : (toggle.reason || `${verificationTypeLabel(type)}暂未开放`),
-    disabled: !isOpen,
+    disabled: !isOpen && !approvedVerification,
   }
 }
 
@@ -227,6 +233,7 @@ const verificationCards = computed(() => [
     actionText: '去授权',
     meta: openSourceConfigured.value ? `已选择 ${profileForm.selectedRepo}` : githubAppConfigForm.enabled ? '等待 GitHub App 授权' : '管理员尚未启用 GitHub App',
     verification: undefined as StudentVerification | undefined,
+    actionMode: 'create',
     disabled: false,
     tags: ['GitHub App', '公开仓库'],
   },
@@ -254,7 +261,7 @@ function goCard(key: string) {
   if (card?.disabled)
     return
 
-  if (card?.verification) {
+  if (card?.verification && card.actionMode !== 'create') {
     router.push(`/dashboard/student/${card.verification.id}`)
     return
   }

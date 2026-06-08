@@ -40,21 +40,21 @@
 .verification-card--frontline {
   background:
     linear-gradient(90deg, #fff 0%, #fff 50%, rgba(255, 255, 255, 0.86) 72%, rgba(255, 255, 255, 0.2) 100%),
-    url('/illustrations/frontline-verification-dark.webp') center right / auto 100% no-repeat,
+    url('/illustrations/frontline-verification-light.webp') center right / auto 100% no-repeat,
     #fff;
 }
 
 .verification-card--openSource {
   background:
     linear-gradient(90deg, #fff 0%, #fff 50%, rgba(255, 255, 255, 0.86) 72%, rgba(255, 255, 255, 0.2) 100%),
-    url('/illustrations/open-source-verification-dark.webp') center right / auto 100% no-repeat,
+    url('/illustrations/open-source-verification-light.webp') center right / auto 100% no-repeat,
     #fff;
 }
 
 .verification-card--student {
   background:
     linear-gradient(90deg, #fff 0%, #fff 50%, rgba(255, 255, 255, 0.86) 72%, rgba(255, 255, 255, 0.2) 100%),
-    url('/illustrations/student-verification-dark.webp') center right / auto 100% no-repeat,
+    url('/illustrations/student-verification-light.webp') center right / auto 100% no-repeat,
     #fff;
 }
 
@@ -815,21 +815,21 @@
   .verification-card--frontline {
     background:
       linear-gradient(180deg, #000 0%, #000 56%, rgba(0, 0, 0, 0.62) 78%, rgba(0, 0, 0, 0.08) 100%),
-      url('/illustrations/frontline-verification-dark.webp') center bottom / cover no-repeat,
+      url('/illustrations/frontline-verification-light.webp') center bottom / cover no-repeat,
       #000;
   }
 
   .verification-card--openSource {
     background:
       linear-gradient(180deg, #000 0%, #000 56%, rgba(0, 0, 0, 0.62) 78%, rgba(0, 0, 0, 0.08) 100%),
-      url('/illustrations/open-source-verification-dark.webp') center bottom / cover no-repeat,
+      url('/illustrations/open-source-verification-light.webp') center bottom / cover no-repeat,
       #000;
   }
 
   .verification-card--student {
     background:
       linear-gradient(180deg, #000 0%, #000 56%, rgba(0, 0, 0, 0.62) 78%, rgba(0, 0, 0, 0.08) 100%),
-      url('/illustrations/student-verification-dark.webp') center bottom / cover no-repeat,
+      url('/illustrations/student-verification-light.webp') center bottom / cover no-repeat,
       #000;
   }
 
@@ -1306,4 +1306,27 @@
 .dark .verification-card__copy p,
 .dark .verification-card__footer > span {
   color: #94a3b8;
+}
+
+@media (max-width: 640px) {
+  .dark .verification-card--frontline {
+    background:
+      linear-gradient(180deg, #000 0%, #000 56%, rgba(0, 0, 0, 0.62) 78%, rgba(0, 0, 0, 0.08) 100%),
+      url('/illustrations/frontline-verification-dark.webp') center bottom / cover no-repeat,
+      #000;
+  }
+
+  .dark .verification-card--openSource {
+    background:
+      linear-gradient(180deg, #000 0%, #000 56%, rgba(0, 0, 0, 0.62) 78%, rgba(0, 0, 0, 0.08) 100%),
+      url('/illustrations/open-source-verification-dark.webp') center bottom / cover no-repeat,
+      #000;
+  }
+
+  .dark .verification-card--student {
+    background:
+      linear-gradient(180deg, #000 0%, #000 56%, rgba(0, 0, 0, 0.62) 78%, rgba(0, 0, 0, 0.08) 100%),
+      url('/illustrations/student-verification-dark.webp') center bottom / cover no-repeat,
+      #000;
+  }
 }
