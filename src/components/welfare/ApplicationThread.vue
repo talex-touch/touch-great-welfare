@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ApplicationMessage } from '~/composables/welfare'
+import type { UploadLikeFile } from '~/composables/welfare-ui'
 import { TxButton, TxCard, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref, watch } from 'vue'
 import { formatBytes, formatDate, useWelfareStore } from '~/composables/welfare'
@@ -18,17 +19,18 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  send: [type: 'comment' | 'supplement' | 'result_submission', content: string]
+  send: [type: 'comment' | 'supplement' | 'result_submission', content: string, attachments: UploadLikeFile[]]
 }>()
 
 const welfare = useWelfareStore()
 const { currentUser } = useWelfareUiState()
 
 const newMessage = ref('')
+const messageFiles = ref<UploadLikeFile[]>([])
 const sending = ref(false)
 
 const isActive = computed(() =>
-  ['pending_review', 'needs_supplement', 'processing', 'answered'].includes(props.applicationStatus))
+  ['pending_review', 'needs_supplement', 'processing', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(props.applicationStatus))
 
 const remainingFreeSupplements = computed(() =>
   Math.max(0, (props.postApprovalSupplementLimit ?? 0) - (props.postApprovalSupplementCount ?? 0)))
@@ -52,14 +54,36 @@ function isAdminUser(userId: string) {
   return welfare.state.users.find(u => u.id === userId)?.role === 'admin'
 }
 
+function handleSelectFiles(event: Event) {
+  const input = event.target instanceof HTMLInputElement ? event.target : undefined
+  const files = Array.from(input?.files ?? [])
+  messageFiles.value = [
+    ...messageFiles.value,
+    ...files.map(file => ({
+      id: `msg_file_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/octet-stream',
+      file,
+    })),
+  ]
+  if (input)
+    input.value = ''
+}
+
+function removeMessageFile(id: string) {
+  messageFiles.value = messageFiles.value.filter(file => file.id !== id)
+}
+
 function handleSend() {
   const content = newMessage.value.trim()
   if (!content || !isActive.value)
     return
 
   sending.value = true
-  emit('send', shouldSendSupplement.value ? 'supplement' : 'comment', content)
+  emit('send', shouldSendSupplement.value ? 'supplement' : 'comment', content, [...messageFiles.value])
   newMessage.value = ''
+  messageFiles.value = []
   sending.value = false
 }
 
@@ -79,9 +103,9 @@ const sortedMessages = computed(() =>
 const pipelineSteps = computed(() => {
   const status = props.applicationStatus
   return [
-    { key: 'pending_review', label: '提交审核', done: ['pending_review', 'needs_supplement', 'processing', 'answered', 'completed'].includes(status), active: status === 'pending_review' },
-    { key: 'needs_supplement', label: '补充材料', done: ['processing', 'answered', 'completed'].includes(status), active: status === 'needs_supplement' },
-    { key: 'answered', label: '通过答复', done: ['answered', 'completed'].includes(status), active: status === 'answered' },
+    { key: 'pending_review', label: '提交审核', done: ['pending_review', 'submitted', 'in_review', 'needs_supplement', 'processing', 'answered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'pending_review' || status === 'submitted' || status === 'in_review' },
+    { key: 'needs_supplement', label: '补充材料', done: ['processing', 'answered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'needs_supplement' },
+    { key: 'answered', label: '通过答复', done: ['answered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'answered' || status === 'approved' || status === 'partial_approved' },
     { key: 'completed', label: '完成归档', done: status === 'completed', active: status === 'completed' },
   ]
 })
@@ -215,14 +239,35 @@ const inputPlaceholder = computed(() => {
     <!-- Input area -->
     <div v-if="isActive" class="pt-4 border-t border-black/8 dark:border-white/10">
       <RichTextEditor v-model="newMessage" :placeholder="inputPlaceholder" :min-height="96" />
+      <div v-if="messageFiles.length" class="mt-3 flex flex-wrap gap-2">
+        <button
+          v-for="file in messageFiles"
+          :key="file.id"
+          type="button"
+          class="text-xs px-2.5 py-1.5 rounded-xl bg-slate-100 flex gap-2 items-center dark:bg-white/5"
+          @click="removeMessageFile(file.id)"
+        >
+          <span class="i-carbon-attachment shrink-0" />
+          <span class="max-w-[180px] truncate">{{ file.name }}</span>
+          <span class="opacity-60 shrink-0">{{ formatBytes(file.size) }}</span>
+          <span class="i-carbon-close shrink-0" />
+        </button>
+      </div>
       <div class="mt-3 flex gap-3 items-center justify-between">
         <span class="text-xs text-slate-400">
-          {{ shouldSendSupplement ? '将作为补充材料提交并进入审核时间线' : '支持富文本' }}
+          {{ shouldSendSupplement ? '将作为补充材料提交并进入审核时间线' : '支持富文本和附件' }}
         </span>
-        <TxButton variant="primary" size="sm" :disabled="!canPost || sending" @click="handleSend">
-          <span class="i-carbon-send" />
-          {{ shouldSendSupplement ? '提交补充' : '发送' }}
-        </TxButton>
+        <div class="flex gap-2 items-center">
+          <label class="text-xs px-3 py-1.5 rounded-xl bg-slate-100 cursor-pointer dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10">
+            <input class="hidden" type="file" multiple @change="handleSelectFiles">
+            <span class="i-carbon-attachment mr-1 align-middle" />
+            附件
+          </label>
+          <TxButton variant="primary" size="sm" :disabled="!canPost || sending" @click="handleSend">
+            <span class="i-carbon-send" />
+            {{ shouldSendSupplement ? '提交补充' : '发送' }}
+          </TxButton>
+        </div>
       </div>
     </div>
 

@@ -386,8 +386,8 @@ export async function requestApplicationSupplementAdminAction(applicationId: str
   return postDomainAction<{ ok: true }>('/api/admin/applications/request-supplement', { applicationId, content })
 }
 
-export async function addApplicationMessageAction(applicationId: string, type: ApplicationMessageType, content: string, attachments: unknown[] = []) {
-  return postDomainAction<{ ok: true }>('/api/admin/applications/messages', { applicationId, type, content, attachments })
+export async function addApplicationMessageAction(applicationId: string, type: ApplicationMessageType, content: string, attachments: unknown[] = [], admin = false) {
+  return postDomainAction<{ ok: true }>(admin ? '/api/admin/applications/messages' : '/api/applications/messages', { applicationId, type, content, attachments })
 }
 
 export async function reviewStudentVerificationAction(id: string, status: 'approved' | 'needs_supplement' | 'rejected', reply: string) {

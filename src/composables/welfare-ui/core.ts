@@ -1723,12 +1723,12 @@ export function useWelfareUiState() {
   }
 
   async function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: UploadLikeFile[] = []) {
-    await addApplicationMessageAction(applicationId, type, content, await uploadAttachmentImages(attachments))
+    await addApplicationMessageAction(applicationId, type, content, await uploadAttachmentImages(attachments), welfare.isAdmin.value)
     await welfare.reloadWelfareState()
   }
 
   async function submitApplicationResult(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
-    await addApplicationMessageAction(applicationId, 'result_submission', content, await uploadAttachmentImages(attachments))
+    await addApplicationMessageAction(applicationId, 'result_submission', content, await uploadAttachmentImages(attachments), welfare.isAdmin.value)
     await welfare.reloadWelfareState()
   }
 

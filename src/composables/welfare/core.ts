@@ -4291,8 +4291,10 @@ export function useWelfareStore() {
       throw new Error('申请不存在')
     if (application.userId !== currentUser.value.id)
       throw new Error('只能补充自己的申请材料')
-    if (!['needs_supplement', 'answered'].includes(application.status))
+    if (!['needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持补充材料')
+    if (['submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status) && application.type !== 'resource')
+      throw new Error('只有资源工单支持该阶段补充材料')
     if (application.status === 'answered') {
       if (application.type !== 'pro')
         throw new Error('只有 Pro 申请通过后支持免费补充材料')
@@ -4311,7 +4313,7 @@ export function useWelfareStore() {
 
     pushApplicationMessage(application, 'supplement', normalizedContent, attachments)
     if (application.status === 'needs_supplement')
-      application.status = 'pending_review'
+      application.status = application.type === 'resource' ? 'in_review' : 'pending_review'
   }
 
   function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: FileLike[] = []) {
@@ -4321,8 +4323,12 @@ export function useWelfareStore() {
     const application = state.applications.find(item => item.id === applicationId)
     if (!application)
       throw new Error('申请不存在')
-    if (!['pending_review', 'processing', 'needs_supplement', 'answered'].includes(application.status))
+    if (!['pending_review', 'processing', 'needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持追加消息')
+    if (application.userId !== currentUser.value.id && currentUser.value.role !== 'admin')
+      throw new Error('只能回复自己的申请工单')
+    if (type === 'result_submission' && currentUser.value.role !== 'admin')
+      throw new Error('用户不能提交管理员结果消息')
     if (type === 'supplement') {
       submitApplicationSupplement(applicationId, content, attachments)
       return

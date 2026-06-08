@@ -5,6 +5,7 @@ import { dispatchWelfareStateChangeNotifications } from '../notifications'
 import { clearSessionCookie } from '../session'
 import {
   addAdminApplicationMessageAction,
+  addCurrentUserApplicationMessageAction,
   adjustAdminUserPointsAction,
   adminApplicationsResponse,
   adminConfigResponse,
@@ -258,6 +259,8 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await reportSquareBoostAction(request, env)
       if (url.pathname === '/api/applications/supplements')
         return await submitApplicationSupplementAction(request, env)
+      if (url.pathname === '/api/applications/messages')
+        return await addCurrentUserApplicationMessageAction(request, env)
       if (url.pathname === '/api/verifications/student')
         return await submitStudentVerificationAction(request, env)
       if (url.pathname === '/api/verifications/student/supplement')

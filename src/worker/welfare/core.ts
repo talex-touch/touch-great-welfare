@@ -141,6 +141,9 @@ export class StateVersionConflictError extends Error {
 
 let pool: Pool | undefined
 let poolKey = ''
+let postgresSchemaKey = ''
+let postgresSchemaPromise: Promise<void> | undefined
+const d1SchemaPromises = new WeakMap<D1Database, Promise<void>>()
 const adminLoginAttempts = new Map<string, { failures: number, firstFailureAt: number, lockedUntil: number }>()
 
 interface EncryptedWelfareStateEnvelope {
@@ -1088,7 +1091,7 @@ export function getPool(env: WorkerEnv) {
   return pool
 }
 
-async function ensureSchema(env: WorkerEnv) {
+async function runSchemaSetup(env: WorkerEnv) {
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
       .prepare(`
@@ -1122,6 +1125,35 @@ async function ensureSchema(env: WorkerEnv) {
   `)
   await getPool(env).query('alter table welfare_app_state add column if not exists version integer not null default 1')
   await ensureSnapshotSchema(env)
+}
+
+async function ensureSchema(env: WorkerEnv) {
+  if (shouldUseD1(env)) {
+    const db = env.LOCAL_DB!
+    const current = d1SchemaPromises.get(db)
+    if (current)
+      return current
+
+    const next = runSchemaSetup(env).catch((error) => {
+      if (d1SchemaPromises.get(db) === next)
+        d1SchemaPromises.delete(db)
+      throw error
+    })
+    d1SchemaPromises.set(db, next)
+    return next
+  }
+
+  const key = `pg:${env.HYPERDRIVE?.connectionString ?? ''}`
+  if (postgresSchemaPromise && postgresSchemaKey === key)
+    return postgresSchemaPromise
+
+  postgresSchemaKey = key
+  postgresSchemaPromise = runSchemaSetup(env).catch((error) => {
+    if (postgresSchemaKey === key)
+      postgresSchemaPromise = undefined
+    throw error
+  })
+  return postgresSchemaPromise
 }
 
 async function ensureSnapshotSchema(env: WorkerEnv) {
@@ -2887,8 +2919,10 @@ export async function submitApplicationSupplementAction(request: Request, env: W
       throw new Error('申请不存在')
     if (application.userId !== user.id)
       throw new Error('只能补充自己的申请材料')
-    if (!['needs_supplement', 'answered'].includes(application.status))
+    if (!['needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持补充材料')
+    if (['submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status) && application.type !== 'resource')
+      throw new Error('只有资源工单支持该阶段补充材料')
     if (application.status === 'answered') {
       if (application.type !== 'pro')
         throw new Error('只有 Pro 申请通过后支持免费补充材料')
@@ -2908,7 +2942,7 @@ export async function submitApplicationSupplementAction(request: Request, env: W
 
     pushApplicationMessage(application, user.id, 'supplement', content, attachments)
     if (application.status === 'needs_supplement')
-      application.status = 'pending_review'
+      application.status = application.type === 'resource' ? 'in_review' : 'pending_review'
     return { applicationId: application.id }
   })
 }
@@ -3085,21 +3119,35 @@ function ensureCollaborationApplications(state: Partial<WelfareState>) {
   return state.collaborationApplications
 }
 
+function safeAttachmentUrl(value: unknown) {
+  if (typeof value !== 'string')
+    return undefined
+  const text = value.trim()
+  if (!text)
+    return undefined
+  if (text.startsWith('/api/uploads/') || text.startsWith('/uploads/'))
+    return text
+  return undefined
+}
+
 function attachmentsFromPayload(value: unknown): AttachmentMeta[] {
   if (!Array.isArray(value))
     return []
 
   return value
     .filter((item): item is Record<string, unknown> => isRecord(item))
-    .map(item => ({
-      id: typeof item.id === 'string' ? item.id : createId('att'),
-      name: typeof item.name === 'string' ? item.name : '附件',
-      size: Math.max(0, Math.trunc(Number(item.size || 0))),
-      type: typeof item.type === 'string' ? item.type : 'application/octet-stream',
-      r2Key: typeof item.r2Key === 'string' ? item.r2Key : undefined,
-      url: typeof item.url === 'string' ? item.url : undefined,
-      dataUrl: typeof item.type === 'string' && item.type.startsWith('image/') && isImageDataUrl(item.dataUrl) ? item.dataUrl : undefined,
-    }))
+    .map((item) => {
+      const type = typeof item.type === 'string' ? item.type : 'application/octet-stream'
+      return {
+        id: typeof item.id === 'string' ? item.id : createId('att'),
+        name: typeof item.name === 'string' ? item.name : '附件',
+        size: Math.max(0, Math.trunc(Number(item.size || 0))),
+        type,
+        r2Key: typeof item.r2Key === 'string' ? item.r2Key : undefined,
+        url: safeAttachmentUrl(item.url),
+        dataUrl: type.startsWith('image/') && isImageDataUrl(item.dataUrl) ? item.dataUrl : undefined,
+      }
+    })
 }
 
 function isImageDataUrl(value: unknown): value is string {
@@ -3958,17 +4006,36 @@ export async function requestAdminApplicationSupplementAction(request: Request, 
   })
 }
 
+function appendWorkerApplicationMessage(application: WelfareApplication, user: User, payload: Record<string, unknown>) {
+  const content = sanitizeWorkerRichText(payload.content)
+  if (isRichTextEmpty(content))
+    throw new Error('请输入消息内容')
+  const attachments = attachmentsFromPayload(payload.attachments)
+  if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+    throw new Error('附件总大小不能超过 200MB')
+  pushApplicationMessage(application, user.id, sanitizeMessageType(payload.type), content, attachments)
+  return { applicationId: application.id }
+}
+
+export async function addCurrentUserApplicationMessageAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const application = stateApplications(state).find(item => item.id === payload.applicationId)
+    if (!application)
+      throw new Error('申请不存在')
+    if (application.userId !== user.id)
+      throw new Error('只能回复自己的申请工单')
+    if (!['pending_review', 'processing', 'needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
+      throw new Error('该申请状态不支持追加消息')
+    if (payload.type === 'result_submission' || payload.type === 'system')
+      throw new Error('用户不能提交管理员结果消息')
+    return appendWorkerApplicationMessage(application, user, payload)
+  })
+}
+
 export async function addAdminApplicationMessageAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    const content = sanitizeWorkerRichText(payload.content)
-    if (isRichTextEmpty(content))
-      throw new Error('请输入消息内容')
-    const attachments = attachmentsFromPayload(payload.attachments)
-    if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
-      throw new Error('附件总大小不能超过 200MB')
-    pushApplicationMessage(application, admin.id, sanitizeMessageType(payload.type), content, attachments)
-    return { applicationId: application.id }
+    return appendWorkerApplicationMessage(application, admin, payload)
   })
 }
 

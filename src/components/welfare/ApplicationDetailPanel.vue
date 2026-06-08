@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import type { UploadLikeFile } from '~/composables/welfare-ui'
 import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatPoints, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
+import { formatDate, formatPoints, isGptProModel, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
+import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText, resourceTicketStatus, resourceTicketSteps } from '~/composables/welfare/resource-display'
 import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
 import ApplicationThread from './ApplicationThread.vue'
 import RichTextView from './RichTextView.vue'
@@ -83,6 +85,8 @@ const prepaidStateText = computed(() => {
 })
 
 const prepaidStateTone = computed(() => application.value?.costCharged ? 'warning' : 'info')
+const resourceTicket = computed(() => application.value?.type === 'resource' ? resourceTicketStatus(application.value) : undefined)
+const resourceSteps = computed(() => application.value?.type === 'resource' ? resourceTicketSteps(application.value) : [])
 
 function backToList() {
   if (props.drawer) {
@@ -102,12 +106,12 @@ function editDraft() {
   router.push(`/dashboard/apply/create?draft=${encodeURIComponent(application.value.id)}`)
 }
 
-function handleSendMessage(type: 'comment' | 'supplement' | 'result_submission', content: string) {
+function handleSendMessage(type: 'comment' | 'supplement' | 'result_submission', content: string, attachments: UploadLikeFile[] = []) {
   if (!application.value)
     return
 
   runSafely(async () => {
-    await addApplicationMessage(applicationId.value, type, content)
+    await addApplicationMessage(applicationId.value, type, content, attachments)
   }, type === 'result_submission' ? '结果已提交' : '消息已发送')
 }
 
@@ -250,10 +254,36 @@ function handleComplete() {
 
         <!-- Resource details -->
         <div v-if="application.type === 'resource'" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-          <h3 class="text-xl fw-900">
-            资源明细与逐项审批
-          </h3>
-          <div class="mt-4 gap-4 grid md:grid-cols-2">
+          <div class="flex flex-wrap gap-3 items-start justify-between">
+            <div>
+              <h3 class="text-xl fw-900">
+                我的资源审核工单
+              </h3>
+              <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+                展示项目、资源、材料、队列、处理和结果发放进度。
+              </p>
+            </div>
+            <TxStatusBadge v-if="resourceTicket" :text="resourceTicket.label" :status="resourceTicket.tone" />
+          </div>
+
+          <div class="mt-4 gap-2 grid md:grid-cols-4">
+            <div
+              v-for="step in resourceSteps"
+              :key="step.key"
+              class="text-sm px-3 py-2 border rounded-2xl flex gap-2 items-center" :class="[
+                step.active
+                  ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/20 dark:text-amber-100'
+                  : step.done
+                    ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900 dark:border-emerald-400/20 dark:bg-emerald-950/10 dark:text-emerald-100'
+                    : 'border-black/8 bg-slate-50 text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-slate-400',
+              ]"
+            >
+              <span :class="step.done ? 'i-carbon-checkmark-outline' : step.active ? 'i-carbon-time' : 'i-carbon-circle-dash'" />
+              <span class="fw-800">{{ step.label }}</span>
+            </div>
+          </div>
+
+          <div class="mt-4 gap-4 grid md:grid-cols-2 xl:grid-cols-4">
             <div class="application-detail-stat">
               <span>项目/系统</span>
               <b>{{ application.projectId || '-' }}</b>
@@ -284,12 +314,25 @@ function handleComplete() {
                 </div>
                 <div class="flex flex-wrap gap-2">
                   <TxStatusBadge :text="resourceApprovalStatusText(item.approvalStatus)" :status="item.approvalStatus === 'rejected' ? 'danger' : item.approvalStatus === 'pending' ? 'warning' : 'success'" size="sm" />
-                  <TxStatusBadge :text="provisionStatusText(item.provisionStatus)" :status="item.provisionStatus === 'completed' ? 'success' : item.provisionStatus === 'pending' ? 'warning' : 'info'" size="sm" />
+                  <TxStatusBadge :text="resourceProvisionStatusText(item.provisionStatus)" :status="item.provisionStatus === 'completed' ? 'success' : item.provisionStatus === 'pending' ? 'warning' : 'info'" size="sm" />
                 </div>
               </div>
-              <pre class="text-xs mt-3 p-3 rounded-xl bg-white overflow-auto dark:bg-black/20">{{ JSON.stringify(item.payload, null, 2) }}</pre>
-              <div v-if="item.approvedPayload" class="text-xs text-emerald-900 mt-2 p-3 rounded-xl bg-emerald-50 dark:text-emerald-100 dark:bg-emerald-950/30">
-                批准内容：{{ JSON.stringify(item.approvedPayload) }}
+              <div class="mt-3 gap-2 grid md:grid-cols-2 xl:grid-cols-3">
+                <div v-for="field in resourceItemSummaryFields(item)" :key="`${item.id}-${field.label}`" class="application-detail-stat">
+                  <span>{{ field.label }}</span>
+                  <b>{{ field.value }}</b>
+                </div>
+              </div>
+              <div v-if="resourceItemApprovedFields(item).length" class="mt-3 p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30">
+                <div class="text-xs text-emerald-900 fw-900 dark:text-emerald-100">
+                  批准内容
+                </div>
+                <div class="mt-2 gap-2 grid md:grid-cols-2">
+                  <div v-for="field in resourceItemApprovedFields(item)" :key="`${item.id}-approved-${field.label}`" class="application-detail-stat">
+                    <span>{{ field.label }}</span>
+                    <b>{{ field.value }}</b>
+                  </div>
+                </div>
               </div>
               <div v-if="item.rejectReason" class="text-xs text-red-900 mt-2 p-3 rounded-xl bg-red-50 dark:text-red-100 dark:bg-red-950/30">
                 驳回原因：{{ item.rejectReason }}
@@ -297,6 +340,12 @@ function handleComplete() {
               <div v-if="item.provisionNote" class="text-xs text-slate-500 mt-2 dark:text-slate-400">
                 开通备注：{{ item.provisionNote }} · {{ formatDate(item.provisionCompletedAt) }}
               </div>
+              <details v-if="isAdmin" class="text-xs text-slate-500 mt-3 dark:text-slate-400">
+                <summary class="fw-800 cursor-pointer">
+                  管理员调试原始数据
+                </summary>
+                <pre class="mt-2 p-3 rounded-xl bg-white overflow-auto dark:bg-black/20">{{ JSON.stringify({ payload: item.payload, approvedPayload: item.approvedPayload }, null, 2) }}</pre>
+              </details>
             </div>
           </div>
           <div v-if="application.termsAcceptances?.length" class="text-xs text-slate-500 mt-4 dark:text-slate-400">

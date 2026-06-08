@@ -3,8 +3,9 @@ import { TxButton, TxCard, TxCheckbox, TxFlipOverlay, TxSelect, TxSelectItem, Tx
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { educationEmailAdminRecommendationLabel, educationEmailReasonText, educationEmailUserLabel, educationEmailVerificationLabel, formatDate, formatPoints, formatRetentionExpiry, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailAdminRecommendationLabel, educationEmailReasonText, educationEmailUserLabel, educationEmailVerificationLabel, formatDate, formatPoints, formatRetentionExpiry, isGptProModel, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
+import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText, resourceTicketStatus } from '~/composables/welfare/resource-display'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
 import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
@@ -310,8 +311,14 @@ onMounted(() => {
               协作建议不展示申请正文、邮箱、附件清单和学生材料；请基于标题、AI 初审摘要、等级和公开标签给出建议。
             </div>
             <div v-if="isAdmin && item.type === 'resource'" class="mt-4 space-y-3">
-              <div class="text-sm fw-900">
-                资源明细逐项审批
+              <div class="flex flex-wrap gap-3 items-center justify-between">
+                <div class="text-sm fw-900">
+                  资源审核工单
+                </div>
+                <TxTag :label="resourceTicketStatus(item).label" :color="resourceTicketStatus(item).tone === 'danger' ? '#be123c' : resourceTicketStatus(item).tone === 'success' ? '#047857' : resourceTicketStatus(item).tone === 'warning' ? '#b45309' : '#0369a1'" background="rgba(100,116,139,.14)" />
+              </div>
+              <div class="text-xs text-slate-500 leading-5 p-3 rounded-2xl bg-slate-50 dark:text-slate-400 dark:bg-white/5">
+                项目：{{ item.projectId || '未填写' }} · 成本归属：{{ item.costCenter || '未填写' }} · 期望生效：{{ item.expectedEffectiveAt || '-' }}
               </div>
               <div v-for="resourceItem in item.resourceItems ?? []" :key="resourceItem.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
                 <div class="flex flex-wrap gap-3 items-start justify-between">
@@ -325,7 +332,12 @@ onMounted(() => {
                   </div>
                   <TxTag :label="resourceApprovalStatusText(resourceItem.approvalStatus)" :color="resourceItem.approvalStatus === 'rejected' ? '#be123c' : resourceItem.approvalStatus === 'pending' ? '#b45309' : '#047857'" background="rgba(100,116,139,.14)" />
                 </div>
-                <pre class="text-xs mt-3 p-3 rounded-xl bg-white overflow-auto dark:bg-black/20">{{ JSON.stringify(resourceItem.payload, null, 2) }}</pre>
+                <div class="mt-3 gap-2 grid md:grid-cols-2 xl:grid-cols-3">
+                  <div v-for="field in resourceItemSummaryFields(resourceItem)" :key="`${resourceItem.id}-${field.label}`" class="application-detail-stat">
+                    <span>{{ field.label }}</span>
+                    <b>{{ field.value }}</b>
+                  </div>
+                </div>
 
                 <div v-if="resourceItem.approvalStatus === 'pending'" class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
                   <label class="gap-2 grid">
@@ -353,12 +365,18 @@ onMounted(() => {
 
                 <div v-else-if="['approved', 'adjusted_approved'].includes(resourceItem.approvalStatus)" class="mt-3 p-3 rounded-2xl bg-white dark:bg-black/20">
                   <div class="text-xs fw-900">
-                    人工开通：{{ provisionStatusText(resourceItem.provisionStatus) }}
+                    发放状态：{{ resourceProvisionStatusText(resourceItem.provisionStatus) }}
+                  </div>
+                  <div v-if="resourceItemApprovedFields(resourceItem).length" class="mt-2 gap-2 grid md:grid-cols-2">
+                    <div v-for="field in resourceItemApprovedFields(resourceItem)" :key="`${resourceItem.id}-approved-${field.label}`" class="application-detail-stat">
+                      <span>{{ field.label }}</span>
+                      <b>{{ field.value }}</b>
+                    </div>
                   </div>
                   <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-2 grid md:grid-cols-[1fr_auto]">
                     <RichTextEditor v-model="resourceProvisionDrafts[resourceItem.id]" :min-height="100" placeholder="记录开通结果、账号、备注或交付方式" />
                     <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
-                      标记已开通
+                      提交结果
                     </TxButton>
                   </div>
                   <div v-else class="text-xs text-slate-500 mt-2 dark:text-slate-400">
@@ -369,6 +387,12 @@ onMounted(() => {
                 <div v-if="resourceItem.rejectReason" class="text-xs text-red-700 mt-2 dark:text-red-200">
                   驳回原因：{{ resourceItem.rejectReason }}
                 </div>
+                <details class="text-xs text-slate-500 mt-3 dark:text-slate-400">
+                  <summary class="fw-800 cursor-pointer">
+                    调试原始数据
+                  </summary>
+                  <pre class="mt-2 p-3 rounded-xl bg-white overflow-auto dark:bg-black/20">{{ JSON.stringify({ payload: resourceItem.payload, approvedPayload: resourceItem.approvedPayload }, null, 2) }}</pre>
+                </details>
               </div>
             </div>
             <div v-if="item.githubRepo" class="text-sm mt-3 flex flex-wrap gap-2 items-center">
