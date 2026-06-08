@@ -14,6 +14,7 @@ const {
   normalizeVerificationType,
   RESOURCE_DEFAULT_DURATION,
   rollDailyCheckInPoints,
+  STUDENT_REVIEW_FEE,
   solveApplicationPow,
   verificationTypeLabel,
   useWelfareStore,
@@ -321,7 +322,7 @@ describe('application policy', () => {
 
     expect(store.state.studentVerifications[0].verificationType).toBe('student')
     expect(store.state.transactions[0].reason).toBe('学生认证审核费')
-    expect(store.state.users[0].points).toBe(beforePoints - 800)
+    expect(store.state.users[0].points).toBe(beforePoints - STUDENT_REVIEW_FEE)
   })
 
   it('keeps frontline approval from marking student verification', () => {
@@ -562,7 +563,7 @@ describe('application policy', () => {
       transactions: [{
         id: 'tx_recharge_spent',
         userId: 'user_1',
-        delta: -800,
+        delta: -STUDENT_REVIEW_FEE,
         type: 'spend',
         reason: '学生认证审核费',
         refId: 'stu_previous',
@@ -583,7 +584,7 @@ describe('application policy', () => {
       }),
     )
 
-    store.state.users[0].points = 800
+    store.state.users[0].points = STUDENT_REVIEW_FEE
 
     await expect(ui.submitStudentVerification({
       realName: '公益同学',

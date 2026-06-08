@@ -1,0 +1,287 @@
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: #f8f7f3;
+}
+
+html.dark {
+  color-scheme: dark;
+  background: #08090b;
+}
+
+body {
+  min-height: 100vh;
+  font-family:
+    Inter,
+    'DM Sans',
+    'PingFang SC',
+    'Microsoft YaHei',
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  color: #071013;
+  background: rgba(52, 211, 153, 0.38);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.solid-panel {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: #fffdf8;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+}
+
+.dark .solid-panel {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #101216;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
+}
+
+.dashboard-content .solid-panel,
+.dark .dashboard-content .solid-panel,
+.dashboard-content .tx-card[class*='is-shadow-'],
+.dark .dashboard-content .tx-card[class*='is-shadow-'] {
+  box-shadow: none;
+}
+
+.app-shell {
+  background:
+    radial-gradient(circle at 12% 10%, rgba(52, 211, 153, 0.08), transparent 28rem),
+    radial-gradient(circle at 88% 0%, rgba(14, 165, 233, 0.07), transparent 26rem),
+    linear-gradient(180deg, #f8f7f3 0%, #f3f1ea 100%);
+}
+
+.app-shell--login {
+  overflow: hidden;
+  background: linear-gradient(180deg, #fffefa 0%, #fbf7ee 100%);
+}
+
+.app-shell--login::before {
+  content: '';
+  position: absolute;
+  right: max(-6rem, -5vw);
+  bottom: 0;
+  z-index: 0;
+  width: clamp(58rem, 102vw, 150rem);
+  aspect-ratio: 2400 / 800;
+  background: url('/illustrations/login-bottom-ornament.png') right bottom / contain no-repeat;
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.app-main {
+  flex: 1;
+}
+
+.app-shell--dashboard {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+.app-main--dashboard {
+  --cms-header-height: 72px;
+  --cms-sidebar-width: 248px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: calc(100vh - var(--cms-header-height));
+  height: calc(100dvh - var(--cms-header-height));
+  overflow: hidden;
+}
+
+.app-main--dashboard .app-main__body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell--with-banner .app-main--dashboard {
+  --cms-header-height: 116px;
+}
+
+.dashboard-layout {
+  width: 100%;
+  min-height: 0;
+}
+
+.dashboard-layout--with-sidebar {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.dashboard-layout--standalone {
+  padding: 0.75rem 1rem 0;
+}
+
+.dashboard-layout--with-sidebar .dashboard-content {
+  --dashboard-content-y-space: 2.5rem;
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 1rem;
+  align-self: stretch;
+  justify-self: stretch;
+  flex-direction: column;
+}
+
+.dashboard-content__blur {
+  pointer-events: none;
+}
+
+.dashboard-content__inner {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.dashboard-content__inner > * {
+  margin: var(--dashboard-content-y-space) 0;
+}
+
+.dashboard-content__footer {
+  margin-top: 0;
+}
+
+.dashboard-layout--apply-create,
+.dashboard-layout--apply-create .dashboard-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dashboard-layout--apply-create .dashboard-content,
+.dashboard-layout--apply-create .dashboard-content__inner {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-layout--apply-create .dashboard-content__inner {
+  overflow: hidden auto;
+  padding-bottom: 4rem;
+}
+
+@media (min-width: 1024px) {
+  .dashboard-layout--with-sidebar {
+    grid-template-columns: var(--cms-sidebar-width) minmax(0, 1fr);
+  }
+
+  .dashboard-layout--with-sidebar .dashboard-content {
+    width: 100%;
+    padding: 0 1rem;
+  }
+
+  .dashboard-layout--standalone {
+    padding: 1rem 1.25rem 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .app-main--dashboard {
+    --cms-header-height: 64px;
+  }
+
+  .app-shell--with-banner .app-main--dashboard {
+    --cms-header-height: 108px;
+  }
+}
+
+.dark .app-shell {
+  background:
+    radial-gradient(circle at 12% 10%, rgba(52, 211, 153, 0.08), transparent 28rem),
+    radial-gradient(circle at 88% 0%, rgba(14, 165, 233, 0.08), transparent 26rem),
+    linear-gradient(180deg, #08090b 0%, #0c0d10 100%);
+}
+
+.dark .app-shell--login {
+  background: linear-gradient(180deg, #0b0c0f 0%, #11100c 100%);
+}
+
+.dark .app-shell--login::before {
+  opacity: 0.2;
+}
+
+.tx-input,
+.tx-textarea,
+.tx-file-uploader {
+  width: 100%;
+}
+
+.tx-file-uploader {
+  border-radius: 20px;
+}
+
+.form-select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 2.75rem 0 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 16px;
+  outline: none;
+  color: #1f2937;
+  background:
+    linear-gradient(45deg, transparent 50%, #334155 50%) calc(100% - 1.2rem) 50% / 0.45rem 0.45rem no-repeat,
+    linear-gradient(135deg, #334155 50%, transparent 50%) calc(100% - 0.9rem) 50% / 0.45rem 0.45rem no-repeat,
+    #fff;
+  appearance: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.form-textarea {
+  width: 100%;
+  min-height: 88px;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 16px;
+  outline: none;
+  color: #1f2937;
+  background: #fff;
+  resize: vertical;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.form-select:focus {
+  border-color: #409eff;
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.18);
+}
+
+.school-combobox {
+  position: relative;
+}

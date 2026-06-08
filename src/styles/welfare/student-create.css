@@ -1,0 +1,589 @@
+.student-create-page {
+  min-height: calc(100vh - 5rem);
+  padding: clamp(1rem, 2.8vw, 2.5rem);
+}
+
+.student-create-shell {
+  width: min(100%, 1480px);
+  margin: 0 auto;
+}
+
+.student-create-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: clamp(1.25rem, 2.4vw, 2rem);
+}
+
+.student-create-subtitle {
+  max-width: 56rem;
+  margin-top: 0.55rem;
+  color: #64748b;
+  font-size: 0.95rem;
+  line-height: 1.8;
+}
+
+.student-create-state {
+  padding: 3rem;
+  border: 1px dashed rgba(148, 163, 184, 0.5);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #475569;
+  text-align: center;
+}
+
+.student-create-state--warning {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(255, 251, 235, 0.78);
+  color: #92400e;
+}
+
+.student-create-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: clamp(1.25rem, 3vw, 2rem);
+  align-items: start;
+}
+
+.student-create-main,
+.student-create-aside {
+  min-width: 0;
+}
+
+.student-create-aside {
+  position: sticky;
+  top: 5.5rem;
+  display: grid;
+  gap: 1.2rem;
+}
+
+.student-create-form-panel,
+.student-create-side-section {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 32px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.07);
+}
+
+.student-create-form-panel {
+  padding: clamp(1.35rem, 3vw, 2.35rem);
+}
+
+.student-create-notice-panel {
+  display: grid;
+  gap: 1.35rem;
+}
+
+.student-create-side-section {
+  padding: clamp(1.15rem, 2.3vw, 1.65rem);
+}
+
+.student-create-side-section h3 {
+  margin: 0 0 1.1rem;
+  color: #0f172a;
+  font-size: 1.15rem;
+  font-weight: 950;
+}
+
+.student-create-side-section--warning {
+  border-color: rgba(245, 158, 11, 0.32);
+  background: rgba(255, 251, 235, 0.82);
+}
+
+.student-create-form-head {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.student-create-form-head span,
+.student-create-section-heading span {
+  color: #0f766e;
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.student-create-form-head h3,
+.student-create-section-heading h3 {
+  margin: 0.35rem 0 0;
+  color: #0f172a;
+  font-size: clamp(1.25rem, 2.4vw, 1.85rem);
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.student-create-section-heading p {
+  margin: 0.65rem 0 0;
+  color: #64748b;
+  line-height: 1.8;
+}
+
+.student-create-draft-badge {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.1);
+  color: #047857;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.student-create-form-section {
+  display: grid;
+  gap: 1rem;
+  padding-top: 1.5rem;
+  margin-top: 1.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.student-create-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.1rem 1.25rem;
+}
+
+.student-create-heading-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.student-create-help {
+  position: relative;
+  display: inline-grid;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 999px;
+  background: rgba(240, 253, 250, 0.84);
+  color: #0f766e;
+  cursor: help;
+}
+
+.student-create-help-popover {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 0.65rem);
+  right: 0;
+  width: min(320px, 80vw);
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12);
+  color: #475569;
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.75;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-0.25rem);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.student-create-help:hover .student-create-help-popover,
+.student-create-help:focus-visible .student-create-help-popover {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.student-create-email-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.9rem;
+  align-items: end;
+}
+
+.student-create-email-actions {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  padding-bottom: 0.05rem;
+}
+
+.student-create-email-status {
+  margin: 0;
+  color: #047857;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.75;
+}
+
+.student-create-submit-bar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 1.25rem;
+  margin-top: 1.25rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.student-create-submit-note {
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.student-create-submit-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.student-create-flow {
+  display: grid;
+  gap: 0;
+}
+
+.student-create-flow-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: start;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  font: inherit;
+  text-align: left;
+}
+
+.student-create-flow-step.is-clickable {
+  cursor: pointer;
+}
+
+.student-create-flow-step:not(:last-child) {
+  padding-bottom: 1.35rem;
+}
+
+.student-create-flow-step:not(:last-child)::after {
+  position: absolute;
+  top: 3rem;
+  bottom: 0.25rem;
+  left: 1.5rem;
+  width: 2px;
+  border-radius: 999px;
+  background: rgba(203, 213, 225, 0.8);
+  content: '';
+}
+
+.student-create-flow-step.is-done:not(:last-child)::after,
+.student-create-flow-step.is-current:not(:last-child)::after {
+  background: linear-gradient(180deg, #10b981, rgba(16, 185, 129, 0.18));
+}
+
+.student-create-flow-index {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-weight: 950;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.student-create-flow-step.is-done .student-create-flow-index,
+.student-create-flow-step.is-current .student-create-flow-index {
+  background: #059669;
+  color: #fff;
+  box-shadow: 0 14px 28px rgba(5, 150, 105, 0.22);
+}
+
+.student-create-flow-copy {
+  display: grid;
+  gap: 0.28rem;
+  padding-top: 0.35rem;
+}
+
+.student-create-flow-copy b {
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 950;
+  transition: color 0.18s ease;
+}
+
+.student-create-flow-copy small {
+  color: #64748b;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.student-create-flow-step.is-clickable:hover .student-create-flow-index,
+.student-create-flow-step.is-clickable:focus-visible .student-create-flow-index {
+  transform: scale(1.04);
+}
+
+.student-create-flow-step.is-clickable:hover .student-create-flow-copy b,
+.student-create-flow-step.is-clickable:focus-visible .student-create-flow-copy b {
+  color: #059669;
+}
+
+.student-create-flow-step:focus-visible {
+  border-radius: 16px;
+  outline: 2px solid rgba(16, 185, 129, 0.35);
+  outline-offset: 0.35rem;
+}
+
+.student-create-flow-step:disabled {
+  pointer-events: none;
+}
+
+.student-letter-overlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(1rem, 3vw, 2.5rem);
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(12px);
+}
+
+.student-letter-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(760px, 100%);
+  max-height: min(820px, calc(100vh - 2rem));
+  overflow: hidden;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 30px;
+  background: linear-gradient(180deg, #fffaf0, #ffffff 42%);
+  box-shadow: 0 30px 90px rgba(15, 23, 42, 0.28);
+}
+
+.student-letter-header {
+  padding: clamp(1.25rem, 3vw, 2rem) clamp(1.25rem, 3vw, 2.25rem) 1rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.76);
+}
+
+.student-letter-header span {
+  color: #0f766e;
+  font-size: 0.82rem;
+  font-weight: 950;
+}
+
+.student-letter-header h3 {
+  margin: 0.4rem 0 0;
+  color: #0f172a;
+  font-size: clamp(1.35rem, 3vw, 2rem);
+  font-weight: 950;
+}
+
+.student-letter-header p {
+  margin: 0.65rem 0 0;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.student-letter-body {
+  overflow-y: auto;
+  padding: 1.4rem clamp(1.25rem, 3vw, 2.25rem);
+  color: #334155;
+  font-size: 1rem;
+  line-height: 1.95;
+}
+
+.student-letter-body p {
+  margin: 0 0 1.05rem;
+}
+
+.student-letter-body strong {
+  color: #0f766e;
+  font-weight: 950;
+}
+
+.student-letter-signature {
+  color: #0f172a;
+  font-weight: 900;
+  text-align: right;
+}
+
+.student-letter-footer {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem clamp(1.25rem, 3vw, 2.25rem);
+  border-top: 1px solid rgba(226, 232, 240, 0.76);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.student-letter-footer span {
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.dark .student-create-subtitle,
+.dark .student-create-section-heading p,
+.dark .student-create-submit-note,
+.dark .student-create-flow-copy small {
+  color: #94a3b8;
+}
+
+.dark .student-create-state,
+.dark .student-create-form-panel,
+.dark .student-create-side-section {
+  border-color: rgba(148, 163, 184, 0.15);
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+}
+
+.dark .student-create-state--warning,
+.dark .student-create-side-section--warning {
+  border-color: rgba(251, 191, 36, 0.28);
+  background: rgba(120, 53, 15, 0.26);
+  color: #fde68a;
+}
+
+.dark .student-create-side-section h3,
+.dark .student-create-form-head h3,
+.dark .student-create-section-heading h3,
+.dark .student-create-flow-copy b {
+  color: #f8fafc;
+}
+
+.dark .student-create-form-head,
+.dark .student-create-form-section,
+.dark .student-create-submit-bar {
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
+.dark .student-create-draft-badge {
+  background: rgba(16, 185, 129, 0.16);
+  color: #a7f3d0;
+}
+
+.dark .student-create-help {
+  border-color: rgba(167, 243, 208, 0.18);
+  background: rgba(6, 78, 59, 0.3);
+  color: #a7f3d0;
+}
+
+.dark .student-create-help-popover {
+  border-color: rgba(167, 243, 208, 0.16);
+  background: rgba(15, 23, 42, 0.96);
+  color: #cbd5e1;
+}
+
+.dark .student-create-email-status {
+  color: #a7f3d0;
+}
+
+.dark .student-create-flow-index {
+  background: rgba(51, 65, 85, 0.9);
+  color: #cbd5e1;
+}
+
+@media (max-width: 1180px) {
+  .student-create-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .student-create-aside {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .student-create-page {
+    padding: 1rem 0.7rem;
+  }
+
+  .student-create-hero,
+  .student-create-form-head,
+  .student-create-submit-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .student-create-field-grid,
+  .student-create-email-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .student-create-submit-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/*
+ * 14px 正文字体统一：所有业务页面的说明、表单、表格、标签和
+ * Tuffex 基础组件文案都以 14px 作为正文基准；大标题/数字展示保持原有层级。
+ */
+#app :is(.text-xs, .text-sm, .text-base),
+#app
+  :is(
+    .field-label,
+    .field-hint,
+    .school-suggestion-meta,
+    .markdown-editor-heading,
+    .student-markdown-preview,
+    .rich-editor-surface,
+    .rich-text-view,
+    .rich-text-preview,
+    .data-notice-title,
+    .data-notice-copy,
+    .consent-check,
+    .option-check small,
+    .admin-table-head,
+    .admin-pill,
+    .admin-empty
+  ),
+#app
+  :is(
+    .tx-alert,
+    .tx-badge,
+    .tx-button,
+    .tx-checkbox__label,
+    .tx-file-uploader__button,
+    .tx-file-uploader__drop-hint,
+    .tx-file-uploader__drop-title,
+    .tx-file-uploader__name,
+    .tx-file-uploader__size,
+    .tx-form-item__error,
+    .tx-form-item__label,
+    .tx-input__inner,
+    .tx-pagination__info,
+    .tx-radio,
+    .tx-status-badge,
+    .tx-tab-item__name,
+    .tx-tabs__group-name,
+    .tx-tag,
+    .tx-tag-input__input,
+    .tx-textarea__count,
+    .tx-textarea__field
+  ) {
+  font-size: 14px;
+}
+
+.student-create-fee-highlight {
+  color: #dc2626;
+  font-weight: 950;
+}
+
+.dark .student-create-fee-highlight {
+  color: #f87171;
+}

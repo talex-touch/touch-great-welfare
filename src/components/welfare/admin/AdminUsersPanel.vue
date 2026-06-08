@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import AdminPanelCore from './admin/AdminPanelCore.vue'
+import AdminPanelCore from './AdminPanelCore.vue'
 </script>
 
 <template>

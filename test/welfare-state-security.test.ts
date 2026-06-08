@@ -297,6 +297,31 @@ describe('welfare state security', () => {
     await expect(response.json()).resolves.toMatchObject({ ok: true, userId: 'admin_1', state: { currentUserId: 'admin_1' } })
   })
 
+  it('allows admin password login through explicit session endpoint', async () => {
+    const admin = user({
+      id: 'admin_1',
+      role: 'admin',
+      profile: {
+        displayName: '管理员',
+        email: 'admin@welfare.dev',
+        studentVerified: false,
+      },
+      passwordHash: await passwordHash('admin-password'),
+    })
+    const d1 = createMemoryD1({ ...state(), users: [admin] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/session/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@welfare.dev', password: 'admin-password' }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('set-cookie')).toContain('tg_welfare_session=')
+    await expect(response.json()).resolves.toMatchObject({ ok: true, userId: 'admin_1', state: { currentUserId: 'admin_1' } })
+  })
+
   it('keeps anonymous bootstrap reads off the point ledger', async () => {
     const users = Array.from({ length: 100 }, (_, index) => user({ id: `user_${index}`, points: 1000 + index }))
     const d1 = createMemoryD1({ ...state(), users })
@@ -608,7 +633,10 @@ describe('welfare state security', () => {
   })
 
   it('submits applications through command API and ignores forged client fields', async () => {
-    const d1 = createMemoryD1(state())
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ points: 2000 })],
+    })
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
 

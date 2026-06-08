@@ -54,6 +54,7 @@ export default {
       return handleApplicationSubmitRequest(request, env)
     if (url.pathname === '/api/bootstrap'
       || url.pathname === '/api/session'
+      || url.pathname.startsWith('/api/session/')
       || url.pathname === '/api/me'
       || url.pathname === '/api/welfare-state'
       || url.pathname.startsWith('/api/welfare-state/')

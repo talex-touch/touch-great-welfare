@@ -11,7 +11,15 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AdminApplicationsPanel: typeof import('./src/components/welfare/admin/AdminApplicationsPanel.vue')['default']
+    AdminConfigPanel: typeof import('./src/components/welfare/admin/AdminConfigPanel.vue')['default']
+    AdminCouponsPanel: typeof import('./src/components/welfare/admin/AdminCouponsPanel.vue')['default']
+    AdminDashboardPanel: typeof import('./src/components/welfare/admin/AdminDashboardPanel.vue')['default']
+    AdminExternalServicesPanel: typeof import('./src/components/welfare/admin/AdminExternalServicesPanel.vue')['default']
     AdminPanel: typeof import('./src/components/welfare/AdminPanel.vue')['default']
+    AdminPanelCore: typeof import('./src/components/welfare/admin/AdminPanelCore.vue')['default']
+    AdminUsersPanel: typeof import('./src/components/welfare/admin/AdminUsersPanel.vue')['default']
+    AdminVerificationsPanel: typeof import('./src/components/welfare/admin/AdminVerificationsPanel.vue')['default']
     ApplicationCreatePanel: typeof import('./src/components/welfare/ApplicationCreatePanel.vue')['default']
     ApplicationDetailPanel: typeof import('./src/components/welfare/ApplicationDetailPanel.vue')['default']
     ApplicationPanel: typeof import('./src/components/welfare/ApplicationPanel.vue')['default']
