@@ -24,16 +24,33 @@ const {
 
 const router = useRouter()
 const { notify } = useWelfareFeedback()
-const supplementVerification = computed(() => currentStudentVerifications.value.find(item => item.status === 'needs_supplement'))
+const studentVerifications = computed(() => currentStudentVerifications.value.filter(item => (item.verificationType ?? 'student') === 'student'))
+const latestStudentVerification = computed(() => studentVerifications.value[0])
+const activeStudentVerification = computed(() => studentVerifications.value.find(item => ['pending', 'needs_supplement', 'approved'].includes(item.status)))
+const supplementVerification = computed(() => studentVerifications.value.find(item => item.status === 'needs_supplement'))
+const canCreateStudentVerification = computed(() => !!currentUser.value && !activeStudentVerification.value && !currentUser.value.profile.studentVerified)
+const createStudentVerificationText = computed(() => latestStudentVerification.value && ['rejected', 'revoked'].includes(latestStudentVerification.value.status) ? '重新认证' : '选择认证')
 const headerStatusText = computed(() => {
-  if (supplementVerification.value)
+  const verification = activeStudentVerification.value ?? latestStudentVerification.value
+  if (verification?.status === 'pending')
+    return '处理中'
+  if (verification?.status === 'needs_supplement')
     return '待补充资料'
-  return currentUser.value?.profile.studentVerified ? '学生已认证' : '待认证'
+  if (verification?.status === 'approved' || currentUser.value?.profile.studentVerified)
+    return '学生已认证'
+  if (verification?.status === 'rejected' || verification?.status === 'revoked')
+    return '认证失败'
+  return '待认证'
 })
 const headerStatusTone = computed(() => {
-  if (supplementVerification.value)
+  const verification = activeStudentVerification.value ?? latestStudentVerification.value
+  if (verification?.status === 'pending' || verification?.status === 'needs_supplement')
     return 'warning'
-  return currentUser.value?.profile.studentVerified ? 'success' : 'warning'
+  if (verification?.status === 'approved' || currentUser.value?.profile.studentVerified)
+    return 'success'
+  if (verification?.status === 'rejected' || verification?.status === 'revoked')
+    return 'danger'
+  return 'warning'
 })
 
 function goCreateStudentVerification() {
@@ -78,9 +95,12 @@ onMounted(() => {
         </div>
         <div class="flex flex-wrap gap-3 items-center">
           <TxStatusBadge :text="headerStatusText" :status="headerStatusTone" />
-          <TxButton v-if="!supplementVerification" variant="primary" :disabled="!currentUser" @click="goCreateStudentVerification">
+          <TxButton v-if="supplementVerification" variant="primary" @click="goSupplementStudentVerification(supplementVerification)">
+            补充资料
+          </TxButton>
+          <TxButton v-else-if="canCreateStudentVerification" variant="primary" @click="goCreateStudentVerification">
             <span class="i-carbon-add" />
-            选择认证
+            {{ createStudentVerificationText }}
           </TxButton>
         </div>
       </div>
