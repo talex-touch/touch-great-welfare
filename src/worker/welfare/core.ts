@@ -113,6 +113,7 @@ const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000
 const PASSWORD_PBKDF2_ITERATIONS = 210000
 const POSTGRES_TIMEOUT_MS = 10000
+const POSTGRES_SNAPSHOT_BATCH_SIZE = 200
 
 type PointBalanceSyncMode = false | 'current-user' | 'all'
 
@@ -1326,6 +1327,115 @@ function couponSnapshotDiscountRate(coupon: UserCoupon) {
   return Number.isFinite(rate) ? rate : 1
 }
 
+function applicationSnapshotValues(application: WelfareApplication) {
+  return [
+    application.id,
+    application.userId,
+    application.type,
+    application.status,
+    application.title || '未命名申请',
+    JSON.stringify(application),
+    application.createdAt || now(),
+    applicationSnapshotUpdatedAt(application),
+  ]
+}
+
+function couponSnapshotValues(coupon: UserCoupon) {
+  return [
+    coupon.id,
+    coupon.userId,
+    coupon.name || '未命名优惠券',
+    coupon.scope ?? null,
+    coupon.discountType ?? 'rate',
+    couponSnapshotDiscountRate(coupon),
+    coupon.discountAmount ?? null,
+    JSON.stringify(coupon),
+    coupon.createdAt || now(),
+    coupon.expiresAt ?? null,
+    coupon.usedAt ?? null,
+  ]
+}
+
+async function runD1Statements(env: WorkerEnv, statements: Array<ReturnType<D1Database['prepare']>>) {
+  if (!statements.length)
+    return
+
+  const localDb = env.LOCAL_DB! as D1Database & {
+    batch?: (items: Array<ReturnType<D1Database['prepare']>>) => Promise<unknown[]>
+  }
+  if (typeof localDb.batch === 'function') {
+    await localDb.batch(statements)
+    return
+  }
+
+  for (const statement of statements)
+    await statement.run()
+}
+
+function postgresValuesPlaceholders(rowCount: number, columnCount: number) {
+  return Array.from({ length: rowCount }, (_, rowIndex) => {
+    const offset = rowIndex * columnCount
+    return `(${Array.from({ length: columnCount }, (__, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`
+  }).join(', ')
+}
+
+function chunks<T>(items: T[], size: number) {
+  const result: T[][] = []
+  for (let index = 0; index < items.length; index += size)
+    result.push(items.slice(index, index + size))
+  return result
+}
+
+async function syncD1StateSnapshots(env: WorkerEnv, applications: WelfareApplication[], coupons: UserCoupon[]) {
+  const localDb = env.LOCAL_DB!
+  await runD1Statements(env, [
+    ...applications.map(application => localDb
+      .prepare(`
+        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        on conflict (id)
+        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
+      `)
+      .bind(...applicationSnapshotValues(application))),
+    ...coupons.map(coupon => localDb
+      .prepare(`
+        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        on conflict (id)
+        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
+      `)
+      .bind(...couponSnapshotValues(coupon))),
+  ])
+}
+
+async function syncPostgresStateSnapshots(env: WorkerEnv, applications: WelfareApplication[], coupons: UserCoupon[]) {
+  const pool = getPool(env)
+  for (const batch of chunks(applications, POSTGRES_SNAPSHOT_BATCH_SIZE)) {
+    const values = batch.flatMap(applicationSnapshotValues)
+    await pool.query(
+      `
+        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
+        values ${postgresValuesPlaceholders(batch.length, 8)}
+        on conflict (id)
+        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
+      `,
+      values,
+    )
+  }
+  for (const batch of chunks(coupons, POSTGRES_SNAPSHOT_BATCH_SIZE)) {
+    const values = batch.flatMap(couponSnapshotValues)
+    await pool.query(
+      `
+        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
+        values ${postgresValuesPlaceholders(batch.length, 11)}
+        on conflict (id)
+        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
+      `,
+      values,
+    )
+  }
+}
+
 async function syncStateSnapshots(env: WorkerEnv, state: unknown) {
   if (!isRecord(state))
     return
@@ -1334,95 +1444,11 @@ async function syncStateSnapshots(env: WorkerEnv, state: unknown) {
   const coupons = Array.isArray(state.coupons) ? state.coupons.filter((item): item is UserCoupon => isRecord(item) && typeof item.id === 'string') : []
 
   if (shouldUseD1(env)) {
-    for (const application of applications) {
-      await env.LOCAL_DB!
-        .prepare(`
-          insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
-          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-          on conflict (id)
-          do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
-        `)
-        .bind(
-          application.id,
-          application.userId,
-          application.type,
-          application.status,
-          application.title || '未命名申请',
-          JSON.stringify(application),
-          application.createdAt || now(),
-          applicationSnapshotUpdatedAt(application),
-        )
-        .run()
-    }
-    for (const coupon of coupons) {
-      await env.LOCAL_DB!
-        .prepare(`
-          insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
-          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-          on conflict (id)
-          do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
-        `)
-        .bind(
-          coupon.id,
-          coupon.userId,
-          coupon.name || '未命名优惠券',
-          coupon.scope ?? null,
-          coupon.discountType ?? 'rate',
-          couponSnapshotDiscountRate(coupon),
-          coupon.discountAmount ?? null,
-          JSON.stringify(coupon),
-          coupon.createdAt || now(),
-          coupon.expiresAt ?? null,
-          coupon.usedAt ?? null,
-        )
-        .run()
-    }
+    await syncD1StateSnapshots(env, applications, coupons)
     return
   }
 
-  for (const application of applications) {
-    await getPool(env).query(
-      `
-        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
-        on conflict (id)
-        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
-      `,
-      [
-        application.id,
-        application.userId,
-        application.type,
-        application.status,
-        application.title || '未命名申请',
-        JSON.stringify(application),
-        application.createdAt || now(),
-        applicationSnapshotUpdatedAt(application),
-      ],
-    )
-  }
-  for (const coupon of coupons) {
-    await getPool(env).query(
-      `
-        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        on conflict (id)
-        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
-      `,
-      [
-        coupon.id,
-        coupon.userId,
-        coupon.name || '未命名优惠券',
-        coupon.scope ?? null,
-        coupon.discountType ?? 'rate',
-        couponSnapshotDiscountRate(coupon),
-        coupon.discountAmount ?? null,
-        JSON.stringify(coupon),
-        coupon.createdAt || now(),
-        coupon.expiresAt ?? null,
-        coupon.usedAt ?? null,
-      ],
-    )
-  }
+  await syncPostgresStateSnapshots(env, applications, coupons)
 }
 
 export async function writeWelfareState(env: WorkerEnv, state: unknown, options: WriteWelfareStateOptions = {}) {
