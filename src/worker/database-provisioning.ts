@@ -78,11 +78,37 @@ const DATABASE_PROVISION_CONFIG_ID = 'default'
 const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_DATABASE_PREFIX = 'twg'
 const SUPPORTED_DATABASE_SUBTYPES = new Set(['postgresql'])
+let databaseProvisionSchemaPromise: Promise<void> | undefined
 const ONE_PANEL_STATUS_ENDPOINTS: OnePanelStatusEndpoint[] = [
   { id: 'v2_device_base', label: '设备基础信息', method: 'POST', path: '/api/v2/toolbox/device/base', body: {} },
   { id: 'v1_base_os', label: '系统基础信息', method: 'GET', path: '/api/v1/dashboard/base/os' },
   { id: 'v1_dashboard_current', label: '实时概览', method: 'GET', path: '/api/v1/dashboard/current?ioOption=all&netOption=all&scope=all' },
 ]
+
+async function runDatabaseProvisionSchemaSetup(env: WorkerEnv) {
+  await ensureNotificationSchema(env)
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_database_resource_bindings_item on database_resource_bindings (application_id, item_id)')
+      .run()
+    await env.LOCAL_DB!
+      .prepare('create unique index if not exists idx_database_resource_bindings_active_item on database_resource_bindings (application_id, item_id) where status = \'active\'')
+      .run()
+    return
+  }
+
+  const pool = getPool(env)
+  await pool.query('create index if not exists idx_database_resource_bindings_item on database_resource_bindings (application_id, item_id)')
+  await pool.query('create unique index if not exists idx_database_resource_bindings_active_item on database_resource_bindings (application_id, item_id) where status = \'active\'')
+}
+
+async function ensureDatabaseProvisionSchema(env: WorkerEnv) {
+  databaseProvisionSchemaPromise ??= runDatabaseProvisionSchemaSetup(env).catch((error) => {
+    databaseProvisionSchemaPromise = undefined
+    throw error
+  })
+  return databaseProvisionSchemaPromise
+}
 
 function encryptionSecret(env: WorkerEnv) {
   return env.NOTIFY_SECRET_KEY ?? ''
@@ -202,7 +228,7 @@ async function decryptOptionalSecret(value: string | null | undefined, env: Work
 }
 
 async function getStoredDatabaseProvisionConfig(env: WorkerEnv) {
-  await ensureNotificationSchema(env)
+  await ensureDatabaseProvisionSchema(env)
 
   if (shouldUseD1(env)) {
     return await env.LOCAL_DB!
@@ -248,7 +274,7 @@ function serializeConfig(config: Awaited<ReturnType<typeof getEffectiveDatabaseP
 }
 
 async function saveDatabaseProvisionConfig(env: WorkerEnv, payload: SaveDatabaseProvisionConfigPayload) {
-  await ensureNotificationSchema(env)
+  await ensureDatabaseProvisionSchema(env)
   const stored = await getStoredDatabaseProvisionConfig(env)
   let rootUrlEncrypted = stored?.root_url_encrypted || null
   let onePanelApiKeyEncrypted = stored?.onepanel_api_key_encrypted || null
@@ -550,7 +576,7 @@ async function insertDatabaseResourceBinding(
 }
 
 async function findActiveDatabaseResourceBinding(env: WorkerEnv, applicationId: string, itemId: string) {
-  await ensureNotificationSchema(env)
+  await ensureDatabaseProvisionSchema(env)
 
   if (shouldUseD1(env)) {
     return await env.LOCAL_DB!

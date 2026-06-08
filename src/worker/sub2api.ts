@@ -112,6 +112,7 @@ const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_KEY_QUOTA_USD = 10
 const SUB2API_CONFIG_ID = 'default'
 const RESOURCE_LOCK_TTL_SECONDS = 60
+let sub2ApiSchemaPromise: Promise<void> | undefined
 
 class Sub2ApiHttpError extends Error {
   constructor(message: string, readonly status: number) {
@@ -202,7 +203,7 @@ async function decryptOptionalSecret(value: string | null | undefined, env: Work
 }
 
 async function getStoredSub2ApiConfig(env: WorkerEnv) {
-  await ensureNotificationSchema(env)
+  await ensureSub2ApiSchema(env)
 
   if (shouldUseD1(env)) {
     return await env.LOCAL_DB!
@@ -236,6 +237,42 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
     configured: !!(stored?.base_url && (adminApiKey || databaseUrl)),
     source: stored ? 'admin' as const : 'empty' as const,
   }
+}
+
+async function addD1ColumnIfMissing(env: WorkerEnv, table: string, column: string, definition: string) {
+  try {
+    await env.LOCAL_DB!
+      .prepare(`alter table ${table} add column ${column} ${definition}`)
+      .run()
+  }
+  catch {
+    // D1 lacks ADD COLUMN IF NOT EXISTS; duplicate-column errors are harmless.
+  }
+}
+
+async function runSub2ApiSchemaSetup(env: WorkerEnv) {
+  await ensureNotificationSchema(env)
+  if (shouldUseD1(env)) {
+    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'application_id', 'text')
+    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'item_id', 'text')
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_sub2api_key_bindings_resource_item on sub2api_key_bindings (application_id, item_id, status)')
+      .run()
+    return
+  }
+
+  const pool = getPool(env)
+  await pool.query('alter table sub2api_key_bindings add column if not exists application_id text')
+  await pool.query('alter table sub2api_key_bindings add column if not exists item_id text')
+  await pool.query('create index if not exists idx_sub2api_key_bindings_resource_item on sub2api_key_bindings (application_id, item_id, status)')
+}
+
+async function ensureSub2ApiSchema(env: WorkerEnv) {
+  sub2ApiSchemaPromise ??= runSub2ApiSchemaSetup(env).catch((error) => {
+    sub2ApiSchemaPromise = undefined
+    throw error
+  })
+  return sub2ApiSchemaPromise
 }
 
 function serializeConfig(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>) {
@@ -273,7 +310,7 @@ function serializePublicConfig(config: Awaited<ReturnType<typeof getEffectiveSub
 }
 
 async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPayload) {
-  await ensureNotificationSchema(env)
+  await ensureSub2ApiSchema(env)
   const stored = await getStoredSub2ApiConfig(env)
   let adminApiKeyEncrypted = stored?.admin_api_key_encrypted || null
   let databaseUrlEncrypted = stored?.database_url_encrypted || null
@@ -705,7 +742,7 @@ function existingResourceBinding(row: Sub2ApiKeyBindingRow) {
 }
 
 async function getActiveResourceBinding(env: WorkerEnv, ref: ResourceProvisionRef) {
-  await ensureNotificationSchema(env)
+  await ensureSub2ApiSchema(env)
   if (shouldUseD1(env)) {
     return await env.LOCAL_DB!
       .prepare(`
@@ -728,7 +765,7 @@ async function getActiveResourceBinding(env: WorkerEnv, ref: ResourceProvisionRe
 }
 
 async function acquireResourceProvisionLock(env: WorkerEnv, ref: ResourceProvisionRef) {
-  await ensureNotificationSchema(env)
+  await ensureSub2ApiSchema(env)
   const id = resourceLockId(ref)
   const owner = createId('s2l')
   if (shouldUseD1(env)) {
@@ -788,7 +825,7 @@ async function withResourceProvisionLock<T>(env: WorkerEnv, ref: ResourceProvisi
 }
 
 async function listBindings(env: WorkerEnv, userId: string) {
-  await ensureNotificationSchema(env)
+  await ensureSub2ApiSchema(env)
   if (shouldUseD1(env)) {
     const result = await env.LOCAL_DB!
       .prepare('select * from sub2api_key_bindings where user_id = ?1 order by created_at desc limit 20')
@@ -805,7 +842,7 @@ async function listBindings(env: WorkerEnv, userId: string) {
 }
 
 async function getActiveBinding(env: WorkerEnv, userId: string, bindingId: string) {
-  await ensureNotificationSchema(env)
+  await ensureSub2ApiSchema(env)
   if (shouldUseD1(env)) {
     return await env.LOCAL_DB!
       .prepare('select * from sub2api_key_bindings where id = ?1 and user_id = ?2 and status = ?3')
