@@ -84,6 +84,7 @@ import {
   STUDENT_REVIEW_FEE,
   termsForResourceTypes,
 } from '~/composables/welfare'
+import { analyzeEducationEmail, assertEducationEmailAddress, educationEmailAdminRecommendationLabel } from '~/shared/education-email'
 import { isRichTextEmpty, richTextToPlainText } from '~/utils/rich-text'
 import { applyWelfareRetentionPolicy } from '../shared/welfare-retention'
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from './crypto'
@@ -2085,11 +2086,25 @@ function normalizeStudentEmail(value: unknown) {
 }
 
 function assertEducationEmail(value: string) {
-  if (!/^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/.test(value))
-    throw new Error('请填写有效的教育邮箱')
-  const domain = value.split('@')[1]?.toLowerCase() ?? ''
-  if (!domain.endsWith('.edu') && !domain.includes('.edu.') && !domain.endsWith('.ac') && !domain.includes('.ac.'))
-    throw new Error('请填写学校或教育机构邮箱')
+  assertEducationEmailAddress(value)
+}
+
+function latestEducationEmailChallengeForState(state: Partial<WelfareState>, userId: string, email: string) {
+  return (state.educationEmailChallenges ?? [])
+    .filter((item) => {
+      if (item.userId !== userId || item.email !== email)
+        return false
+      const expiresAt = new Date(item.expiresAt).getTime()
+      return Number.isFinite(expiresAt) && expiresAt > Date.now()
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+}
+
+function assertVerifiedEducationEmailChallengeForState(challenge: EducationEmailChallenge | undefined, wantsVerified: boolean) {
+  if (!wantsVerified)
+    throw new Error('邮箱证明需要先通过收件 API 验证后才能提交')
+  if (!challenge?.verifiedAt)
+    throw new Error('邮箱证明尚未通过收件 API 验证，请先发送证明邮件并完成验证')
 }
 
 async function applyStandardApplicationCommand(env: WorkerEnv, state: Partial<WelfareState>, user: User, payload: SubmitApplicationPayload) {
@@ -2789,6 +2804,16 @@ async function submitStudentVerificationAction(request: Request, env: WorkerEnv)
     if (user.points < STUDENT_REVIEW_FEE)
       throw new Error('积分不足')
 
+    const emailChallenge = educationEmail
+      ? (state.educationEmailChallenges ?? []).find(item =>
+          item.id === input.educationEmailChallengeId
+          && item.userId === user.id
+          && item.email === educationEmail,
+        ) ?? latestEducationEmailChallengeForState(state, user.id, educationEmail)
+      : undefined
+    if (educationEmail)
+      assertVerifiedEducationEmailChallengeForState(emailChallenge, !!input.educationEmailVerified)
+
     const createdAt = now()
     const verification: StudentVerification = {
       id: createId('stu'),
@@ -2801,7 +2826,10 @@ async function submitStudentVerificationAction(request: Request, env: WorkerEnv)
       grade: input.grade?.trim(),
       educationLevel: input.educationLevel?.trim(),
       educationEmail,
-      educationEmailVerified: false,
+      educationEmailVerified: !!emailChallenge?.verifiedAt,
+      educationEmailVerifiedAt: emailChallenge?.verifiedAt,
+      educationEmailVerificationSource: emailChallenge?.verifiedAt ? 'mail_auto' : undefined,
+      educationEmailChallengeId: emailChallenge?.id,
       notes,
       attachments,
       status: 'pending',
@@ -2810,6 +2838,8 @@ async function submitStudentVerificationAction(request: Request, env: WorkerEnv)
       createdAt,
     }
     ensureStudentVerifications(state).unshift(verification)
+    if (emailChallenge)
+      emailChallenge.submittedAt = verification.createdAt
     await appendTrustedPointTransaction(env, state, {
       id: transactionId('student_review', verification.id),
       userId: user.id,
@@ -2842,6 +2872,18 @@ async function supplementStudentVerificationAction(request: Request, env: Worker
     const notes = sanitizeWorkerRichText(input.notes)
     if (isRichTextEmpty(notes))
       throw new Error('请填写认证材料说明')
+    const educationEmail = input.educationEmail?.trim() ? normalizeStudentEmail(input.educationEmail) : undefined
+    if (educationEmail)
+      assertEducationEmail(educationEmail)
+    const emailChallenge = educationEmail
+      ? (state.educationEmailChallenges ?? []).find(item =>
+          item.id === input.educationEmailChallengeId
+          && item.userId === user.id
+          && item.email === educationEmail,
+        ) ?? latestEducationEmailChallengeForState(state, user.id, educationEmail)
+      : undefined
+    if (educationEmail)
+      assertVerifiedEducationEmailChallengeForState(emailChallenge, !!input.educationEmailVerified)
     const newAttachments = attachmentsFromPayload(input.attachments)
     if (totalAttachmentBytes([...(verification.attachments ?? []), ...newAttachments]) > MAX_ATTACHMENT_BYTES)
       throw new Error('材料附件总大小不能超过 200MB')
@@ -2854,12 +2896,19 @@ async function supplementStudentVerificationAction(request: Request, env: Worker
     verification.identity = input.identity?.trim()
     verification.grade = input.grade?.trim()
     verification.educationLevel = input.educationLevel?.trim()
+    verification.educationEmail = educationEmail
+    verification.educationEmailVerified = !!emailChallenge?.verifiedAt
+    verification.educationEmailVerifiedAt = emailChallenge?.verifiedAt
+    verification.educationEmailVerificationSource = emailChallenge?.verifiedAt ? 'mail_auto' : undefined
+    verification.educationEmailChallengeId = emailChallenge?.id
     verification.notes = `${previousNotes}<h3>补充资料（${formatWorkerDate(supplementedAt)}）</h3>${notes}`
     verification.attachments = [...(verification.attachments ?? []), ...newAttachments]
     verification.status = 'pending'
     verification.reply = undefined
     verification.supplementedAt = supplementedAt
     verification.reviewedAt = undefined
+    if (emailChallenge)
+      emailChallenge.submittedAt = supplementedAt
     return { verificationId: verification.id }
   })
 }
@@ -4007,6 +4056,7 @@ async function createEducationEmailChallengeAction(request: Request, env: Worker
     const email = normalizeStudentEmail(payload.email)
     const realName = typeof payload.realName === 'string' ? payload.realName.trim() : ''
     assertEducationEmail(email)
+    const emailProfile = analyzeEducationEmail(email)
     const createdAt = now()
     const code = createEducationEmailCodeValue()
     const subject = `Touch Great Welfare 教育邮箱认证 ${code}`
@@ -4018,8 +4068,11 @@ async function createEducationEmailChallengeAction(request: Request, env: Worker
       `平台用户：${user.profile.displayName || user.profile.email}`,
       `平台用户 ID：${user.id}`,
       `教育邮箱：${email}`,
+      `机构识别：${emailProfile.categoryLabel}`,
+      `管理员建议：${educationEmailAdminRecommendationLabel(emailProfile)}`,
+      `识别依据：${emailProfile.reason}`,
       '',
-      '我确认该邮件由本人从教育/学校邮箱发出，仅作为学生认证辅助证明，仍需平台人工复核。',
+      '我确认该邮件由本人从该邮箱发出，仅作为学生认证辅助证明，仍需平台人工复核。',
     ].join('\n')
     const challenge: EducationEmailChallenge = {
       id: createId('edu_email'),

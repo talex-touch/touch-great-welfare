@@ -4,6 +4,8 @@ import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import {
+  educationEmailReasonText,
+  educationEmailUserLabel,
   educationEmailVerificationLabel,
   formatDate,
   formatRetentionExpiry,
@@ -249,11 +251,15 @@ onMounted(() => {
                 <dd>{{ [verification.identity, verification.educationLevel].filter(Boolean).join(' · ') }}</dd>
               </div>
               <div v-if="verification.verificationType !== 'frontline' && verification.educationEmail">
-                <dt>教育邮箱</dt>
+                <dt>邮箱证明</dt>
                 <dd>
                   {{ verification.educationEmail }}
                   <span v-if="verification.educationEmailVerified" class="text-emerald-700 fw-800 ml-2 dark:text-emerald-300">{{ educationEmailVerificationLabel(verification.educationEmailVerificationSource) }}</span>
                 </dd>
+              </div>
+              <div v-if="verification.verificationType !== 'frontline' && verification.educationEmail">
+                <dt>机构识别</dt>
+                <dd>{{ educationEmailUserLabel(verification.educationEmail, !!verification.educationEmailVerified) }} · {{ educationEmailReasonText(verification.educationEmail) }}</dd>
               </div>
               <div>
                 <dt>附件</dt>

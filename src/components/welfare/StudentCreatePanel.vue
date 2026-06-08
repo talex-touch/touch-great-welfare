@@ -5,7 +5,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
 import {
+  analyzeEducationEmail,
   EDUCATION_EMAIL_REVIEW_INBOX,
+  educationEmailAdminRecommendationLabel,
+  educationEmailReasonText,
+  educationEmailUserLabel,
   formatBytes,
   formatDate,
   MAX_ATTACHMENT_BYTES,
@@ -77,6 +81,10 @@ const editingVerification = computed(() => state.studentVerifications.find(item 
   && item.status === 'needs_supplement',
 ))
 const isSupplementMode = computed(() => !!editingVerification.value)
+const educationEmailProfile = computed(() => studentForm.educationEmail.trim() ? analyzeEducationEmail(studentForm.educationEmail) : undefined)
+const educationEmailProfileHint = computed(() => educationEmailProfile.value
+  ? `${educationEmailUserLabel(educationEmailProfile.value, educationEmailVerificationForm.verified)} · 管理员建议：${educationEmailAdminRecommendationLabel(educationEmailProfile.value)} · ${educationEmailReasonText(educationEmailProfile.value)}`
+  : '')
 const INITIAL_SCHOOL_SUGGESTION_LIMIT = 48
 
 const filteredStudentSchoolSuggestions = computed(() => {
@@ -464,9 +472,12 @@ onMounted(() => {
             </div>
             <div v-if="isStudentVerification" class="gap-2 grid md:col-span-2">
               <label class="gap-2 grid">
-                <span class="field-label">教育邮箱邮件证明</span>
-                <TxInput v-model="studentForm.educationEmail" type="email" placeholder="name@school.edu.cn，可选" />
+                <span class="field-label">学校/科研机构邮箱邮件证明</span>
+                <TxInput v-model="studentForm.educationEmail" type="email" placeholder="name@school.edu.cn / name@mails.ucas.ac.cn，可选" />
               </label>
+              <p v-if="educationEmailProfileHint" class="field-hint">
+                {{ educationEmailProfileHint }}
+              </p>
               <div class="gap-3 grid xl:grid-cols-[1fr_auto_auto_auto_auto]">
                 <TxInput v-model="educationEmailVerificationForm.code" readonly placeholder="生成后显示唯一证明码" />
                 <TxButton variant="secondary" :disabled="educationEmailVerificationForm.loading || !studentForm.educationEmail" @click="onGenerateEducationEmailChallenge">
@@ -483,7 +494,7 @@ onMounted(() => {
                 </TxButton>
               </div>
               <p class="field-hint">
-                需要使用该教育邮箱向 {{ EDUCATION_EMAIL_REVIEW_INBOX }} 发送包含唯一证明码的邮件；提交前必须通过收件 API 验证，管理员仍会人工复核材料。
+                支持 .edu、.edu.cn、.ac.cn、.ac.uk、.edu.au、mails.ucas.ac.cn 等域名；需要使用该邮箱向 {{ EDUCATION_EMAIL_REVIEW_INBOX }} 发送包含唯一证明码的邮件，验证后会显示机构识别与管理员建议。
               </p>
               <p v-if="educationEmailVerificationForm.subject" class="field-hint">
                 邮件主题：{{ educationEmailVerificationForm.subject }}

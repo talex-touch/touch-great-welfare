@@ -4,7 +4,7 @@ import { TxButton, TxCard, TxInput, TxStatusBadge, TxTabItem, TxTabs, TxTag } fr
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailAdminRecommendationLabel, educationEmailReasonText, educationEmailUserLabel, educationEmailVerificationLabel, formatDate, formatRetentionExpiry, STUDENT_REVIEW_FEE, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -585,9 +585,14 @@ onMounted(() => {
                 <TxTag :label="selectedVerification.identity || '未填身份'" color="#334155" background="rgba(100,116,139,.12)" />
                 <TxTag v-if="selectedVerification.educationLevel" :label="selectedVerification.educationLevel" color="#315244" background="rgba(49,82,68,.12)" />
                 <TxTag v-if="selectedVerification.educationEmail" :label="selectedVerification.educationEmail" color="#0369a1" background="rgba(14,165,233,.14)" />
+                <TxTag v-if="selectedVerification.educationEmail" :label="educationEmailUserLabel(selectedVerification.educationEmail, !!selectedVerification.educationEmailVerified)" color="#047857" background="rgba(16,185,129,.14)" />
                 <TxTag v-if="selectedVerification.educationEmailVerified" :label="educationEmailVerificationLabel(selectedVerification.educationEmailVerificationSource)" color="#047857" background="rgba(16,185,129,.14)" />
+                <TxTag v-if="selectedVerification.educationEmailVerified && selectedVerification.educationEmail" :label="educationEmailAdminRecommendationLabel(selectedVerification.educationEmail)" color="#92400e" background="rgba(251,191,36,.18)" />
                 <TxTag :label="`${selectedVerification.attachments.length} 个材料`" color="#854d0e" background="rgba(250,204,21,.18)" />
               </div>
+              <p v-if="selectedVerification.educationEmail" class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
+                管理员建议：{{ educationEmailAdminRecommendationLabel(selectedVerification.educationEmail) }} · {{ educationEmailReasonText(selectedVerification.educationEmail) }}
+              </p>
             </section>
 
             <section class="verification-detail-section mt-4">

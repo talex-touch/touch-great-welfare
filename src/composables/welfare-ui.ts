@@ -43,6 +43,8 @@ import {
   DEFAULT_LLM_API_MODELS,
   defaultLlmApiDuration,
   EDUCATION_EMAIL_REVIEW_INBOX,
+  educationEmailAdminRecommendationLabel,
+  educationEmailUserLabel,
   LLM_API_BUDGET_OPTIONS,
   LLM_API_DEFAULT_MODEL_KEY,
   LLM_API_EXTENDED_PROCESSING_HOURS,
@@ -1005,7 +1007,7 @@ export function useWelfareUiState() {
       educationEmailVerificationForm.sentTo = challenge.email
       educationEmailVerificationForm.expiresAt = challenge.expiresAt
       educationEmailVerificationForm.verified = true
-      educationEmailVerificationForm.message = '该教育邮箱已通过收件 API 验证'
+      educationEmailVerificationForm.message = `${educationEmailUserLabel(challenge.email, true)}；管理员建议：${educationEmailAdminRecommendationLabel(challenge.email)}`
     }
   }
 
@@ -1445,7 +1447,7 @@ export function useWelfareUiState() {
     educationEmailVerificationForm.sentTo = challenge.email
     educationEmailVerificationForm.expiresAt = challenge.expiresAt
     educationEmailVerificationForm.verified = false
-    educationEmailVerificationForm.message = `请使用该教育邮箱向 ${EDUCATION_EMAIL_REVIEW_INBOX} 发送邮件，管理员会人工复核`
+    educationEmailVerificationForm.message = `${educationEmailUserLabel(challenge.email)}；管理员建议：${educationEmailAdminRecommendationLabel(challenge.email)}。请使用该邮箱向 ${EDUCATION_EMAIL_REVIEW_INBOX} 发送邮件，管理员会人工复核`
   }
 
   async function generateEducationEmailChallenge() {
@@ -1505,7 +1507,7 @@ export function useWelfareUiState() {
 
       await welfare.reloadWelfareState()
       educationEmailVerificationForm.verified = true
-      educationEmailVerificationForm.message = '已通过收件 API 验证教育邮箱真实性，管理员仍会结合材料审核'
+      educationEmailVerificationForm.message = `${educationEmailUserLabel(result.email, true)}；管理员建议：${educationEmailAdminRecommendationLabel(result.email)}，仍会结合材料审核`
       return result
     }
     finally {

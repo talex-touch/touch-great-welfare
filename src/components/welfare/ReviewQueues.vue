@@ -3,7 +3,7 @@ import { TxButton, TxCard, TxCheckbox, TxFlipOverlay, TxSelect, TxSelectItem, Tx
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { educationEmailVerificationLabel, formatDate, formatPoints, formatRetentionExpiry, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { educationEmailAdminRecommendationLabel, educationEmailReasonText, educationEmailUserLabel, educationEmailVerificationLabel, formatDate, formatPoints, formatRetentionExpiry, isGptProModel, provisionStatusText, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -477,8 +477,11 @@ onMounted(() => {
                 {{ [item.grade, item.educationLevel, item.identity].filter(Boolean).join(' · ') }}
               </div>
               <div v-if="item.verificationType !== 'frontline' && item.educationEmail" class="text-xs text-slate-500 mt-1">
-                教育邮箱：{{ item.educationEmail }}
+                邮箱证明：{{ item.educationEmail }}
                 <span v-if="item.educationEmailVerified" class="text-emerald-700 fw-800 ml-2 dark:text-emerald-300">{{ educationEmailVerificationLabel(item.educationEmailVerificationSource) }}</span>
+              </div>
+              <div v-if="item.verificationType !== 'frontline' && item.educationEmail" class="text-xs text-slate-500 mt-1">
+                机构识别：{{ educationEmailUserLabel(item.educationEmail, !!item.educationEmailVerified) }} · 管理员建议：{{ educationEmailAdminRecommendationLabel(item.educationEmail) }} · {{ educationEmailReasonText(item.educationEmail) }}
               </div>
             </div>
             <TxTag :label="`审核费 ${pricingSummary.studentReviewFee}`" color="#854d0e" background="rgba(250,204,21,.18)" />

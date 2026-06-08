@@ -1,7 +1,23 @@
 import { computed, reactive, ref } from 'vue'
+import {
+  analyzeEducationEmail,
+  assertEducationEmailAddress,
+  educationEmailAdminRecommendationLabel,
+  educationEmailAdminRecommendationTone,
+  educationEmailReasonText,
+  educationEmailUserLabel,
+} from '~/shared/education-email'
 import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
 import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
 import { bootstrapAdmin, endSession, loadInitialWelfareState, loadLegacyWelfareState, loadWelfareState, loginAdmin as requestAdminLogin } from './welfare-persistence'
+
+export {
+  analyzeEducationEmail,
+  educationEmailAdminRecommendationLabel,
+  educationEmailAdminRecommendationTone,
+  educationEmailReasonText,
+  educationEmailUserLabel,
+}
 
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
@@ -1514,23 +1530,8 @@ function normalizeEmail(value: string) {
   return value.trim().toLowerCase()
 }
 
-function isValidEmail(value: string) {
-  return /^[^\s@]+@[^\s@][^\s@.]*\.[^\s@]+$/.test(value)
-}
-
-function isEducationEmail(value: string) {
-  const domain = value.split('@')[1]?.toLowerCase() ?? ''
-  return domain.endsWith('.edu')
-    || domain.includes('.edu.')
-    || domain.endsWith('.ac')
-    || domain.includes('.ac.')
-}
-
 function assertEducationEmail(value: string) {
-  if (!isValidEmail(value))
-    throw new Error('请填写有效的教育邮箱')
-  if (!isEducationEmail(value))
-    throw new Error('请填写学校或教育机构邮箱')
+  assertEducationEmailAddress(value)
 }
 
 function createEducationEmailCode() {
@@ -4459,6 +4460,7 @@ export function useWelfareStore() {
 
     const normalizedEmail = normalizeEmail(email)
     assertEducationEmail(normalizedEmail)
+    const emailProfile = analyzeEducationEmail(normalizedEmail)
 
     const createdAt = now()
     const code = createEducationEmailCode()
@@ -4471,8 +4473,11 @@ export function useWelfareStore() {
       `平台用户：${currentUser.value.profile.displayName || currentUser.value.profile.email}`,
       `平台用户 ID：${currentUser.value.id}`,
       `教育邮箱：${normalizedEmail}`,
+      `机构识别：${emailProfile.categoryLabel}`,
+      `管理员建议：${educationEmailAdminRecommendationLabel(emailProfile)}`,
+      `识别依据：${emailProfile.reason}`,
       '',
-      '我确认该邮件由本人从教育/学校邮箱发出，仅作为学生认证辅助证明，仍需平台人工复核。',
+      '我确认该邮件由本人从该邮箱发出，仅作为学生认证辅助证明，仍需平台人工复核。',
     ].join('\n')
     const challenge: EducationEmailChallenge = {
       id: createId('edu_email'),
