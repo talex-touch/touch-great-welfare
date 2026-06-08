@@ -5,6 +5,8 @@ import type {
   NotificationSettingsView,
   PushSubscriptionPayload,
   SaveNotificationSettingsPayload,
+  SendEmailTestPayload,
+  SendEmailTestResult,
 } from '~/shared/notifications'
 
 export interface NotificationProviderConfigView {
@@ -108,6 +110,13 @@ export function loadNotificationSettings(userId: string) {
 export function saveNotificationSettings(userId: string, payload: SaveNotificationSettingsPayload) {
   return requestNotifications<NotificationSettingsView>('/api/notifications/settings', userId, {
     method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function sendEmailTest(userId: string, payload: SendEmailTestPayload) {
+  return requestNotifications<SendEmailTestResult>('/api/notifications/email-test', userId, {
+    method: 'POST',
     body: JSON.stringify(payload),
   })
 }

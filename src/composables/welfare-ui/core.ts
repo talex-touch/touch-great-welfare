@@ -24,6 +24,7 @@ import {
   saveNotificationProviderConfig,
   saveNotificationSettings,
   savePushSubscription,
+  sendEmailTest as sendEmailTestRequest,
   urlBase64ToUint8Array,
 } from '../notifications'
 import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from '../oauth'
@@ -410,6 +411,7 @@ export const notificationSettingsForm = reactive({
   browserPushEnabled: false,
   pushSubscriptionCount: 0,
   loading: false,
+  emailTesting: false,
   permission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
 })
 
@@ -2711,6 +2713,27 @@ export function useWelfareUiState() {
     }
   }
 
+  async function sendNotificationEmailTest() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    notificationSettingsForm.emailTesting = true
+    try {
+      const result = await sendEmailTestRequest(welfare.currentUser.value.id, {
+        emailAddress: notificationSettingsForm.emailAddress,
+      })
+      notificationSettingsForm.emailAddress = result.emailAddress
+      await Promise.all([
+        refreshCurrentUserPointBalance(),
+        refreshNotifications(),
+      ])
+    }
+    finally {
+      notificationSettingsForm.emailTesting = false
+    }
+  }
+
   async function enableBrowserPush() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
@@ -3287,6 +3310,7 @@ export function useWelfareUiState() {
     refreshNotifications,
     refreshNotificationSettings,
     persistNotificationSettings,
+    sendNotificationEmailTest,
     enableBrowserPush,
     readNotification,
     readAllNotifications,

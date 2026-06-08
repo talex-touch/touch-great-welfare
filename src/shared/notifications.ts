@@ -1,5 +1,5 @@
 export type NotificationChannel = 'in_app' | 'email' | 'feishu' | 'browser_push'
-export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_submitted' | 'student_needs_supplement' | 'student_supplement_submitted' | 'student_approved' | 'student_rejected' | 'student_revoked' | 'ai_image_succeeded' | 'ai_image_failed' | 'admin_announcement'
+export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_submitted' | 'student_needs_supplement' | 'student_supplement_submitted' | 'student_approved' | 'student_rejected' | 'student_revoked' | 'ai_image_succeeded' | 'ai_image_failed' | 'admin_announcement' | 'email_test'
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
 
 export interface NotificationItem {
@@ -29,6 +29,17 @@ export interface SaveNotificationSettingsPayload {
   feishuWebhookUrl?: string
   clearFeishuWebhook?: boolean
   browserPushEnabled: boolean
+}
+
+export interface SendEmailTestPayload {
+  emailAddress?: string
+}
+
+export interface SendEmailTestResult {
+  ok: true
+  notificationId: string
+  emailAddress: string
+  chargedPoints: number
 }
 
 export interface PushSubscriptionPayload {
@@ -97,6 +108,7 @@ export function notificationEventText(event: NotificationEvent) {
     ai_image_succeeded: '图片生成完成',
     ai_image_failed: '图片生成失败',
     admin_announcement: '管理员通告',
+    email_test: '邮箱测试',
   }
   return map[event]
 }

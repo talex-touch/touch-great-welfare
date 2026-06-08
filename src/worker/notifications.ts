@@ -11,6 +11,8 @@ import type {
   NotificationSettingsView,
   PushSubscriptionPayload,
   SaveNotificationSettingsPayload,
+  SendEmailTestPayload,
+  SendEmailTestResult,
 } from '~/shared/notifications'
 import { EMAIL_NOTIFICATION_COST } from '~/shared/notifications'
 import { richTextToPlainText } from '~/utils/rich-text'
@@ -1746,6 +1748,49 @@ async function sendPush(env: WorkerEnv, subscription: PushSubscriptionRow) {
     throw new Error(`Web Push 请求失败：${response.status}`)
 }
 
+async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestPayload): Promise<SendEmailTestResult> {
+  const emailAddress = (payload.emailAddress?.trim() || user.profile.email).toLowerCase()
+  assertEmail(emailAddress)
+
+  if (!await hasEnoughPoints(env, user.id, EMAIL_NOTIFICATION_COST))
+    throw new Error('邮箱通知余额不足')
+
+  const notificationId = await insertNotification(env, {
+    userId: user.id,
+    event: 'email_test',
+    title: 'Touch Great Welfare 邮箱测试',
+    body: `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。`,
+    data: {
+      kind: 'email_test',
+      emailAddress,
+      chargedPoints: EMAIL_NOTIFICATION_COST,
+    },
+  })
+  await recordDelivery(env, notificationId, 'in_app', 'sent')
+
+  const sent = await dispatchEmailChannel(env, user.id, emailAddress, notificationId, {
+    userId: user.id,
+    event: 'email_test',
+    title: 'Touch Great Welfare 邮箱测试',
+    body: `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。`,
+    data: {
+      kind: 'email_test',
+      emailAddress,
+      chargedPoints: EMAIL_NOTIFICATION_COST,
+    },
+  }, EMAIL_NOTIFICATION_COST)
+
+  if (!sent)
+    throw new Error('测试邮件发送失败，请检查邮箱通知服务配置')
+
+  return {
+    ok: true,
+    notificationId,
+    emailAddress,
+    chargedPoints: EMAIL_NOTIFICATION_COST,
+  }
+}
+
 async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: NotificationSettingsRow | null, notificationId: string, input: CreateNotificationInput) {
   if (boolValue(settings?.email_enabled)) {
     const address = settings?.email_address || user.profile.email
@@ -2328,6 +2373,11 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
     if (path === '/settings' && request.method === 'PUT') {
       const payload = await readJson<SaveNotificationSettingsPayload>(request)
       return json(await saveSettings(env, user, payload))
+    }
+
+    if (path === '/email-test' && request.method === 'POST') {
+      const payload = await readJson<SendEmailTestPayload>(request)
+      return json(await sendEmailTest(env, user, payload))
     }
 
     if (path === '/push-subscriptions' && request.method === 'POST') {

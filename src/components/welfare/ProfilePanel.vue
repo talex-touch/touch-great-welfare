@@ -40,6 +40,7 @@ const {
   vouchInvitation,
   refreshNotificationSettings,
   persistNotificationSettings,
+  sendNotificationEmailTest,
   enableBrowserPush,
   refreshPointTransactions,
   startRecharge,
@@ -53,7 +54,7 @@ const { runSafely, notify } = useWelfareFeedback()
 const profileDraftKey = 'welfare:profile-draft'
 const RECHARGE_DEFAULT_LDC = 100
 const PROFILE_TABS = {
-  system: '系统设置',
+  system: '通知设置',
   transactions: '积分流水',
   invitation: '邀请担保',
   loginHistory: '登录历史',
@@ -89,12 +90,14 @@ const MEMBER_CARD_ASSETS = [
 const isProfileDialogOpen = ref(false)
 const isRechargeDialogOpen = ref(false)
 const isPricingDialogOpen = ref(false)
+const isEmailTestDialogOpen = ref(false)
 const isAllTransactionsVisible = ref(false)
 const activeProfileTab = ref(PROFILE_TABS.system)
 const activeMemberCardIndex = ref(0)
 let stopProfileDraft: (() => void) | undefined
 
 const userInitial = computed(() => currentUser.value?.profile.displayName.slice(0, 1).toUpperCase() ?? '?')
+const notificationEmailTestAddress = computed(() => notificationSettingsForm.emailAddress || currentUser.value?.profile.email || '')
 const roleText = computed(() => {
   if (currentUser.value?.role === 'admin')
     return '管理员'
@@ -248,6 +251,17 @@ function closePricingDialog() {
   isPricingDialogOpen.value = false
 }
 
+function openEmailTestDialog() {
+  isEmailTestDialogOpen.value = true
+}
+
+function closeEmailTestDialog() {
+  if (notificationSettingsForm.emailTesting)
+    return
+
+  isEmailTestDialogOpen.value = false
+}
+
 function selectMemberCard(index: number) {
   activeMemberCardIndex.value = index
 }
@@ -274,6 +288,13 @@ function saveProfile() {
 
 function saveNotifications() {
   runSafely(() => persistNotificationSettings(), '通知设置已保存')
+}
+
+function testEmailNotification() {
+  runSafely(async () => {
+    await sendNotificationEmailTest()
+    closeEmailTestDialog()
+  }, '测试邮件已发送')
 }
 
 function submitCollaborationApplication() {
@@ -368,6 +389,7 @@ function onKeydown(event: KeyboardEvent) {
   closeProfileDialog()
   closeRechargeDialog()
   closePricingDialog()
+  closeEmailTestDialog()
 }
 
 watch(currentMemberCardIndex, (index) => {
@@ -543,90 +565,134 @@ onUnmounted(() => {
           auto-height
           borderless
         >
-          <TxTabItem :name="PROFILE_TABS.system" icon-class="i-carbon-settings">
+          <TxTabItem :name="PROFILE_TABS.system" icon-class="i-carbon-notification">
             <template #name>
-              系统设置
+              通知设置
             </template>
-            <div class="profile-card-head">
+            <div class="profile-card-head profile-card-head--notifications">
               <div>
-                <h3>通知与账户设置</h3>
-                <p>配置通知方式与账户安全，确保您不会错过重要信息。</p>
+                <h3>通知设置</h3>
+                <p>配置邮箱、站内消息、浏览器 Push 与飞书 Webhook。</p>
               </div>
-              <TxButton variant="secondary" size="sm" :disabled="notificationSettingsForm.loading" @click="saveNotifications">
+              <TxButton variant="primary" size="sm" :disabled="notificationSettingsForm.loading" @click="saveNotifications">
                 <span class="i-carbon-send" />
                 {{ notificationSettingsForm.loading ? '保存中...' : '保存设置' }}
               </TxButton>
             </div>
 
-            <div class="profile-settings-grid">
+            <div class="profile-settings-grid profile-settings-grid--notifications">
               <div class="profile-setting-card">
-                <label class="profile-setting-title">
-                  <TxCheckbox v-model="notificationSettingsForm.emailEnabled" variant="checkmark" aria-label="邮箱通知" />
+                <div class="profile-setting-title-row">
                   <span class="i-carbon-email profile-setting-icon profile-setting-icon--email" />
-                  邮箱通知
-                </label>
-                <p>发送成功后扣 5 积分；余额不足时跳过邮箱。</p>
+                  <label class="profile-setting-title">
+                    邮箱通知
+                  </label>
+                </div>
+                <p>默认使用 LinuxDo 账号邮箱；可手动修改。默认不启用，测试发送会消耗 5 积分。</p>
                 <div class="profile-setting-action">
-                  <TxInput v-model="notificationSettingsForm.emailAddress" type="email" placeholder="you@example.com" />
-                  <TxStatusBadge :text="notificationSettingsForm.emailEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.emailEnabled ? 'success' : 'warning'" size="sm" />
+                  <TxInput v-model="notificationSettingsForm.emailAddress" type="email" :placeholder="currentUser.profile.email" />
+                  <label class="profile-setting-toggle">
+                    <TxCheckbox v-model="notificationSettingsForm.emailEnabled" variant="checkmark" aria-label="邮箱通知" />
+                    <TxStatusBadge :text="notificationSettingsForm.emailEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.emailEnabled ? 'success' : 'warning'" size="sm" />
+                  </label>
+                </div>
+                <button class="profile-setting-link-button" type="button" :disabled="notificationSettingsForm.emailTesting" @click="openEmailTestDialog">
+                  发送测试邮件（消耗 5 积分）
+                </button>
+              </div>
+
+              <div class="profile-setting-card">
+                <div class="profile-setting-title-row">
+                  <span class="i-carbon-chat profile-setting-icon profile-setting-icon--inbox" />
+                  <div class="profile-setting-title">
+                    站内通知
+                  </div>
+                </div>
+                <p>通过站内信接收系统通知与消息，重要状态会同步展示。</p>
+                <div class="profile-setting-action profile-setting-action--solo">
+                  <TxStatusBadge text="已启用" status="success" size="sm" />
                 </div>
               </div>
 
               <div class="profile-setting-card">
-                <label class="profile-setting-title">
-                  <TxCheckbox v-model="notificationSettingsForm.feishuEnabled" variant="checkmark" aria-label="飞书通知" />
-                  <span class="i-carbon-send profile-setting-icon profile-setting-icon--feishu" />
-                  飞书通知
-                </label>
-                <p>使用个人飞书机器人 Webhook，已保存值只显示脱敏文本。</p>
-                <div class="profile-setting-action">
-                  <TxInput v-model="notificationSettingsForm.feishuWebhookUrl" type="password" :placeholder="notificationSettingsForm.feishuWebhookMasked || 'https://open.feishu.cn/open-apis/bot/...'" />
-                  <TxStatusBadge :text="notificationSettingsForm.feishuEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.feishuEnabled ? 'success' : 'warning'" size="sm" />
+                <div class="profile-setting-title-row">
+                  <span class="i-carbon-notification profile-setting-icon profile-setting-icon--push" />
+                  <label class="profile-setting-title">
+                    浏览器 Push
+                  </label>
                 </div>
-              </div>
-
-              <div class="profile-setting-card">
-                <label class="profile-setting-title">
-                  <TxCheckbox v-model="notificationSettingsForm.browserPushEnabled" variant="checkmark" aria-label="浏览器 Push" />
-                  <span class="i-carbon-notification profile-setting-icon" />
-                  浏览器 Push
-                </label>
-                <p>当前权限：{{ notificationSettingsForm.permission }}；需要服务端 VAPID Key。</p>
+                <p>需要授予浏览器通知权限。当前权限：{{ notificationSettingsForm.permission }}。</p>
                 <div class="profile-setting-action">
-                  <TxStatusBadge :text="notificationSettingsForm.browserPushEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.browserPushEnabled ? 'success' : 'warning'" size="sm" />
                   <TxButton size="sm" variant="secondary" @click="startBrowserPush">
-                    注册 Push
+                    启用 Push
                   </TxButton>
+                  <label class="profile-setting-toggle">
+                    <TxCheckbox v-model="notificationSettingsForm.browserPushEnabled" variant="checkmark" aria-label="浏览器 Push" />
+                    <TxStatusBadge :text="notificationSettingsForm.browserPushEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.browserPushEnabled ? 'success' : 'warning'" size="sm" />
+                  </label>
                 </div>
               </div>
 
-              <div class="profile-setting-card profile-setting-card--profile">
-                <div class="profile-setting-title">
-                  <span class="i-carbon-user profile-setting-icon" />
-                  编辑资料
+              <div class="profile-setting-card">
+                <div class="profile-setting-title-row">
+                  <span class="i-carbon-link profile-setting-icon profile-setting-icon--feishu" />
+                  <label class="profile-setting-title">
+                    飞书通知
+                  </label>
                 </div>
-                <p>管理基本信息与安全偏好。</p>
-                <TxButton size="sm" variant="secondary" @click="openProfileDialog">
-                  编辑资料
-                </TxButton>
+                <p>使用飞书机器人 Webhook 接收通知，已保存值只显示脱敏文本。</p>
+                <div class="profile-setting-action profile-setting-action--webhook">
+                  <TxInput v-model="notificationSettingsForm.feishuWebhookUrl" type="password" :placeholder="notificationSettingsForm.feishuWebhookMasked || 'https://open.feishu.cn/open-apis/bot/...'" />
+                  <label class="profile-setting-toggle">
+                    <TxCheckbox v-model="notificationSettingsForm.feishuEnabled" variant="checkmark" aria-label="飞书通知" />
+                    <TxStatusBadge :text="notificationSettingsForm.feishuEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.feishuEnabled ? 'success' : 'warning'" size="sm" />
+                  </label>
+                </div>
               </div>
+            </div>
 
-              <div class="profile-setting-card profile-setting-card--profile">
-                <div class="profile-setting-title">
-                  <span class="i-carbon-task-add profile-setting-icon" />
-                  协作处理员
+            <div class="profile-account-settings">
+              <div class="profile-card-head profile-card-head--compact">
+                <div>
+                  <h3>账户管理</h3>
+                  <p>管理基本资料与协作处理员申请状态。</p>
                 </div>
-                <p>通过后可认领已审核通过的 Codex / Pro 交付任务，完成后由管理员复核奖励。</p>
-                <div class="profile-setting-action">
-                  <TxStatusBadge :text="collaborationApplicationStatus.text" :status="collaborationApplicationStatus.status" size="sm" />
+              </div>
+              <div class="profile-settings-grid profile-settings-grid--account">
+                <div class="profile-setting-card profile-setting-card--profile">
+                  <div class="profile-setting-title-row">
+                    <span class="i-carbon-user profile-setting-icon" />
+                    <div class="profile-setting-title">
+                      编辑资料
+                    </div>
+                  </div>
+                  <p>管理基本信息与安全偏好。</p>
+                  <div class="profile-setting-action profile-setting-action--solo">
+                    <TxButton size="sm" variant="secondary" @click="openProfileDialog">
+                      编辑资料
+                    </TxButton>
+                  </div>
                 </div>
-                <div v-if="currentUser?.role !== 'reviewer' && currentUser?.role !== 'admin'" class="mt-3 gap-3 grid">
-                  <RichTextEditor v-model="collaborationApplicationForm.reason" :min-height="120" placeholder="说明你的可协作方向、技术栈、可处理任务类型和时间安排" />
-                  <TxButton size="sm" variant="primary" :disabled="collaborationApplicationForm.loading || currentUserCollaborationApplication?.status === 'pending'" @click="submitCollaborationApplication">
-                    {{ collaborationApplicationForm.loading ? '提交中...' : currentUserCollaborationApplication?.status === 'pending' ? '等待审核' : '提交申请' }}
-                  </TxButton>
+
+                <div class="profile-setting-card profile-setting-card--profile profile-setting-card--wide">
+                  <div class="profile-setting-title-row">
+                    <span class="i-carbon-task-add profile-setting-icon" />
+                    <div class="profile-setting-title">
+                      协作处理员
+                    </div>
+                  </div>
+                  <p>通过后可认领已审核通过的 Codex / Pro 交付任务，完成后由管理员复核奖励。</p>
+                  <div class="profile-setting-action profile-setting-action--solo">
+                    <TxStatusBadge :text="collaborationApplicationStatus.text" :status="collaborationApplicationStatus.status" size="sm" />
+                  </div>
+                  <div v-if="currentUser?.role !== 'reviewer' && currentUser?.role !== 'admin'" class="profile-collaboration-form">
+                    <RichTextEditor v-model="collaborationApplicationForm.reason" :min-height="120" placeholder="说明你的可协作方向、技术栈、可处理任务类型和时间安排" />
+                    <TxButton size="sm" variant="primary" :disabled="collaborationApplicationForm.loading || currentUserCollaborationApplication?.status === 'pending'" @click="submitCollaborationApplication">
+                      {{ collaborationApplicationForm.loading ? '提交中...' : currentUserCollaborationApplication?.status === 'pending' ? '等待审核' : '提交申请' }}
+                    </TxButton>
+                  </div>
+                  <RichTextView v-if="currentUserCollaborationApplication?.reply" :content="currentUserCollaborationApplication.reply" class="rich-text-preview mt-3" />
                 </div>
-                <RichTextView v-if="currentUserCollaborationApplication?.reply" :content="currentUserCollaborationApplication.reply" class="rich-text-preview mt-3" />
               </div>
             </div>
           </TxTabItem>
@@ -850,6 +916,45 @@ onUnmounted(() => {
               </TxButton>
               <TxButton variant="primary" @click="saveProfile">
                 保存个人信息
+              </TxButton>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <Teleport to="body">
+      <Transition name="dialog-shell">
+        <div v-if="isEmailTestDialogOpen" class="profile-dialog-backdrop" @click.self="closeEmailTestDialog">
+          <div class="profile-dialog profile-dialog--email-test dialog-surface" role="dialog" aria-modal="true" aria-labelledby="profile-email-test-title">
+            <div class="profile-dialog-head">
+              <div>
+                <h3 id="profile-email-test-title">
+                  发送测试邮件
+                </h3>
+                <p>测试会使用真实邮件通道，发送成功后会消耗 5 积分。</p>
+              </div>
+              <TxButton variant="ghost" size="sm" aria-label="关闭测试邮件弹窗" :disabled="notificationSettingsForm.emailTesting" @click="closeEmailTestDialog">
+                <span class="i-carbon-close" />
+              </TxButton>
+            </div>
+
+            <div class="profile-dialog-body">
+              <div class="profile-email-test-summary">
+                <span>收件邮箱</span>
+                <strong>{{ notificationEmailTestAddress }}</strong>
+              </div>
+              <p class="profile-warning">
+                发送测试邮件会按邮箱通知规则扣除 5 积分；邮箱通知开关默认不启用，测试发送不会自动打开开关。
+              </p>
+            </div>
+
+            <div class="profile-dialog-actions">
+              <TxButton variant="secondary" :disabled="notificationSettingsForm.emailTesting" @click="closeEmailTestDialog">
+                取消
+              </TxButton>
+              <TxButton variant="primary" :disabled="notificationSettingsForm.emailTesting" @click="testEmailNotification">
+                {{ notificationSettingsForm.emailTesting ? '发送中...' : '确认发送并扣 5 积分' }}
               </TxButton>
             </div>
           </div>
@@ -1449,47 +1554,76 @@ onUnmounted(() => {
   padding-top: 0.8rem;
 }
 
+.profile-card-head--notifications {
+  align-items: center;
+  padding: 1.2rem 1.6rem 0.95rem;
+}
+
+.profile-account-settings {
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.62), rgba(255, 255, 255, 0.86));
+}
+
 .profile-settings-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.75rem;
-  padding: 0 1rem 1rem;
+  gap: 1rem;
+  padding: 0 1.6rem 1.35rem;
+}
+
+.profile-settings-grid--account {
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.25fr);
 }
 
 .profile-setting-card {
   display: grid;
   align-content: start;
-  gap: 0.55rem;
-  padding: 0.8rem;
+  gap: 0.85rem;
+  min-height: 10rem;
+  padding: 1.35rem;
+  border-color: rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.035);
+}
+
+.profile-setting-card--wide {
+  min-height: 0;
+}
+
+.profile-setting-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .profile-setting-title {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  color: #1e293b;
-  font-size: 14px;
+  color: #111827;
+  font-size: 1rem;
   font-weight: 950;
 }
 
 .profile-setting-icon {
   display: inline-grid;
+  flex: 0 0 auto;
   place-items: center;
   width: 2rem;
   height: 2rem;
-  border: 1px solid rgba(99, 102, 241, 0.12);
-  border-radius: 10px;
-  color: #2563eb;
-  background: #ffffff;
-  font-size: 1.15rem;
+  border: 0;
+  border-radius: 12px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 1.25rem;
 }
 
-.profile-setting-icon--email {
-  color: #3b82f6;
-}
-
-.profile-setting-icon--feishu {
-  color: #1d4ed8;
+.profile-setting-icon--email,
+.profile-setting-icon--feishu,
+.profile-setting-icon--inbox,
+.profile-setting-icon--push {
+  color: #4b5563;
 }
 
 .profile-setting-action {
@@ -1497,9 +1631,47 @@ onUnmounted(() => {
   margin-top: auto;
 }
 
+.profile-setting-action--solo {
+  justify-content: flex-start;
+}
+
+.profile-setting-action--webhook {
+  align-items: stretch;
+}
+
 .profile-setting-action :deep(.tx-input) {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.profile-setting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.profile-setting-link-button {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  color: #15803d;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.profile-setting-link-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.profile-collaboration-form {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.2rem;
 }
 
 .profile-table {
@@ -1735,7 +1907,8 @@ onUnmounted(() => {
   box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
 }
 
-.profile-dialog--recharge {
+.profile-dialog--recharge,
+.profile-dialog--email-test {
   width: min(100%, 28rem);
 }
 
@@ -1809,6 +1982,27 @@ onUnmounted(() => {
 .profile-status-line--strong {
   color: #4338ca;
   background: rgba(224, 231, 255, 0.7);
+}
+
+.profile-email-test-summary {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(99, 102, 241, 0.1);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.86);
+}
+
+.profile-email-test-summary span {
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.profile-email-test-summary strong {
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-weight: 950;
 }
 
 .profile-dialog-actions {
@@ -1932,6 +2126,15 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.dark .profile-account-settings {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.dark .profile-setting-link-button {
+  color: #86efac;
+}
+
 .dark .profile-wallet-panel {
   border-color: rgba(96, 165, 250, 0.24);
   background:
@@ -2034,6 +2237,15 @@ onUnmounted(() => {
 .dark .profile-status-line--strong {
   color: #c7d2fe;
   background: rgba(99, 102, 241, 0.14);
+}
+
+.dark .profile-email-test-summary {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dark .profile-email-test-summary strong {
+  color: #f8fafc;
 }
 
 @media (max-width: 1180px) {
