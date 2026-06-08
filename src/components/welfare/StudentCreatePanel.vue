@@ -57,6 +57,7 @@ const isCategorySuggestionsOpen = ref(false)
 const isGradeSuggestionsOpen = ref(false)
 const isSchoolSuggestionsOpen = ref(false)
 const studentDraftKey = 'welfare:student-draft'
+const studentRequestDraftKey = 'welfare:student-request-id'
 let categorySuggestionsCloseTimer: ReturnType<typeof setTimeout> | undefined
 let gradeSuggestionsCloseTimer: ReturnType<typeof setTimeout> | undefined
 let schoolSuggestionsCloseTimer: ReturnType<typeof setTimeout> | undefined
@@ -259,6 +260,31 @@ function normalizeSchoolQuery(value: string) {
     .replace(/[\s/\\:_\-()（）【】[\]{}.,，。·]+/g, '')
 }
 
+function createStudentRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    return crypto.randomUUID()
+
+  return `stu_req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function currentStudentRequestId() {
+  if (typeof window === 'undefined')
+    return createStudentRequestId()
+
+  const existing = window.localStorage.getItem(studentRequestDraftKey)?.trim()
+  if (existing)
+    return existing
+
+  const next = createStudentRequestId()
+  window.localStorage.setItem(studentRequestDraftKey, next)
+  return next
+}
+
+function clearStudentRequestId() {
+  if (typeof window !== 'undefined')
+    window.localStorage.removeItem(studentRequestDraftKey)
+}
+
 function onSubmitStudentVerification() {
   runSafely(async () => {
     if (!isSupplementMode.value && !isVerificationEntryOpen.value)
@@ -284,10 +310,14 @@ function onSubmitStudentVerification() {
       })
     }
     else {
-      await submitStudentVerification(payload)
+      await submitStudentVerification({
+        ...payload,
+        clientRequestId: currentStudentRequestId(),
+      })
     }
     resetStudentFiles()
     clearLocalDraft(studentDraftKey)
+    clearStudentRequestId()
     router.push('/dashboard/verification')
   }, isSupplementMode.value ? `${currentVerificationLabel.value}补充资料已提交，等待管理员继续审核` : `${currentVerificationLabel.value}已提交并扣除 ${STUDENT_REVIEW_FEE} 积分审核费`)
 }

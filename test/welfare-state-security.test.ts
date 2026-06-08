@@ -10,6 +10,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 const { createEpaySign } = await import('../src/worker/ldc-credit')
 const { createSessionCookie } = await import('../src/worker/session')
 const { appendPointTransaction, pointTransactionId } = await import('../src/worker/points')
+const { STUDENT_REVIEW_FEE } = await import('../src/composables/welfare')
 const { handleRechargeRequest } = await import('../src/worker/recharge')
 const { handleApplicationSubmitRequest, handleWelfareStateRequest, readWelfareState, writeWelfareState } = await import('../src/worker/welfare-state')
 
@@ -198,6 +199,12 @@ function createMemoryD1(initialState: WelfareState) {
             return { meta: { changes: 0 } }
           }
           if (query.includes('insert into point_transactions')) {
+            if (query.includes('where exists')) {
+              const expectedVersion = Number(this.values[9])
+              const expectedState = String(this.values[10])
+              if (storedVersion !== expectedVersion || JSON.stringify(storedState) !== expectedState)
+                return { meta: { changes: 0 } }
+            }
             if (pointTransactions.some(item => item.id === this.values[0]))
               return { meta: { changes: 0 } }
             pointTransactions.push({
@@ -239,6 +246,12 @@ function createMemoryD1(initialState: WelfareState) {
           return { results: [] }
         },
       }
+    },
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      const results = []
+      for (const statement of statements)
+        results.push(await statement.run())
+      return results
     },
   }
 }
@@ -676,6 +689,263 @@ describe('welfare state security', () => {
     expect(d1.queries.some(item => item.query.includes('insert into welfare_applications') && item.values[0] === payload.state.applications[0].id)).toBe(true)
   })
 
+  it('does not write student review point transactions when the state write loses CAS', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    d1.bumpVersionAfterNextVersionRead()
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        clientRequestId: 'student-race-1',
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '高校学生',
+        school: '测试大学',
+        notes: '<p>学生认证材料说明足够长。</p>',
+        attachments: [],
+      }),
+    }), env)
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toMatchObject({ code: 'STATE_VERSION_CONFLICT' })
+    expect(d1.pointTransactions).toHaveLength(0)
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.studentVerifications).toHaveLength(0)
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000)
+  })
+
+  it('requires an idempotency key for student verification charges', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '高校学生',
+        school: '测试大学',
+        notes: '<p>学生认证材料说明足够长。</p>',
+        attachments: [],
+      }),
+    }), env)
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toMatchObject({ error: '提交认证缺少幂等请求 ID，请刷新后重试' })
+    expect(d1.pointTransactions).toHaveLength(0)
+  })
+
+  it('keeps student verification submission idempotent for the same client request', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+    const body = {
+      clientRequestId: 'student-submit-1',
+      verificationType: 'student',
+      realName: '测试用户',
+      category: '高校学生',
+      school: '测试大学',
+      notes: '<p>学生认证材料说明足够长。</p>',
+      attachments: [],
+    }
+
+    const first = await handleWelfareStateRequest(new Request('https://example.com/api/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)
+    const second = await handleWelfareStateRequest(new Request('https://example.com/api/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    const firstPayload = await first.json() as { verificationId: string }
+    const secondPayload = await second.json() as { verificationId: string }
+    expect(secondPayload.verificationId).toBe(firstPayload.verificationId)
+    expect(d1.pointTransactions).toHaveLength(1)
+    expect(d1.pointTransactions[0]).toMatchObject({
+      id: pointTransactionId('student_review', firstPayload.verificationId),
+      user_id: 'user_1',
+      delta: -STUDENT_REVIEW_FEE,
+      type: 'spend',
+      ref_id: firstPayload.verificationId,
+    })
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.studentVerifications).toHaveLength(1)
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000 - STUDENT_REVIEW_FEE)
+  })
+
+  it('repairs orphaned student review charges without charging again', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+    const body = {
+      clientRequestId: 'student-orphan-charge-1',
+      verificationType: 'student',
+      realName: '测试用户',
+      category: '高校学生',
+      school: '测试大学',
+      notes: '<p>学生认证材料说明足够长。</p>',
+      attachments: [],
+    }
+
+    const first = await handleWelfareStateRequest(new Request('https://example.com/api/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)
+    expect(first.status).toBe(200)
+    const firstPayload = await first.json() as { verificationId: string }
+    expect(d1.pointTransactions).toHaveLength(1)
+
+    const orphanedState = await readWelfareState(env) as WelfareState
+    orphanedState.studentVerifications = []
+    await writeWelfareState(env, orphanedState)
+
+    const retry = await handleWelfareStateRequest(new Request('https://example.com/api/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }), env)
+
+    expect(retry.status).toBe(200)
+    await expect(retry.json()).resolves.toMatchObject({ verificationId: firstPayload.verificationId })
+    expect(d1.pointTransactions).toHaveLength(1)
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.studentVerifications).toHaveLength(1)
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000 - STUDENT_REVIEW_FEE)
+  })
+
+  it('refunds student review fees atomically and only once on approval', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const normalUser = user({ id: 'user_1', points: 1000 - STUDENT_REVIEW_FEE })
+    const verificationId = 'stu_existing'
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [admin, normalUser],
+      studentVerifications: [{
+        id: verificationId,
+        userId: 'user_1',
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '高校学生',
+        school: '测试大学',
+        notes: '<p>学生认证材料说明。</p>',
+        attachments: [],
+        status: 'pending',
+        reviewFee: STUDENT_REVIEW_FEE,
+        feeReturned: false,
+        createdAt: '2026-06-08T00:00:00.000Z',
+      }],
+    })
+    d1.pointTransactions.push({
+      id: pointTransactionId('student_review', verificationId),
+      user_id: 'user_1',
+      delta: -STUDENT_REVIEW_FEE,
+      type: 'spend',
+      reason: '学生认证审核费',
+      ref_id: verificationId,
+      balance_after: 1000 - STUDENT_REVIEW_FEE,
+      created_at: '2026-06-08T00:00:00.000Z',
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+    const reviewBody = JSON.stringify({ id: verificationId, status: 'approved', reply: '通过' })
+
+    const first = await handleWelfareStateRequest(new Request('https://example.com/api/admin/verifications/student/review', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: reviewBody,
+    }), env)
+    const second = await handleWelfareStateRequest(new Request('https://example.com/api/admin/verifications/student/review', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: reviewBody,
+    }), env)
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(d1.pointTransactions.filter(item => item.id === pointTransactionId('student_review_refund', verificationId))).toHaveLength(1)
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000)
+    expect(latest.users.find(item => item.id === 'user_1')?.profile.studentVerified).toBe(true)
+    expect(latest.studentVerifications[0]).toMatchObject({ status: 'approved', feeReturned: true })
+  })
+
+  it('absorbs orphaned student refund transactions without refunding twice', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const normalUser = user({ id: 'user_1', points: 1000 - STUDENT_REVIEW_FEE })
+    const verificationId = 'stu_orphan_refund'
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [admin, normalUser],
+      studentVerifications: [{
+        id: verificationId,
+        userId: 'user_1',
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '高校学生',
+        school: '测试大学',
+        notes: '<p>学生认证材料说明。</p>',
+        attachments: [],
+        status: 'pending',
+        reviewFee: STUDENT_REVIEW_FEE,
+        feeReturned: false,
+        createdAt: '2026-06-08T00:00:00.000Z',
+      }],
+    })
+    d1.pointTransactions.push(
+      {
+        id: pointTransactionId('student_review', verificationId),
+        user_id: 'user_1',
+        delta: -STUDENT_REVIEW_FEE,
+        type: 'spend',
+        reason: '学生认证审核费',
+        ref_id: verificationId,
+        balance_after: 1000 - STUDENT_REVIEW_FEE,
+        created_at: '2026-06-08T00:00:00.000Z',
+      },
+      {
+        id: pointTransactionId('student_review_refund', verificationId),
+        user_id: 'user_1',
+        delta: STUDENT_REVIEW_FEE,
+        type: 'refund',
+        reason: '学生认证通过返还审核费',
+        ref_id: verificationId,
+        balance_after: 1000,
+        created_at: '2026-06-08T00:01:00.000Z',
+      },
+    )
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/admin/verifications/student/review', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ id: verificationId, status: 'approved', reply: '通过' }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    expect(d1.pointTransactions.filter(item => item.id === pointTransactionId('student_review_refund', verificationId))).toHaveLength(1)
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000)
+    expect(latest.studentVerifications[0]).toMatchObject({ status: 'approved', feeReturned: true })
+  })
+
   it('keeps coupon snapshots when issuing check-in coupons', async () => {
     const d1 = createMemoryD1({
       ...state(),
@@ -742,6 +1012,57 @@ describe('welfare state security', () => {
     const payload = await stateResponse.json() as { state: WelfareState }
     expect(payload.state.users[0].points).toBe(1000)
     expect(payload.state.transactions).toEqual([])
+  })
+
+  it('ignores client point transactions during admin full-state saves', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const normalUser = user({ id: 'user_1', points: 1000 })
+    const d1 = createMemoryD1({ ...state(), users: [admin, normalUser] })
+    d1.pointTransactions.push({
+      id: 'tx_existing_balance',
+      user_id: 'user_1',
+      delta: 50,
+      type: 'grant',
+      reason: '已有服务端流水',
+      ref_id: null,
+      balance_after: 1050,
+      created_at: '2026-06-08T00:00:00.000Z',
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/admin/welfare/state', {
+      headers: { cookie },
+    }), env)
+    const current = await currentResponse.json() as { state: WelfareState, version: number }
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        version: current.version,
+        state: {
+          ...current.state,
+          siteBanner: { enabled: true, title: '公告', body: '保存业务字段' },
+          users: current.state.users.map(item => item.id === 'user_1' ? { ...item, points: 999999 } : item),
+          transactions: [{
+            id: 'tx_client_forged',
+            userId: 'user_1',
+            delta: 999999,
+            type: 'grant',
+            reason: '伪造客户端流水',
+            createdAt: '2026-06-08T00:01:00.000Z',
+          }],
+        },
+      }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    expect(d1.pointTransactions.map(item => item.id)).toEqual(['tx_existing_balance'])
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.siteBanner).toMatchObject({ enabled: true, title: '公告' })
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1050)
+    expect(latest.transactions).toEqual([])
   })
 
   it('serves segmented current-user read DTOs without leaking hidden users', async () => {

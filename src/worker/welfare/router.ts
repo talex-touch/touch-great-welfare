@@ -2,7 +2,6 @@ import type { WorkerEnv } from './core'
 import type { WelfareState } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
 import { dispatchWelfareStateChangeNotifications } from '../notifications'
-import { applyPointTransactionsFromClientState } from '../points'
 import { clearSessionCookie } from '../session'
 import {
   addAdminApplicationMessageAction,
@@ -82,8 +81,28 @@ function sessionLogoutResponse(request: Request) {
   return json({ ok: true }, 200, { 'set-cookie': clearSessionCookie(request) })
 }
 
+function preserveServerPointState(previousState: Partial<WelfareState>, nextState: unknown) {
+  if (!isRecord(nextState))
+    return
+
+  nextState.transactions = []
+  const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
+  const previousPointsByUserId = new Map(previousUsers.map(user => [user.id, user.points]))
+  if (!Array.isArray(nextState.users))
+    return
+
+  for (const user of nextState.users) {
+    if (!isRecord(user) || typeof user.id !== 'string')
+      continue
+
+    const points = previousPointsByUserId.get(user.id)
+    if (points !== undefined)
+      user.points = points
+  }
+}
+
 async function legacyFullStateSave(request: Request, env: WorkerEnv) {
-  const previousRecord = await readWelfareStateRecord(env)
+  const previousRecord = await readWelfareStateRecord(env, { syncPointBalances: 'all' })
   const previousState = previousRecord.state as Partial<WelfareState>
   const currentVersion = previousRecord.version
   const userId = await requestUserId(request, env)
@@ -105,7 +124,7 @@ async function legacyFullStateSave(request: Request, env: WorkerEnv) {
   assertStateShape(payload.state)
   const statePayload = payload.state
   const mergedSensitiveState = await mergeSensitiveWelfareState(previousState, statePayload, request, env)
-  await applyPointTransactionsFromClientState(env, previousState, mergedSensitiveState)
+  preserveServerPointState(previousState, mergedSensitiveState)
   const nextState = applyWelfareRetentionPolicy(mergedSensitiveState).state
   if (isRecord(nextState))
     delete nextState.currentUserId

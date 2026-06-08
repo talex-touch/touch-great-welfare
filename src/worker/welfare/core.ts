@@ -130,7 +130,7 @@ interface WriteWelfareStateOptions {
   expectedVersion?: number
 }
 
-type AtomicPointTransaction = Required<Pick<CreditTransaction, 'id' | 'userId' | 'delta' | 'type' | 'reason' | 'refId' | 'balanceAfter' | 'createdAt'>>
+type AtomicPointTransaction = Required<Pick<CreditTransaction, 'id' | 'userId' | 'delta' | 'type' | 'reason' | 'balanceAfter' | 'createdAt'>> & Pick<CreditTransaction, 'refId'>
 
 export class StateVersionConflictError extends Error {
   constructor() {
@@ -812,6 +812,20 @@ async function appendTrustedPointTransaction(env: WorkerEnv, state: unknown, inp
   await appendPointTransaction(env, input, state)
 }
 
+async function hasPointTransaction(env: WorkerEnv, id: string) {
+  await ensurePointTransactionSchema(env)
+  if (shouldUseD1(env)) {
+    const row = await env.LOCAL_DB!
+      .prepare('select id from point_transactions where id = ?1')
+      .bind(id)
+      .first<{ id: string }>()
+    return !!row
+  }
+
+  const result = await getPool(env).query<{ id: string }>('select id from point_transactions where id = $1', [id])
+  return !!result.rows[0]
+}
+
 export async function applyTrustedPointTransactionsFromState(env: WorkerEnv, previousState: unknown, nextState: unknown, userId: string) {
   if (!isRecord(previousState) || !isRecord(nextState))
     return
@@ -1459,8 +1473,10 @@ async function writeWelfareStateWithAtomicPointTransactions(
 ) {
   await ensureSchema(env)
   await ensurePointTransactionSchema(env)
+  await assertExpectedStateVersion(env, options.expectedVersion)
   sanitizeTransientStateTransactions(state)
   const storedState = await encodeStoredState(env, state)
+  const storedStateJson = JSON.stringify(storedState)
   const nextVersion = options.expectedVersion + 1
 
   if (shouldUseD1(env)) {
@@ -1474,16 +1490,16 @@ async function writeWelfareStateWithAtomicPointTransactions(
           set state = ?2, updated_at = current_timestamp, version = ?3
           where id = ?1 and version = ?4
         `)
-        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, options.expectedVersion),
+        .bind(STATE_KEY, storedStateJson, nextVersion, options.expectedVersion),
       ...pointTransactions.map(tx =>
         localDb
           .prepare(`
             insert into point_transactions (id, user_id, delta, type, reason, ref_id, balance_after, created_at)
             select ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-            where exists (select 1 from welfare_app_state where id = ?9 and version = ?10)
+            where exists (select 1 from welfare_app_state where id = ?9 and version = ?10 and state = ?11)
             on conflict (id) do nothing
           `)
-          .bind(tx.id, tx.userId, tx.delta, tx.type, tx.reason, tx.refId || null, tx.balanceAfter, tx.createdAt, STATE_KEY, nextVersion),
+          .bind(tx.id, tx.userId, tx.delta, tx.type, tx.reason, tx.refId || null, tx.balanceAfter, tx.createdAt, STATE_KEY, nextVersion, storedStateJson),
       ),
     ]
     const results = await localDb.batch(statements)
@@ -1503,7 +1519,7 @@ async function writeWelfareStateWithAtomicPointTransactions(
         where id = $1 and version = $3
         returning version
       `,
-      [STATE_KEY, JSON.stringify(storedState), options.expectedVersion],
+      [STATE_KEY, storedStateJson, options.expectedVersion],
     )
     const version = result.rows[0]?.version
     if (!version) {
@@ -2180,6 +2196,35 @@ function normalizeStudentEmail(value: unknown) {
 
 function assertEducationEmail(value: string) {
   assertEducationEmailAddress(value)
+}
+
+function normalizeClientRequestId(value: unknown) {
+  return typeof value === 'string' ? value.trim().slice(0, 128) : ''
+}
+
+async function studentVerificationIdForRequest(userId: string, clientRequestId: string) {
+  if (!clientRequestId)
+    return createId('stu')
+
+  const digest = await sha256Hex(`student-verification:${userId}:${clientRequestId}`)
+  return `stu_${digest.slice(0, 32)}`
+}
+
+function markWorkerEducationEmailVerified(verification: StudentVerification, verifiedAt: string, source: 'mail_auto' | 'admin_approved') {
+  if (!verification.educationEmail)
+    return
+
+  verification.educationEmailVerified = true
+  verification.educationEmailVerifiedAt ||= verifiedAt
+  verification.educationEmailVerificationSource ||= source
+}
+
+function positiveStudentReviewFee(verification: StudentVerification) {
+  const fee = Math.trunc(Number(verification.reviewFee ?? STUDENT_REVIEW_FEE))
+  if (!Number.isFinite(fee) || fee <= 0)
+    throw new Error('认证审核费无效')
+
+  return fee
 }
 
 function latestEducationEmailChallengeForState(state: Partial<WelfareState>, userId: string, email: string) {
@@ -2869,81 +2914,111 @@ export async function submitApplicationSupplementAction(request: Request, env: W
 }
 
 export async function submitStudentVerificationAction(request: Request, env: WorkerEnv) {
-  return commitCurrentUserAction(request, env, async (state, user, payload) => {
-    const input = payload as unknown as SubmitStudentPayload
-    const verificationType = normalizeVerificationType(input.verificationType)
-    const systemConfig = state.systemConfig
-    const feature = systemConfig?.verification?.[verificationType]
-    if (systemConfig && !systemConfig.siteEnabled)
-      throw new Error(systemConfig.siteClosedReason)
-    if (feature && !feature.enabled)
-      throw new Error(feature.reason || `${verificationTypeLabel(verificationType)}暂未开放`)
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
 
-    const realName = input.realName.trim()
-    if (!realName)
-      throw new Error('请填写真实姓名')
-    if (!input.category.trim())
-      throw new Error('请填写认证类目')
-    const notes = sanitizeWorkerRichText(input.notes)
-    if (isRichTextEmpty(notes))
-      throw new Error('请填写认证材料说明')
-    const educationEmail = input.educationEmail?.trim() ? normalizeStudentEmail(input.educationEmail) : undefined
-    if (educationEmail)
-      assertEducationEmail(educationEmail)
-    const attachments = attachmentsFromPayload(input.attachments)
-    if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
-      throw new Error('材料附件总大小不能超过 200MB')
-    assertCanCreateRequestForState(state, user.id)
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
+  const mutableState = state as Partial<WelfareState>
+  const originalState = cloneState(mutableState)
+  const user = stateUsers(mutableState).find(item => item.id === userId && item.accountStatus !== 'suspended')
+  if (!user)
+    throw new Error('请先登录')
+
+  const input = await readPayload(request) as unknown as SubmitStudentPayload
+  const clientRequestId = normalizeClientRequestId(input.clientRequestId)
+  if (!clientRequestId)
+    throw new Error('提交认证缺少幂等请求 ID，请刷新后重试')
+  const verificationId = await studentVerificationIdForRequest(user.id, clientRequestId)
+  const reviewTransactionId = transactionId('student_review', verificationId)
+  const existingVerification = ensureStudentVerifications(mutableState).find(item => item.id === verificationId)
+  if (existingVerification) {
+    if (existingVerification.userId !== user.id)
+      throw new Error('认证申请不存在')
+    return json({ ok: true, verificationId: existingVerification.id, version })
+  }
+  const reviewFeeAlreadyCharged = await hasPointTransaction(env, reviewTransactionId)
+
+  const verificationType = normalizeVerificationType(input.verificationType)
+  const systemConfig = mutableState.systemConfig
+  const feature = systemConfig?.verification?.[verificationType]
+  if (systemConfig && !systemConfig.siteEnabled)
+    throw new Error(systemConfig.siteClosedReason)
+  if (feature && !feature.enabled)
+    throw new Error(feature.reason || `${verificationTypeLabel(verificationType)}暂未开放`)
+
+  const realName = input.realName.trim()
+  if (!realName)
+    throw new Error('请填写真实姓名')
+  if (!input.category.trim())
+    throw new Error('请填写认证类目')
+  const notes = sanitizeWorkerRichText(input.notes)
+  if (isRichTextEmpty(notes))
+    throw new Error('请填写认证材料说明')
+  const educationEmail = input.educationEmail?.trim() ? normalizeStudentEmail(input.educationEmail) : undefined
+  if (educationEmail)
+    assertEducationEmail(educationEmail)
+  const attachments = attachmentsFromPayload(input.attachments)
+  if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+    throw new Error('材料附件总大小不能超过 200MB')
+  if (!reviewFeeAlreadyCharged) {
+    assertCanCreateRequestForState(mutableState, user.id)
     if (user.points < STUDENT_REVIEW_FEE)
       throw new Error('积分不足')
+  }
 
-    const emailChallenge = educationEmail
-      ? (state.educationEmailChallenges ?? []).find(item =>
-          item.id === input.educationEmailChallengeId
-          && item.userId === user.id
-          && item.email === educationEmail,
-        ) ?? latestEducationEmailChallengeForState(state, user.id, educationEmail)
-      : undefined
-    if (educationEmail)
-      assertVerifiedEducationEmailChallengeForState(emailChallenge, !!input.educationEmailVerified)
+  const emailChallenge = educationEmail
+    ? (mutableState.educationEmailChallenges ?? []).find(item =>
+        item.id === input.educationEmailChallengeId
+        && item.userId === user.id
+        && item.email === educationEmail,
+      ) ?? latestEducationEmailChallengeForState(mutableState, user.id, educationEmail)
+    : undefined
+  if (educationEmail)
+    assertVerifiedEducationEmailChallengeForState(emailChallenge, !!input.educationEmailVerified)
 
-    const createdAt = now()
-    const verification: StudentVerification = {
-      id: createId('stu'),
-      userId: user.id,
-      verificationType,
-      realName,
-      category: input.category.trim(),
-      school: input.school?.trim(),
-      identity: input.identity?.trim(),
-      grade: input.grade?.trim(),
-      educationLevel: input.educationLevel?.trim(),
-      educationEmail,
-      educationEmailVerified: !!emailChallenge?.verifiedAt,
-      educationEmailVerifiedAt: emailChallenge?.verifiedAt,
-      educationEmailVerificationSource: emailChallenge?.verifiedAt ? 'mail_auto' : undefined,
-      educationEmailChallengeId: emailChallenge?.id,
-      notes,
-      attachments,
-      status: 'pending',
-      reviewFee: STUDENT_REVIEW_FEE,
-      feeReturned: false,
-      createdAt,
-    }
-    ensureStudentVerifications(state).unshift(verification)
-    if (emailChallenge)
-      emailChallenge.submittedAt = verification.createdAt
-    await appendTrustedPointTransaction(env, state, {
-      id: transactionId('student_review', verification.id),
-      userId: user.id,
-      delta: -STUDENT_REVIEW_FEE,
-      type: 'spend',
-      reason: `${verificationTypeLabel(verificationType)}审核费`,
-      refId: verification.id,
-      createdAt,
-    })
-    return { verificationId: verification.id }
-  })
+  const createdAt = now()
+  const balanceAfter = reviewFeeAlreadyCharged ? user.points : user.points - STUDENT_REVIEW_FEE
+  const verification: StudentVerification = {
+    id: verificationId,
+    userId: user.id,
+    verificationType,
+    realName,
+    category: input.category.trim(),
+    school: input.school?.trim(),
+    identity: input.identity?.trim(),
+    grade: input.grade?.trim(),
+    educationLevel: input.educationLevel?.trim(),
+    educationEmail,
+    educationEmailVerified: !!emailChallenge?.verifiedAt,
+    educationEmailVerifiedAt: emailChallenge?.verifiedAt,
+    educationEmailVerificationSource: emailChallenge?.verifiedAt ? 'mail_auto' : undefined,
+    educationEmailChallengeId: emailChallenge?.id,
+    notes,
+    attachments,
+    status: 'pending',
+    reviewFee: STUDENT_REVIEW_FEE,
+    feeReturned: false,
+    createdAt,
+  }
+  user.points = balanceAfter
+  ensureStudentVerifications(mutableState).unshift(verification)
+  if (emailChallenge)
+    emailChallenge.submittedAt = verification.createdAt
+
+  const result = reviewFeeAlreadyCharged
+    ? await commitActionState(env, originalState, mutableState, version)
+    : await commitActionStateWithPointTransactions(env, originalState, mutableState, version, [{
+        id: reviewTransactionId,
+        userId: user.id,
+        delta: -STUDENT_REVIEW_FEE,
+        type: 'spend',
+        reason: `${verificationTypeLabel(verificationType)}审核费`,
+        refId: verification.id,
+        balanceAfter,
+        createdAt,
+      }])
+  return json({ ok: true, verificationId: verification.id, ...stateVersionPayload(result.version) })
 }
 
 export async function supplementStudentVerificationAction(request: Request, env: WorkerEnv) {
@@ -3898,52 +3973,78 @@ export async function addAdminApplicationMessageAction(request: Request, env: Wo
 }
 
 export async function reviewAdminStudentVerificationAction(request: Request, env: WorkerEnv) {
-  return commitAdminStateAction(request, env, async (state, _admin, payload) => {
-    const verification = ensureStudentVerifications(state).find(item => item.id === payload.id)
-    if (!verification)
-      throw new Error('认证申请不存在')
-    if (verification.status !== 'pending')
-      throw new Error('该认证申请已经处理')
-    const decision = payload.status
-    const reply = sanitizeWorkerRichText(payload.reply)
-    const reviewedAt = now()
-    if (decision === 'approved') {
-      verification.status = 'approved'
-      verification.reply = richTextToPlainText(reply) ? reply : '认证通过，审核积分已返还。'
-      verification.reviewedAt = reviewedAt
-      verification.feeReturned = true
-      verification.educationEmailVerified = verification.educationEmailVerified || !!verification.educationEmail
-      verification.educationEmailVerifiedAt ||= verification.educationEmail ? reviewedAt : undefined
-      verification.educationEmailVerificationSource ||= verification.educationEmail ? 'admin_approved' : undefined
-      const target = stateUsers(state).find(item => item.id === verification.userId)
-      if (target && normalizeVerificationType(verification.verificationType) === 'student')
-        target.profile.studentVerified = true
-      await appendPointTransaction(env, {
-        id: transactionId('student_review_refund', verification.id),
-        userId: verification.userId,
-        delta: verification.reviewFee,
-        type: 'refund',
-        reason: `${verificationTypeLabel(normalizeVerificationType(verification.verificationType))}通过返还审核费`,
-        refId: verification.id,
-        createdAt: reviewedAt,
-      }, state)
-      return { verificationId: verification.id }
-    }
-    if (decision === 'needs_supplement') {
-      verification.status = 'needs_supplement'
-      verification.reply = richTextToPlainText(reply) ? reply : '材料不足，请补充有效证明后继续审核。'
-      verification.reviewedAt = reviewedAt
-      verification.supplementRequestedAt = reviewedAt
-      return { verificationId: verification.id }
-    }
-    if (decision === 'rejected') {
-      verification.status = 'rejected'
-      verification.reply = richTextToPlainText(reply) ? reply : '材料不足，审核费不返还。'
-      verification.reviewedAt = reviewedAt
-      return { verificationId: verification.id }
-    }
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
+  const admin = await authenticatedUser(request, env, state)
+  assertAdminUser(admin)
+
+  const payload = await readPayload(request) as Record<string, unknown>
+  const verification = ensureStudentVerifications(state).find(item => item.id === payload.id)
+  if (!verification)
+    throw new Error('认证申请不存在')
+
+  const decision = payload.status
+  if (decision !== 'approved' && decision !== 'needs_supplement' && decision !== 'rejected')
     throw new Error('认证审核结果无效')
-  })
+  if (verification.status !== 'pending') {
+    if (verification.status === decision)
+      return json({ ok: true, verificationId: verification.id, version: record.version })
+    throw new Error('该认证申请已经处理')
+  }
+
+  await syncUserPointBalancesFromLedger(env, state, [verification.userId])
+  const originalState = cloneState(state)
+  const reply = sanitizeWorkerRichText(payload.reply)
+  const reviewedAt = now()
+  const pointTransactions: AtomicPointTransaction[] = []
+
+  if (decision === 'approved') {
+    verification.status = 'approved'
+    verification.reply = richTextToPlainText(reply) ? reply : '认证通过，审核积分已返还。'
+    verification.reviewedAt = reviewedAt
+    markWorkerEducationEmailVerified(verification, reviewedAt, 'admin_approved')
+    const target = stateUsers(state).find(item => item.id === verification.userId)
+    if (!target)
+      throw new Error('申请用户不存在')
+
+    if (!verification.feeReturned) {
+      const reviewFee = positiveStudentReviewFee(verification)
+      verification.feeReturned = true
+      const refundTransactionId = transactionId('student_review_refund', verification.id)
+      if (!(await hasPointTransaction(env, refundTransactionId))) {
+        const balanceAfter = target.points + reviewFee
+        target.points = balanceAfter
+        pointTransactions.push({
+          id: refundTransactionId,
+          userId: verification.userId,
+          delta: reviewFee,
+          type: 'refund',
+          reason: `${verificationTypeLabel(normalizeVerificationType(verification.verificationType))}通过返还审核费`,
+          refId: verification.id,
+          balanceAfter,
+          createdAt: reviewedAt,
+        })
+      }
+    }
+    if (normalizeVerificationType(verification.verificationType) === 'student')
+      target.profile.studentVerified = true
+  }
+  else if (decision === 'needs_supplement') {
+    verification.status = 'needs_supplement'
+    verification.reply = richTextToPlainText(reply) ? reply : '材料不足，请补充有效证明后继续审核。'
+    verification.reviewedAt = reviewedAt
+    verification.supplementRequestedAt = reviewedAt
+  }
+  else {
+    verification.status = 'rejected'
+    verification.reply = richTextToPlainText(reply) ? reply : '材料不足，审核费不返还。'
+    verification.reviewedAt = reviewedAt
+  }
+
+  const result = pointTransactions.length
+    ? await commitActionStateWithPointTransactions(env, originalState, state, record.version, pointTransactions)
+    : await commitActionState(env, originalState, state, record.version)
+  return json({ ok: true, verificationId: verification.id, ...stateVersionPayload(result.version) })
 }
 
 export async function revokeAdminStudentVerificationAction(request: Request, env: WorkerEnv) {
