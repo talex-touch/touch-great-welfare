@@ -838,9 +838,9 @@ export const BASE_REQUEST_COST: Record<RequestKind, number> = {
 }
 
 export const ACTIVITY_DISCOUNT_RATE = 0.01
-export const ACTIVITY_DAYS = 7
-export const ACTIVITY_START_AT = '2026-06-01T00:00:00.000Z'
-export const ACTIVITY_END_AT = '2026-06-08T00:00:00.000Z'
+export const ACTIVITY_DAYS = 8
+export const ACTIVITY_START_AT = '2026-06-01T00:00:00+08:00'
+export const ACTIVITY_END_AT = '2026-06-09T00:00:00+08:00'
 export const ACTIVITY_NAME = '限时 0.1 折'
 export const LLM_API_BUDGET_ACTIVITY_TIERS = [
   { minBudgetUsd: 500, discountRate: 1 },

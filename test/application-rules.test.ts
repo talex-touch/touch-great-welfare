@@ -45,8 +45,9 @@ describe('application billing rules', async () => {
     expect(calculateRejectionReviewFee(3200)).toBe(300)
   })
 
-  it('applies the 7-day 0.1 discount activity to application prices', () => {
+  it('applies the 0.1 discount activity through June 8 in Beijing time', () => {
     expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_START_AT)).toBe(120)
+    expect(calculateActivityPrice(BASE_REQUEST_COST.pro, '2026-06-08T23:59:59+08:00')).toBe(120)
     expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_END_AT)).toBe(12000)
   })
 
@@ -60,6 +61,7 @@ describe('application billing rules', async () => {
     expect(calculateLlmApiBudgetActivityPrice(cost100, 100, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost100 * 0.05))
     expect(calculateLlmApiBudgetActivityPrice(cost300, 300, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost300 * 0.07))
     expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_START_AT)).toBe(cost500)
+    expect(calculateLlmApiBudgetActivityPrice(cost99, 99, undefined, '2026-06-08T23:59:59+08:00')).toBe(Math.ceil(cost99 * 0.01))
     expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_END_AT)).toBe(cost500)
   })
 

@@ -469,6 +469,8 @@ function itemDiscountedEstimate(item: ResourceDraftItem) {
 
 const totalUndiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemUndiscountedEstimate(item), 0))
 const totalDiscountedEstimate = computed(() => resourceApplicationItems.value.reduce((sum, item) => sum + itemDiscountedEstimate(item), 0))
+const activityDiscountAmount = computed(() => Math.max(0, totalUndiscountedEstimate.value - totalDiscountedEstimate.value))
+const hasActivityDiscount = computed(() => activityDiscountAmount.value > 0)
 const selectedResourceCoupon = computed(() => availableResourceCoupons.value.find(coupon => coupon.id === resourceApplicationForm.selectedCouponId))
 const couponDiscountAmount = computed(() => {
   if (!selectedResourceCoupon.value)
@@ -1527,10 +1529,10 @@ onBeforeUnmount(() => {
                     <span>原价合计</span>
                     <b>{{ formatPoints(totalUndiscountedEstimate) }}</b>
                   </div>
-                  <div class="is-discount">
+                  <div class="is-discount" :class="{ 'is-muted': !hasActivityDiscount }">
                     <span class="order-total-label">
-                      <i class="order-benefit-tag">限时福利</i>
-                      {{ checkoutActivityLabel }} 后价格
+                      <i v-if="hasActivityDiscount" class="order-benefit-tag">限时福利</i>
+                      {{ hasActivityDiscount ? `${checkoutActivityLabel} 后价格` : '暂无限时福利' }}
                     </span>
                     <b>{{ formatPoints(totalDiscountedEstimate) }}</b>
                   </div>
