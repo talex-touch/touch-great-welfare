@@ -1,4 +1,4 @@
-import type { User, WelfareState } from '../src/composables/welfare'
+import type { User } from '../src/composables/welfare'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.stubGlobal('fetch', vi.fn(async () =>
@@ -551,32 +551,12 @@ describe('application policy', () => {
     expect(store.state.transactions).toHaveLength(1)
   })
 
-  it('refreshes state before submitting student verification so stale tabs cannot overspend', async () => {
+  it('relies on the submit action to reject stale student verification balances', async () => {
     const store = useWelfareStore()
     const { useWelfareUiState } = await import('../src/composables/welfare-ui')
     const ui = useWelfareUiState()
-    const remoteState: WelfareState = {
-      ...store.state,
-      users: [user({ points: 0 })],
-      currentUserId: 'user_1',
-      studentVerifications: [],
-      transactions: [{
-        id: 'tx_recharge_spent',
-        userId: 'user_1',
-        delta: -STUDENT_REVIEW_FEE,
-        type: 'spend',
-        reason: '学生认证审核费',
-        refId: 'stu_previous',
-        createdAt: '2026-06-02T08:00:00.000Z',
-      }],
-    }
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockClear()
-    fetchMock.mockImplementationOnce(async () =>
-      new Response(JSON.stringify({ state: remoteState, currentUserId: 'user_1', version: 1 }), {
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
     fetchMock.mockImplementationOnce(async () =>
       new Response(JSON.stringify({ error: '积分不足' }), {
         status: 500,
@@ -592,10 +572,10 @@ describe('application policy', () => {
       notes: '<p>已上传学生证和校园材料。</p>',
     })).rejects.toThrow('积分不足')
 
-    expect(store.state.users[0].points).toBe(0)
+    expect(store.state.users[0].points).toBe(STUDENT_REVIEW_FEE)
     expect(store.state.studentVerifications).toHaveLength(0)
-    expect(store.state.transactions).toHaveLength(1)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(store.state.transactions).toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('normalizes missing verification types as student', () => {

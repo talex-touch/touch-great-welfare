@@ -534,6 +534,8 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
 
     for (const statement of statements)
       await env.LOCAL_DB!.prepare(statement).run()
+    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'application_id', 'text')
+    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'item_id', 'text')
     const indexStatements = [
       'create index if not exists idx_database_resource_bindings_user_created on database_resource_bindings (user_id, created_at desc, id desc)',
       'create index if not exists idx_database_resource_bindings_item on database_resource_bindings (application_id, item_id)',
@@ -570,8 +572,6 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'status', 'text not null default \'active\'')
     await addD1ColumnIfMissing(env, 'ai_temporary_keys', 'provider', 'text not null default \'newapi\'')
     await addD1ColumnIfMissing(env, 'sub2api_config', 'database_url_encrypted', 'text')
-    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'application_id', 'text')
-    await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'item_id', 'text')
     await addD1ColumnIfMissing(env, 'database_provision_config', 'onepanel_base_url', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'database_provision_config', 'onepanel_api_key_encrypted', 'text')
     await addD1ColumnIfMissing(env, 'notification_deliveries', 'provider', 'text not null default \'\'')

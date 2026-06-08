@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { StudentVerification, VerificationType } from '~/composables/welfare'
-import { TxButton, TxCard, TxInput, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxDrawer, TxInput, TxStatusBadge, TxTabItem, TxTabs, TxTag } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -79,6 +79,13 @@ const filteredPendingStudentVerifications = computed(() => pendingStudentVerific
   ])))
 const pendingPagination = computed(() => paginateRows(filteredPendingStudentVerifications.value, pendingFilters))
 const selectedVerification = computed(() => sortedStudentVerifications.value.find(item => item.id === selectedVerificationId.value))
+const isVerificationDrawerOpen = computed({
+  get: () => !!selectedVerification.value,
+  set: (visible) => {
+    if (!visible)
+      closeVerificationDrawer()
+  },
+})
 
 watch(isAdmin, (canReview) => {
   if (!canReview && activeSection.value === 'review')
@@ -545,100 +552,108 @@ onMounted(() => {
       </TxCard>
     </template>
 
-    <Teleport to="body">
-      <Transition name="admin-drawer">
-        <div v-if="selectedVerification" class="admin-drawer-shell" @click.self="closeVerificationDrawer">
-          <aside class="admin-user-drawer verification-review-drawer" role="dialog" aria-modal="true" aria-labelledby="verification-review-drawer-title">
-            <div class="admin-drawer-header">
-              <div class="min-w-0">
-                <div id="verification-review-drawer-title" class="text-lg fw-900 flex gap-2 items-center">
-                  <span :class="selectedVerification.verificationType === 'frontline' ? 'i-carbon-campsite' : 'i-carbon-education'" />
-                  {{ selectedVerification.realName }} · {{ verificationTypeLabel(selectedVerification.verificationType) }}
-                </div>
-                <div class="text-sm text-slate-500 leading-6 mt-2 break-all dark:text-slate-400">
-                  {{ userName(selectedVerification.userId) }} · {{ selectedVerification.category }} · {{ formatDate(selectedVerification.createdAt) }} 提交
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-2 items-center">
-                <TxStatusBadge :text="verificationStatusText(selectedVerification.status)" :status="statusTone(selectedVerification.status)" />
-                <TxButton size="sm" variant="secondary" aria-label="关闭认证详情" @click="closeVerificationDrawer">
-                  关闭
-                </TxButton>
-              </div>
+    <TxDrawer
+      v-model:visible="isVerificationDrawerOpen"
+      class="verification-review-drawer-host"
+      direction="right"
+      size="min(860px, 92vw)"
+      title="认证审核"
+      mask-effect="blur"
+      @close="closeVerificationDrawer"
+    >
+      <template v-if="selectedVerification" #header>
+        <div class="admin-drawer-header">
+          <div class="min-w-0">
+            <div id="verification-review-drawer-title" class="text-lg fw-900 flex gap-2 items-center">
+              <span :class="selectedVerification.verificationType === 'frontline' ? 'i-carbon-campsite' : 'i-carbon-education'" />
+              {{ selectedVerification.realName }} · {{ verificationTypeLabel(selectedVerification.verificationType) }}
             </div>
-
-            <div class="verification-review-grid mt-5">
-              <div class="application-detail-stat">
-                <span>{{ verificationOrganizationLabel(selectedVerification.verificationType) }}</span>
-                <b>{{ selectedVerification.school || '-' }}</b>
-              </div>
-              <div class="application-detail-stat">
-                <span>{{ selectedVerification.verificationType === 'frontline' ? '服务周期' : '年级' }}</span>
-                <b>{{ selectedVerification.grade || '-' }}</b>
-              </div>
-              <div class="application-detail-stat">
-                <span>审核费</span>
-                <b>{{ selectedVerification.reviewFee || pricingSummary.studentReviewFee }} 积分</b>
-              </div>
-              <div class="application-detail-stat">
-                <span>云端保留至</span>
-                <b>{{ formatRetentionExpiry(selectedVerification.createdAt) }}</b>
-              </div>
+            <div class="text-sm text-slate-500 leading-6 mt-2 break-all dark:text-slate-400">
+              {{ userName(selectedVerification.userId) }} · {{ selectedVerification.category }} · {{ formatDate(selectedVerification.createdAt) }} 提交
             </div>
-
-            <section class="verification-detail-section mt-5">
-              <h3>认证信息</h3>
-              <div class="verification-review-tags">
-                <TxTag :label="selectedVerification.identity || '未填身份'" color="#334155" background="rgba(100,116,139,.12)" />
-                <TxTag v-if="selectedVerification.educationLevel" :label="selectedVerification.educationLevel" color="#315244" background="rgba(49,82,68,.12)" />
-                <TxTag v-if="selectedVerification.educationEmail" :label="selectedVerification.educationEmail" color="#0369a1" background="rgba(14,165,233,.14)" />
-                <TxTag v-if="selectedVerification.educationEmail" :label="educationEmailUserLabel(selectedVerification.educationEmail, !!selectedVerification.educationEmailVerified)" color="#047857" background="rgba(16,185,129,.14)" />
-                <TxTag v-if="selectedVerification.educationEmailVerified" :label="educationEmailVerificationLabel(selectedVerification.educationEmailVerificationSource)" color="#047857" background="rgba(16,185,129,.14)" />
-                <TxTag v-if="selectedVerification.educationEmailVerified && selectedVerification.educationEmail" :label="educationEmailAdminRecommendationLabel(selectedVerification.educationEmail)" color="#92400e" background="rgba(251,191,36,.18)" />
-                <TxTag :label="`${selectedVerification.attachments.length} 个材料`" color="#854d0e" background="rgba(250,204,21,.18)" />
-              </div>
-              <p v-if="selectedVerification.educationEmail" class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
-                管理员建议：{{ educationEmailAdminRecommendationLabel(selectedVerification.educationEmail) }} · {{ educationEmailReasonText(selectedVerification.educationEmail) }}
-              </p>
-            </section>
-
-            <section class="verification-detail-section mt-4">
-              <h3>材料说明</h3>
-              <RichTextView :content="selectedVerification.notes" class="rich-text-preview" />
-            </section>
-
-            <section class="verification-detail-section mt-4">
-              <h3>附件材料</h3>
-              <div v-if="!selectedVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
-                暂无附件。
-              </div>
-              <VerificationAttachmentGrid v-else :files="selectedVerification.attachments" />
-            </section>
-
-            <section class="verification-detail-section mt-4">
-              <h3>{{ selectedVerification.status === 'pending' ? '审核意见' : '审核回复' }}</h3>
-              <RichTextEditor
-                v-if="selectedVerification.status === 'pending'"
-                v-model="reviewDrafts[selectedVerification.id]"
-                :min-height="150"
-                :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`"
-              />
-              <RichTextView v-else :content="selectedVerification.reply || '暂无回复。'" class="rich-text-preview" />
-              <div v-if="selectedVerification.status === 'pending'" class="mt-4 flex flex-wrap gap-3">
-                <TxButton variant="primary" @click="onApproveStudent(selectedVerification.id)">
-                  通过并返还
-                </TxButton>
-                <TxButton variant="secondary" @click="onRequestStudentSupplement(selectedVerification.id)">
-                  要求补充资料
-                </TxButton>
-                <TxButton variant="danger" @click="onRejectStudent(selectedVerification.id)">
-                  退回
-                </TxButton>
-              </div>
-            </section>
-          </aside>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center">
+            <TxStatusBadge :text="verificationStatusText(selectedVerification.status)" :status="statusTone(selectedVerification.status)" />
+            <TxButton size="sm" variant="secondary" aria-label="关闭认证详情" @click="closeVerificationDrawer">
+              关闭
+            </TxButton>
+          </div>
         </div>
-      </Transition>
-    </Teleport>
+      </template>
+
+      <template v-if="selectedVerification">
+        <div class="verification-review-drawer">
+          <div class="verification-review-grid mt-5">
+            <div class="application-detail-stat">
+              <span>{{ verificationOrganizationLabel(selectedVerification.verificationType) }}</span>
+              <b>{{ selectedVerification.school || '-' }}</b>
+            </div>
+            <div class="application-detail-stat">
+              <span>{{ selectedVerification.verificationType === 'frontline' ? '服务周期' : '年级' }}</span>
+              <b>{{ selectedVerification.grade || '-' }}</b>
+            </div>
+            <div class="application-detail-stat">
+              <span>审核费</span>
+              <b>{{ selectedVerification.reviewFee || pricingSummary.studentReviewFee }} 积分</b>
+            </div>
+            <div class="application-detail-stat">
+              <span>云端保留至</span>
+              <b>{{ formatRetentionExpiry(selectedVerification.createdAt) }}</b>
+            </div>
+          </div>
+
+          <section class="verification-detail-section mt-5">
+            <h3>认证信息</h3>
+            <div class="verification-review-tags">
+              <TxTag :label="selectedVerification.identity || '未填身份'" color="#334155" background="rgba(100,116,139,.12)" />
+              <TxTag v-if="selectedVerification.educationLevel" :label="selectedVerification.educationLevel" color="#315244" background="rgba(49,82,68,.12)" />
+              <TxTag v-if="selectedVerification.educationEmail" :label="selectedVerification.educationEmail" color="#0369a1" background="rgba(14,165,233,.14)" />
+              <TxTag v-if="selectedVerification.educationEmail" :label="educationEmailUserLabel(selectedVerification.educationEmail, !!selectedVerification.educationEmailVerified)" color="#047857" background="rgba(16,185,129,.14)" />
+              <TxTag v-if="selectedVerification.educationEmailVerified" :label="educationEmailVerificationLabel(selectedVerification.educationEmailVerificationSource)" color="#047857" background="rgba(16,185,129,.14)" />
+              <TxTag v-if="selectedVerification.educationEmailVerified && selectedVerification.educationEmail" :label="educationEmailAdminRecommendationLabel(selectedVerification.educationEmail)" color="#92400e" background="rgba(251,191,36,.18)" />
+              <TxTag :label="`${selectedVerification.attachments.length} 个材料`" color="#854d0e" background="rgba(250,204,21,.18)" />
+            </div>
+            <p v-if="selectedVerification.educationEmail" class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
+              管理员建议：{{ educationEmailAdminRecommendationLabel(selectedVerification.educationEmail) }} · {{ educationEmailReasonText(selectedVerification.educationEmail) }}
+            </p>
+          </section>
+
+          <section class="verification-detail-section mt-4">
+            <h3>材料说明</h3>
+            <RichTextView :content="selectedVerification.notes" class="rich-text-preview" />
+          </section>
+
+          <section class="verification-detail-section mt-4">
+            <h3>附件材料</h3>
+            <div v-if="!selectedVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
+              暂无附件。
+            </div>
+            <VerificationAttachmentGrid v-else :files="selectedVerification.attachments" />
+          </section>
+
+          <section class="verification-detail-section mt-4">
+            <h3>{{ selectedVerification.status === 'pending' ? '审核意见' : '审核回复' }}</h3>
+            <RichTextEditor
+              v-if="selectedVerification.status === 'pending'"
+              v-model="reviewDrafts[selectedVerification.id]"
+              :min-height="150"
+              :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`"
+            />
+            <RichTextView v-else :content="selectedVerification.reply || '暂无回复。'" class="rich-text-preview" />
+            <div v-if="selectedVerification.status === 'pending'" class="mt-4 flex flex-wrap gap-3">
+              <TxButton variant="primary" @click="onApproveStudent(selectedVerification.id)">
+                通过并返还
+              </TxButton>
+              <TxButton variant="secondary" @click="onRequestStudentSupplement(selectedVerification.id)">
+                要求补充资料
+              </TxButton>
+              <TxButton variant="danger" @click="onRejectStudent(selectedVerification.id)">
+                退回
+              </TxButton>
+            </div>
+          </section>
+        </div>
+      </template>
+    </TxDrawer>
   </section>
 </template>

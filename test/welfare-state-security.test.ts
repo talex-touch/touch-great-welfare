@@ -107,6 +107,7 @@ function dateKeyOffset(days: number) {
 function createMemoryD1(initialState: WelfareState) {
   let storedState: unknown = initialState
   let storedVersion = 1
+  let storedMutationId = ''
   let bumpVersionAfterNextVersionRead = false
   const pointTransactions: Record<string, unknown>[] = []
   const queries: Array<{ method: 'all' | 'first' | 'run', query: string, values: unknown[] }> = []
@@ -174,11 +175,13 @@ function createMemoryD1(initialState: WelfareState) {
 
             storedState = JSON.parse(String(this.values[1])) as unknown
             storedVersion = Number(this.values[2] || storedVersion + 1)
+            storedMutationId = typeof this.values[4] === 'string' ? this.values[4] : storedMutationId
             return { meta: { changes: 1 } }
           }
           if (query.includes('insert into welfare_app_state')) {
             storedState = JSON.parse(String(this.values[1])) as unknown
             storedVersion = Number(this.values[2] || storedVersion + 1)
+            storedMutationId = typeof this.values[3] === 'string' ? this.values[3] : storedMutationId
             return { meta: { changes: 1 } }
           }
           if (query.includes('insert into recharge_orders')) {
@@ -206,8 +209,8 @@ function createMemoryD1(initialState: WelfareState) {
           if (query.includes('insert into point_transactions')) {
             if (query.includes('where exists')) {
               const expectedVersion = Number(this.values[9])
-              const expectedState = String(this.values[10])
-              if (storedVersion !== expectedVersion || JSON.stringify(storedState) !== expectedState)
+              const expectedMutationId = String(this.values[10])
+              if (storedVersion !== expectedVersion || storedMutationId !== expectedMutationId)
                 return { meta: { changes: 0 } }
             }
             if (pointTransactions.some(item => item.id === this.values[0]))
@@ -1083,6 +1086,8 @@ describe('welfare state security', () => {
     expect(first.status).toBe(200)
     expect(second.status).toBe(200)
     expect(d1.pointTransactions.filter(item => item.id === pointTransactionId('student_review_refund', verificationId))).toHaveLength(1)
+    const guardedInsert = d1.queries.find(item => item.query.includes('insert into point_transactions') && item.query.includes('mutation_id'))
+    expect(guardedInsert?.values[10]).toMatch(/^mut_/)
 
     const latest = await readWelfareState(env) as WelfareState
     expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000)

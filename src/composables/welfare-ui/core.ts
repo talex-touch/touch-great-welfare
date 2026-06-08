@@ -2804,12 +2804,12 @@ export function useWelfareUiState() {
     return refreshedUser.points
   }
 
-  async function refreshPointTransactions(options: Parameters<typeof loadPointTransactions>[0] & { scope?: 'current' | 'admin' } = {}) {
+  async function refreshPointTransactions(options: Parameters<typeof loadPointTransactions>[0] & { scope?: 'current' | 'admin', reloadState?: boolean } = {}) {
     const user = welfare.currentUser.value
     if (!user)
       return
 
-    const { scope = 'current', ...query } = options
+    const { scope = 'current', reloadState = true, ...query } = options
     const shouldLoadAllPages = scope === 'admin'
     pointTransactionSummary.loading = true
     pointTransactionSummary.message = ''
@@ -2841,7 +2841,8 @@ export function useWelfareUiState() {
       if (scope === 'current') {
         pointTransactionSummary.balance = firstResult.balance
         pointTransactionSummary.balanceUserId = user.id
-        await welfare.reloadWelfareState()
+        if (reloadState)
+          await welfare.reloadWelfareState()
       }
     }
     catch (error) {
@@ -2970,34 +2971,51 @@ export function useWelfareUiState() {
     return result
   }
 
+  function recordBackgroundRefreshError(error: unknown, fallback: string) {
+    const message = error instanceof Error ? error.message : fallback
+    pointTransactionSummary.message = message
+    console.error(error)
+  }
+
+  function refreshStateInBackground() {
+    void welfare.reloadWelfareState().catch(error => recordBackgroundRefreshError(error, '状态刷新失败'))
+  }
+
+  function refreshStateAndPointsInBackground() {
+    void Promise.allSettled([
+      welfare.reloadWelfareState(),
+      refreshPointTransactions({ reloadState: false }),
+    ]).then((results) => {
+      for (const result of results) {
+        if (result.status === 'rejected')
+          recordBackgroundRefreshError(result.reason, '积分流水刷新失败')
+      }
+    })
+  }
+
   async function submitStudentVerification(payload: Parameters<typeof welfare.submitStudentVerification>[0]) {
-    await welfare.reloadWelfareState({ legacy: true })
     await submitStudentVerificationAction(await withUploadedImages(payload))
-    await welfare.reloadWelfareState()
-    await refreshPointTransactions()
+    refreshStateAndPointsInBackground()
   }
 
   async function supplementStudentVerification(payload: Parameters<typeof welfare.supplementStudentVerification>[0]) {
-    await welfare.reloadWelfareState({ legacy: true })
     await supplementStudentVerificationAction(await withUploadedImages(payload))
-    await welfare.reloadWelfareState()
+    refreshStateInBackground()
   }
 
   async function approveStudentVerification(id: string, reply: string) {
     await reviewStudentVerificationAction(id, 'approved', reply)
-    await welfare.reloadWelfareState()
-    await refreshPointTransactions()
+    refreshStateAndPointsInBackground()
   }
 
   async function requestStudentSupplement(id: string, reason: string) {
     await reviewStudentVerificationAction(id, 'needs_supplement', reason)
-    await welfare.reloadWelfareState()
+    refreshStateInBackground()
   }
 
   async function rejectStudentVerification(id: string, reason: string) {
     await reviewStudentVerificationAction(id, 'rejected', reason)
-    await welfare.reloadWelfareState()
-    await refreshPointTransactions()
+    refreshStateAndPointsInBackground()
   }
 
   async function persistStateAndReload() {

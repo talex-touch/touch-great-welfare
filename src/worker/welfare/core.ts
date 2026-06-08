@@ -1105,7 +1105,8 @@ async function runSchemaSetup(env: WorkerEnv) {
           id text primary key,
           state text not null,
           updated_at text not null default current_timestamp,
-          version integer not null default 1
+          version integer not null default 1,
+          mutation_id text
         )
       `)
       .run()
@@ -1117,6 +1118,14 @@ async function runSchemaSetup(env: WorkerEnv) {
     catch {
       // Some D1 runtimes do not support ADD COLUMN IF NOT EXISTS; duplicate-column is harmless here.
     }
+    try {
+      await env.LOCAL_DB!
+        .prepare('alter table welfare_app_state add column mutation_id text')
+        .run()
+    }
+    catch {
+      // Duplicate-column is harmless; this marker lets D1 point-ledger writes avoid comparing large state JSON blobs.
+    }
     await ensureSnapshotSchema(env)
     return
   }
@@ -1126,10 +1135,12 @@ async function runSchemaSetup(env: WorkerEnv) {
       id text primary key,
       state jsonb not null,
       version integer not null default 1,
-      updated_at timestamptz not null default now()
+      updated_at timestamptz not null default now(),
+      mutation_id text
     )
   `)
   await getPool(env).query('alter table welfare_app_state add column if not exists version integer not null default 1')
+  await getPool(env).query('alter table welfare_app_state add column if not exists mutation_id text')
   await ensureSnapshotSchema(env)
 }
 
@@ -1506,16 +1517,17 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
   const nextVersion = options.expectedVersion !== undefined
     ? options.expectedVersion + 1
     : (await currentStateVersion(env) ?? 0) + 1
+  const mutationId = createId('mut')
 
   if (shouldUseD1(env)) {
     if (options.expectedVersion !== undefined) {
       const result = await env.LOCAL_DB!
         .prepare(`
           update welfare_app_state
-          set state = ?2, updated_at = current_timestamp, version = ?3
+          set state = ?2, updated_at = current_timestamp, version = ?3, mutation_id = ?5
           where id = ?1 and version = ?4
         `)
-        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, options.expectedVersion)
+        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, options.expectedVersion, mutationId)
         .run() as { meta?: { changes?: number } }
       if (!result.meta?.changes)
         throw new StateVersionConflictError()
@@ -1523,12 +1535,12 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
     else {
       await env.LOCAL_DB!
         .prepare(`
-          insert into welfare_app_state (id, state, updated_at, version)
-          values (?1, ?2, current_timestamp, ?3)
+          insert into welfare_app_state (id, state, updated_at, version, mutation_id)
+          values (?1, ?2, current_timestamp, ?3, ?4)
           on conflict (id)
-          do update set state = excluded.state, updated_at = current_timestamp, version = excluded.version
+          do update set state = excluded.state, updated_at = current_timestamp, version = excluded.version, mutation_id = excluded.mutation_id
         `)
-        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion)
+        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, mutationId)
         .run()
     }
     await syncStateSnapshots(env, state, options.previousState)
@@ -1539,11 +1551,11 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
     const result = await getPool(env).query<{ version: number }>(
       `
         update welfare_app_state
-        set state = $2::jsonb, updated_at = now(), version = version + 1
+        set state = $2::jsonb, updated_at = now(), version = version + 1, mutation_id = $4
         where id = $1 and version = $3
         returning version
       `,
-      [STATE_KEY, JSON.stringify(storedState), options.expectedVersion],
+      [STATE_KEY, JSON.stringify(storedState), options.expectedVersion, mutationId],
     )
     const version = result.rows[0]?.version
     if (!version)
@@ -1554,12 +1566,12 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
 
   await getPool(env).query(
     `
-      insert into welfare_app_state (id, state, updated_at, version)
-      values ($1, $2::jsonb, now(), $3)
+      insert into welfare_app_state (id, state, updated_at, version, mutation_id)
+      values ($1, $2::jsonb, now(), $3, $4)
       on conflict (id)
-      do update set state = excluded.state, updated_at = now(), version = excluded.version
+      do update set state = excluded.state, updated_at = now(), version = excluded.version, mutation_id = excluded.mutation_id
     `,
-    [STATE_KEY, JSON.stringify(storedState), nextVersion],
+    [STATE_KEY, JSON.stringify(storedState), nextVersion, mutationId],
   )
   await syncStateSnapshots(env, state, options.previousState)
   return nextVersion
@@ -1583,6 +1595,7 @@ async function writeWelfareStateWithAtomicPointTransactions(
   const storedState = await encodeStoredState(env, state)
   const storedStateJson = JSON.stringify(storedState)
   const nextVersion = options.expectedVersion + 1
+  const mutationId = createId('mut')
 
   if (shouldUseD1(env)) {
     const localDb = env.LOCAL_DB! as D1Database & {
@@ -1592,19 +1605,19 @@ async function writeWelfareStateWithAtomicPointTransactions(
       localDb
         .prepare(`
           update welfare_app_state
-          set state = ?2, updated_at = current_timestamp, version = ?3
+          set state = ?2, updated_at = current_timestamp, version = ?3, mutation_id = ?5
           where id = ?1 and version = ?4
         `)
-        .bind(STATE_KEY, storedStateJson, nextVersion, options.expectedVersion),
+        .bind(STATE_KEY, storedStateJson, nextVersion, options.expectedVersion, mutationId),
       ...pointTransactions.map(tx =>
         localDb
           .prepare(`
             insert into point_transactions (id, user_id, delta, type, reason, ref_id, balance_after, created_at)
             select ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-            where exists (select 1 from welfare_app_state where id = ?9 and version = ?10 and state = ?11)
+            where exists (select 1 from welfare_app_state where id = ?9 and version = ?10 and mutation_id = ?11)
             on conflict (id) do nothing
           `)
-          .bind(tx.id, tx.userId, tx.delta, tx.type, tx.reason, tx.refId || null, tx.balanceAfter, tx.createdAt, STATE_KEY, nextVersion, storedStateJson),
+          .bind(tx.id, tx.userId, tx.delta, tx.type, tx.reason, tx.refId || null, tx.balanceAfter, tx.createdAt, STATE_KEY, nextVersion, mutationId),
       ),
     ]
     const results = await localDb.batch(statements)
@@ -1620,11 +1633,11 @@ async function writeWelfareStateWithAtomicPointTransactions(
     const result = await client.query<{ version: number }>(
       `
         update welfare_app_state
-        set state = $2::jsonb, updated_at = now(), version = version + 1
+        set state = $2::jsonb, updated_at = now(), version = version + 1, mutation_id = $4
         where id = $1 and version = $3
         returning version
       `,
-      [STATE_KEY, storedStateJson, options.expectedVersion],
+      [STATE_KEY, storedStateJson, options.expectedVersion, mutationId],
     )
     const version = result.rows[0]?.version
     if (!version) {

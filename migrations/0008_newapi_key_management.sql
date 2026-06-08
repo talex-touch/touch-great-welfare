@@ -1,4 +1,9 @@
-alter table ai_temporary_keys add column name text;
-alter table ai_temporary_keys add column key_masked text;
-alter table ai_temporary_keys add column status text not null default 'active';
-alter table ai_temporary_keys add column provider text not null default 'newapi';
+-- D1 uses SQLite, which does not support `add column if not exists`.
+-- Runtime schema guards add these ai_temporary_keys columns defensively:
+--   name
+--   key_masked
+--   status
+--   provider
+-- Keep this marker migration as a no-op so Wrangler can record it without
+-- failing on databases where the columns already exist.
+select 1;

@@ -1,12 +1,10 @@
-alter table sub2api_key_bindings add column application_id text;
-alter table sub2api_key_bindings add column item_id text;
-
-create table if not exists sub2api_resource_provision_locks (
-  id text primary key,
-  owner text not null,
-  expires_at text not null,
-  created_at text not null default current_timestamp
-);
-
-create index if not exists idx_sub2api_key_bindings_resource_item
-  on sub2api_key_bindings (application_id, item_id, status);
+-- D1 uses SQLite, which does not support `add column if not exists`.
+-- Runtime schema guards add these resource-provisioning columns and indexes
+-- defensively for databases that may already have been touched by app runtime:
+--   sub2api_key_bindings.application_id
+--   sub2api_key_bindings.item_id
+--   sub2api_resource_provision_locks
+--   idx_sub2api_key_bindings_resource_item
+-- Keep this marker migration as a no-op so Wrangler can record it without
+-- failing on databases where the columns already exist.
+select 1;

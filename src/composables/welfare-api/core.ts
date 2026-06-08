@@ -50,7 +50,7 @@ async function requestState<T>(path = STATE_ENDPOINT, init?: RequestInit): Promi
   }
   catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError')
-      throw new Error('数据库接口响应超时，请检查生产数据库或 Hyperdrive 配置')
+      throw new Error('请求处理超过 10 秒，操作可能已提交，请刷新页面查看最新结果')
 
     throw error
   }

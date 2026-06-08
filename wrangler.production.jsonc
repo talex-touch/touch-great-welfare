@@ -19,10 +19,12 @@
       "bucket_name": "touch-great-welfare-ai-assets"
     }
   ],
-  "hyperdrive": [
+  "d1_databases": [
     {
-      "binding": "HYPERDRIVE",
-      "id": "replace-with-hyperdrive-id"
+      "binding": "LOCAL_DB",
+      "database_name": "touchx-universe-preview",
+      "database_id": "8952f345-85f9-4b28-ab21-8e5b8c222a81",
+      "migrations_dir": "migrations"
     }
   ],
   "queues": {
