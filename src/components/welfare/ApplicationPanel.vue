@@ -37,6 +37,7 @@ const reviewExpanded = ref(false)
 const selectedApplicationId = ref<string | undefined>()
 const isApplicationDialogOpen = ref(false)
 const applicationDialogSource = ref<HTMLElement | null>(null)
+const reviewQueues = ref<ReviewQueuesExpose | null>(null)
 
 interface ApplicationRow {
   item: WelfareApplication
@@ -45,6 +46,10 @@ interface ApplicationRow {
   email: string
   date: string
   tags: Array<{ label: string, tone: string }>
+}
+
+interface ReviewQueuesExpose {
+  openReviewApplication: (id: string, source?: HTMLElement | null) => void
 }
 
 const typeText: Record<RequestKind, string> = {
@@ -144,6 +149,10 @@ function openApplicationDialog(id: string, event: MouseEvent) {
   selectedApplicationId.value = id
   applicationDialogSource.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   isApplicationDialogOpen.value = true
+}
+
+function openReviewApplicationDialog(id: string, event: MouseEvent) {
+  reviewQueues.value?.openReviewApplication(id, event.currentTarget instanceof HTMLElement ? event.currentTarget : null)
 }
 
 function closeApplicationDialog() {
@@ -371,8 +380,8 @@ function applicationRowTags(item: WelfareApplication) {
               <TxStatusBadge :text="statusText(row.item.status)" :status="statusTone(row.item.status)" size="sm" />
             </span>
             <span>消耗 {{ formatPoints(row.item.cost) }}</span>
-            <span>{{ row.email }}</span>
-            <span>{{ row.date }}</span>
+            <span class="application-table__truncate" :title="row.email">{{ row.email }}</span>
+            <span class="application-table__truncate" :title="row.date">{{ row.date }}</span>
             <span>
               <TxButton
                 v-if="row.item.status === 'draft' && row.item.type === 'resource'"
@@ -467,7 +476,7 @@ function applicationRowTags(item: WelfareApplication) {
             :key="row.item.id"
             type="button"
             class="application-table__row application-table__row--review"
-            @click="openApplicationDialog(row.item.id, $event)"
+            @click="openReviewApplicationDialog(row.item.id, $event)"
           >
             <span class="application-cell-title">
               <b>{{ row.item.title }}</b>
@@ -484,8 +493,8 @@ function applicationRowTags(item: WelfareApplication) {
               <TxStatusBadge :text="statusText(row.item.status)" :status="statusTone(row.item.status)" size="sm" />
             </span>
             <span :class="priorityClass(row.item)">{{ priorityLabel(row.item) }}</span>
-            <span>{{ row.email }}</span>
-            <span>{{ row.date }}</span>
+            <span class="application-table__truncate" :title="row.email">{{ row.email }}</span>
+            <span class="application-table__truncate" :title="row.date">{{ row.date }}</span>
             <span class="application-row-arrow i-carbon-chevron-right" aria-hidden="true" />
           </button>
           <button
@@ -500,7 +509,7 @@ function applicationRowTags(item: WelfareApplication) {
         </div>
       </TxCard>
 
-      <ReviewQueues v-if="showReviewSection && activeSection === 'review'" kind="pro" />
+      <ReviewQueues v-if="showReviewSection && activeSection === 'review'" ref="reviewQueues" kind="pro" mode="dialog-only" />
     </template>
 
     <Teleport to="body">

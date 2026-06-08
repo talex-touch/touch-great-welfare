@@ -13,8 +13,10 @@ import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
 const props = withDefaults(defineProps<{
   kind?: 'all' | 'pro' | 'student'
+  mode?: 'list' | 'dialog-only'
 }>(), {
   kind: 'all',
+  mode: 'list',
 })
 
 const {
@@ -50,6 +52,7 @@ const {
 const { runSafely } = useWelfareFeedback()
 const showPro = computed(() => props.kind === 'all' || props.kind === 'pro')
 const showStudent = computed(() => props.kind === 'all' || props.kind === 'student')
+const canShowReviewQueues = computed(() => (isAdmin.value && (showPro.value || showStudent.value)) || (canCrowdReview.value && showPro.value))
 const visibleReviewApplications = computed(() => {
   if (isAdmin.value)
     return pendingApplications.value
@@ -64,11 +67,19 @@ const selectedReviewApplication = computed(() => visibleReviewApplications.value
 const reviewDraftKey = 'welfare:review-drafts'
 const crowdReviewDraftKey = 'welfare:crowd-review-drafts'
 
-function openReviewApplicationDialog(id: string, event: MouseEvent) {
+function openReviewApplication(id: string, source: HTMLElement | null = null) {
   selectedReviewApplicationId.value = id
-  reviewApplicationDialogSource.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  reviewApplicationDialogSource.value = source
   isReviewApplicationDialogOpen.value = true
 }
+
+function openReviewApplicationDialog(id: string, event: MouseEvent) {
+  openReviewApplication(id, event.currentTarget instanceof HTMLElement ? event.currentTarget : null)
+}
+
+defineExpose({
+  openReviewApplication,
+})
 
 function closeReviewApplicationDialog() {
   isReviewApplicationDialogOpen.value = false
@@ -149,7 +160,7 @@ function aiReviewTone(status?: string) {
   if (status === 'failed')
     return { label: 'AI 审核失败', color: '#b45309', background: 'rgba(245,158,11,.16)' }
   if (status === 'needs_human')
-    return { label: 'AI 建议人工复核', color: '#0369a1', background: 'rgba(14,165,233,.14)' }
+    return { label: 'AI 建议人工复核', color: '#475569', background: 'rgba(100,116,139,.14)' }
   return { label: 'AI 审核中', color: '#475569', background: 'rgba(100,116,139,.14)' }
 }
 
@@ -166,7 +177,7 @@ function crowdDecisionTone(decision: string) {
     return { color: '#047857', background: 'rgba(16,185,129,.16)' }
   if (decision === 'reject')
     return { color: '#be123c', background: 'rgba(244,63,94,.14)' }
-  return { color: '#0369a1', background: 'rgba(14,165,233,.14)' }
+  return { color: '#475569', background: 'rgba(100,116,139,.14)' }
 }
 
 function onSubmitCrowdReview(id: string) {
@@ -210,7 +221,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="(isAdmin && (showPro || showStudent)) || (canCrowdReview && showPro)" class="gap-6 grid" :class="showPro && showStudent && isAdmin ? 'xl:grid-cols-2' : ''">
+  <div v-if="canShowReviewQueues" class="gap-6 grid" :class="[props.mode === 'dialog-only' ? 'review-queues--dialog-only' : '', showPro && showStudent && isAdmin ? 'xl:grid-cols-2' : '']">
     <TxCard v-if="showPro && (isAdmin || canCrowdReview)" class="solid-panel" background="pure" :padding="22" :radius="28">
       <h3 class="text-2xl fw-900">
         {{ isAdmin ? '申请审核队列' : '协作建议' }}
@@ -295,14 +306,14 @@ onMounted(() => {
               </div>
             </div>
             <div class="mt-3 flex flex-wrap gap-2">
-              <TxTag :label="`${userLevelCard(item.userId).name} · P${userLevelCard(item.userId).priority}`" color="#4338ca" background="rgba(99,102,241,.14)" />
+              <TxTag :label="`${userLevelCard(item.userId).name} · P${userLevelCard(item.userId).priority}`" color="#475569" background="rgba(100,116,139,.14)" />
               <TxTag :label="aiReviewTone(item.aiReview?.status).label" :color="aiReviewTone(item.aiReview?.status).color" :background="aiReviewTone(item.aiReview?.status).background" />
               <TxTag v-if="item.storageExtended" label="存储 +7 天" color="#0f766e" background="rgba(45,212,191,.16)" />
               <TxTag v-if="item.rejectionReviewFeeWaived && item.rejectionFraudulent" label="造假仍扣手续费" color="#991b1b" background="rgba(248,113,113,.16)" />
               <TxTag v-else-if="item.rejectionReviewFeeWaived" label="退回免手续费" color="#7c3aed" background="rgba(167,139,250,.16)" />
               <TxTag v-else :label="`退回手续费 ${formatPoints(item.rejectionReviewFee)}`" color="#be123c" background="rgba(244,63,94,.12)" />
               <TxTag v-if="item.rejectionFraudulent" label="造假限制" color="#991b1b" background="rgba(248,113,113,.16)" />
-              <TxTag v-if="item.type === 'code' && item.llmApiBudgetUsd" :label="`LLMApi ${item.llmApiModelName ?? ''} ${llmBudgetText(item)}`" color="#4338ca" background="rgba(99,102,241,.14)" />
+              <TxTag v-if="item.type === 'code' && item.llmApiBudgetUsd" :label="`LLMApi ${item.llmApiModelName ?? ''} ${llmBudgetText(item)}`" color="#475569" background="rgba(100,116,139,.14)" />
               <TxTag v-if="item.llmApiRequiresExtendedReview" label="更长审核" color="#b45309" background="rgba(245,158,11,.16)" />
             </div>
             <div v-if="isAdmin && item.type === 'code' && item.llmApiBudgetUsd" class="text-xs text-indigo-900 leading-5 mt-3 p-3 rounded-2xl bg-indigo-50 dark:text-indigo-100 dark:bg-indigo-950/30">
@@ -412,7 +423,7 @@ onMounted(() => {
               </div>
             </div>
             <div v-if="item.githubRepo" class="text-sm mt-3 flex flex-wrap gap-2 items-center">
-              <TxTag label="开源认证" color="#0369a1" background="rgba(14,165,233,.14)" />
+              <TxTag label="开源认证" color="#475569" background="rgba(100,116,139,.14)" />
               <span v-if="isAdmin" class="text-slate-500">{{ item.githubRepo }}</span>
             </div>
             <div v-if="isAdmin && crowdReviewsFor('pro_application', item.id).length" class="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
