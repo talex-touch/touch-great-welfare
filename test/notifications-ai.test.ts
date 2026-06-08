@@ -7,6 +7,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
   }),
 ))
 
+const asyncJobs = await import('../src/worker/async-jobs')
 const notifications = await import('../src/worker/notifications')
 const { createSessionCookie } = await import('../src/worker/session')
 const { readWelfareState } = await import('../src/worker/welfare-state')
@@ -300,6 +301,80 @@ describe('notification dispatch', () => {
     expect(d1.data.deliveries).toHaveLength(1)
     expect(d1.data.deliveries[0].channel).toBe('in_app')
     expect(d1.data.queries.some(item => item.query.includes('select state') && item.query.includes('welfare_app_state'))).toBe(false)
+  })
+
+  it('enqueues state-change notifications when async jobs are configured', async () => {
+    const stored = state()
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    const jobs: unknown[] = []
+    const previous = {
+      ...stored,
+      applications: [{
+        id: 'app_1',
+        userId: 'user_1',
+        type: 'pro' as const,
+        title: 'Pro 支持',
+        description: '请支持',
+        hasOpenSourceBadge: false,
+        attachments: [],
+        status: 'pending_review' as const,
+        cost: 100,
+        costCharged: false,
+        createdAt: '2026-06-01T00:00:00.000Z',
+      }],
+    }
+    const next = {
+      ...stored,
+      applications: [{
+        ...previous.applications[0],
+        status: 'answered' as const,
+        answer: '已通过',
+        reviewedAt: '2026-06-01T01:00:00.000Z',
+      }],
+    }
+
+    await notifications.dispatchWelfareStateChangeNotifications({
+      LOCAL_DB: d1 as unknown as D1Database,
+      ASYNC_JOBS: {
+        send: async (job: unknown) => {
+          jobs.push(job)
+        },
+      } as unknown as Queue<unknown>,
+    }, previous, next)
+
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]).toMatchObject({ type: 'notification.dispatch', input: { event: 'application_answered', userId: 'user_1' } })
+    expect(d1.data.notifications).toHaveLength(0)
+  })
+
+  it('dispatches queued notification jobs', async () => {
+    const stored = state()
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    const ack = vi.fn()
+    const retry = vi.fn()
+
+    await asyncJobs.handleAsyncJobBatch({
+      messages: [{
+        body: {
+          type: 'notification.dispatch',
+          input: {
+            userId: 'user_1',
+            event: 'application_answered',
+            title: '申请已通过',
+            body: '已通过',
+          },
+        },
+        ack,
+        retry,
+      }],
+    } as unknown as MessageBatch<unknown>, { LOCAL_DB: d1 as unknown as D1Database })
+
+    expect(d1.data.notifications).toHaveLength(1)
+    expect(d1.data.notifications[0].event).toBe('application_answered')
+    expect(ack).toHaveBeenCalledTimes(1)
+    expect(retry).not.toHaveBeenCalled()
   })
 
   it('notifies applicant when an application needs supplementary material', async () => {

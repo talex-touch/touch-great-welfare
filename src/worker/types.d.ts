@@ -10,6 +10,20 @@ interface D1Database {
   prepare: (query: string) => D1PreparedStatement
 }
 
+interface Queue<T = unknown> {
+  send: (message: T) => Promise<void>
+}
+
+interface Message<T = unknown> {
+  body: T
+  ack: () => void
+  retry: () => void
+}
+
+interface MessageBatch<T = unknown> {
+  messages: Message<T>[]
+}
+
 interface R2ObjectBody {
   body: ReadableStream
   httpMetadata?: {

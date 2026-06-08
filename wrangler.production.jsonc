@@ -25,6 +25,21 @@
       "id": "replace-with-hyperdrive-id"
     }
   ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "ASYNC_JOBS",
+        "queue": "touch-great-welfare-async-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "touch-great-welfare-async-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
+    ]
+  },
   "observability": {
     "enabled": true
   }

@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './worker/welfare-state'
 import { handleAiRequest } from './worker/ai'
+import { handleAsyncJobBatch } from './worker/async-jobs'
 import { handleDatabaseProvisionRequest } from './worker/database-provisioning'
 import { handleEducationMailRequest } from './worker/education-mail'
 import { handleGitHubAppRequest } from './worker/github-app'
@@ -43,6 +44,10 @@ function rejectCrossOriginWrite(request: Request, url: URL) {
 }
 
 export default {
+  async queue(batch: MessageBatch<unknown>, env: WorkerEnv) {
+    return handleAsyncJobBatch(batch, env)
+  },
+
   fetch(request: Request, env: WorkerEnv) {
     const url = new URL(request.url)
 

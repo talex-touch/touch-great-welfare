@@ -103,11 +103,22 @@ interface CreateImagePayload {
   quality?: string
 }
 
+interface AiImageJobPayload extends CreateImagePayload {
+  prompt: string
+  applicationId?: string
+}
+
 interface CreateReviewPayload {
   applicationId?: string
 }
 
 interface ProvisionApplicationPayload {
+  itemId?: string
+}
+
+interface ResourceProvisionJobPayload {
+  applicationId: string
+  adminUserId: string
   itemId?: string
 }
 
@@ -1197,6 +1208,43 @@ async function markProvisionPending(
   await writeWelfareState(env, state, { expectedVersion })
 }
 
+async function enqueueResourceProvisionJob(env: WorkerEnv, payload: ResourceProvisionJobPayload) {
+  if (!env.ASYNC_JOBS)
+    return false
+
+  await env.ASYNC_JOBS.send({ type: 'resource.provision', ...payload })
+  return true
+}
+
+async function runResourceProvision(env: WorkerEnv, payload: ResourceProvisionJobPayload) {
+  const record = await readWelfareStateRecord(env)
+  const state = record.state as Partial<WelfareState>
+  assertWelfareState(state)
+  const application = state.applications.find(item => item.id === payload.applicationId)
+  if (!application)
+    throw new Error('申请不存在')
+
+  if (application.type !== 'code' && application.type !== 'resource')
+    return { status: 'skipped' as const, applicationId: application.id, reason: '该申请类型不需要自动发放' }
+
+  try {
+    if (application.type === 'code')
+      return await provisionCodeApplication(env, state, application, payload.adminUserId, record.version)
+    return await provisionResourceApplication(env, state, application, payload.adminUserId, record.version, payload.itemId?.trim())
+  }
+  catch (error) {
+    if (isStateVersionConflict(error))
+      throw error
+
+    await markProvisionPending(env, state, application, payload.adminUserId, record.version, error, payload.itemId?.trim())
+    return {
+      status: 'pending_manual' as const,
+      applicationId: application.id,
+      error: error instanceof Error ? error.message : '自动发放失败',
+    }
+  }
+}
+
 async function provisionApplicationReward(request: Request, env: WorkerEnv) {
   const { user: admin } = await assertAdminRequest(request, env)
   const payload = await readJson<ProvisionApplicationPayload>(request).catch((): ProvisionApplicationPayload => ({}))
@@ -1214,22 +1262,15 @@ async function provisionApplicationReward(request: Request, env: WorkerEnv) {
   if (application.type !== 'code' && application.type !== 'resource')
     return { status: 'skipped' as const, applicationId: application.id, reason: '该申请类型不需要自动发放' }
 
-  try {
-    if (application.type === 'code')
-      return await provisionCodeApplication(env, state, application, admin.id, record.version)
-    return await provisionResourceApplication(env, state, application, admin.id, record.version, payload.itemId?.trim())
-  }
-  catch (error) {
-    if (isStateVersionConflict(error))
-      throw error
+  const job = { applicationId: application.id, adminUserId: admin.id, itemId: payload.itemId?.trim() || undefined }
+  if (await enqueueResourceProvisionJob(env, job))
+    return { status: 'pending' as const, applicationId: application.id, itemId: job.itemId }
 
-    await markProvisionPending(env, state, application, admin.id, record.version, error, payload.itemId?.trim())
-    return {
-      status: 'pending_manual' as const,
-      applicationId: application.id,
-      error: error instanceof Error ? error.message : '自动发放失败',
-    }
-  }
+  return runResourceProvision(env, job)
+}
+
+export async function handleResourceProvisionJob(env: WorkerEnv, payload: ResourceProvisionJobPayload) {
+  await runResourceProvision(env, payload)
 }
 
 async function createApplicationReview(request: Request, env: WorkerEnv) {
@@ -1245,7 +1286,8 @@ async function createApplicationReview(request: Request, env: WorkerEnv) {
   const application = state.applications.find(item => item.id === applicationId)
   if (!application)
     throw new Error('申请不存在')
-  if (auth.user.role !== 'admin' && application.userId !== auth.user.id)
+  const canPersistReview = auth.user.role === 'admin' || auth.user.role === 'reviewer'
+  if (!canPersistReview && application.userId !== auth.user.id)
     throw new Error('无权审核该申请')
 
   const config = await getEffectiveAiConfig(env)
@@ -1263,14 +1305,17 @@ async function createApplicationReview(request: Request, env: WorkerEnv) {
     }
   }
 
-  application.aiReview = review
-  if (application.status === 'pending_review')
-    application.answer = reviewToAnswer(review)
-  await writeWelfareState(env, state, { expectedVersion: record.version })
+  if (canPersistReview) {
+    application.aiReview = review
+    if (application.status === 'pending_review')
+      application.answer = reviewToAnswer(review)
+    await writeWelfareState(env, state, { expectedVersion: record.version })
+  }
 
   return {
     applicationId: application.id,
     review,
+    persisted: canPersistReview,
   }
 }
 
@@ -1345,6 +1390,14 @@ function imageApplicationForRequest(state: WelfareState, applicationId: string |
   return application
 }
 
+async function enqueueAiImageJob(env: WorkerEnv, jobId: string) {
+  if (!env.ASYNC_JOBS)
+    return false
+
+  await env.ASYNC_JOBS.send({ type: 'ai.image.generate', jobId })
+  return true
+}
+
 async function createImage(request: Request, env: WorkerEnv) {
   const auth = await getAuthenticatedRequest(request, env)
   const payload = await readJson<CreateImagePayload>(request)
@@ -1409,28 +1462,14 @@ async function createImage(request: Request, env: WorkerEnv) {
     }
     await writeWelfareState(env, state, { expectedVersion: record.version })
 
-    const image = await callImageProvider(env, config, prompt, payload)
-    const objectKey = `ai-images/${targetUserId}/${jobId}.png`
-    await env.AI_ASSETS.put(objectKey, image.bytes, {
-      httpMetadata: {
-        contentType: image.contentType,
-      },
-    })
+    if (await enqueueAiImageJob(env, jobId)) {
+      return {
+        jobId,
+        status: 'pending' as const,
+      }
+    }
 
-    const latestRecord = await readWelfareStateRecord(env)
-    const latestState = latestRecord.state as Partial<WelfareState>
-    assertWelfareState(latestState)
-    updateApplicationForImage(latestState, payload.applicationId, targetUserId, 'completed', `图片生成已完成：/api/ai/images/${jobId}/file`)
-    await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
-    await updateImageJob(env, jobId, 'succeeded', objectKey, image.contentType)
-    await createAndDispatchNotification(env, {
-      userId: targetUserId,
-      event: 'ai_image_succeeded',
-      title: '图片生成完成',
-      body: '你的图片生成任务已完成，可在申请记录中查看结果。',
-      data: { jobId, applicationId: payload.applicationId },
-    })
-
+    await runImageGenerationJob(env, jobId, { prompt, applicationId: payload.applicationId, size: payload.size, quality: payload.quality })
     return {
       jobId,
       status: 'succeeded' as const,
@@ -1441,35 +1480,98 @@ async function createImage(request: Request, env: WorkerEnv) {
     if (isStateVersionConflict(error))
       throw error
 
-    const rollbackRecord = await readWelfareStateRecord(env)
-    const rollbackState = rollbackRecord.state as Partial<WelfareState>
-    assertWelfareState(rollbackState)
-    const alreadyRefunded = await pointTransactionExistsByRef(env, 'refund', refId)
-    const imageApplication = imageApplicationForRequest(rollbackState, payload.applicationId, auth.user.id, auth.user.role === 'admin')
-    if (!alreadyRefunded && imageApplication?.costCharged) {
-      await appendPointTransaction(env, {
-        id: pointTransactionId('ai_image_refund', refId),
-        userId: targetUserId,
-        delta: imageApplication.cost,
-        type: 'refund',
-        reason: 'Image 生成失败退款',
-        refId,
-      }, rollbackState)
-    }
-    updateApplicationForImage(rollbackState, payload.applicationId, targetUserId, 'rejected', error instanceof Error ? error.message : '图片生成失败')
-    await writeWelfareState(env, rollbackState, { expectedVersion: rollbackRecord.version })
-
-    const message = error instanceof Error ? error.message : '图片生成失败'
-    await updateImageJob(env, jobId, 'failed', '', '', message)
-    await createAndDispatchNotification(env, {
-      userId: targetUserId,
-      event: 'ai_image_failed',
-      title: '图片生成失败',
-      body: `${message}。已退回本次图片生成积分。`,
-      data: { jobId, applicationId: payload.applicationId },
-    })
+    await failImageGenerationJob(env, jobId, targetUserId, payload.applicationId, refId, error)
     throw error
   }
+}
+
+async function failImageGenerationJob(env: WorkerEnv, jobId: string, targetUserId: string, applicationId: string | undefined, refId: string, error: unknown) {
+  const rollbackRecord = await readWelfareStateRecord(env)
+  const rollbackState = rollbackRecord.state as Partial<WelfareState>
+  assertWelfareState(rollbackState)
+  const alreadyRefunded = await pointTransactionExistsByRef(env, 'refund', refId)
+  const imageApplication = applicationId
+    ? rollbackState.applications.find(item => item.id === applicationId && item.userId === targetUserId && item.type === 'image')
+    : undefined
+  if (!alreadyRefunded && imageApplication?.costCharged) {
+    await appendPointTransaction(env, {
+      id: pointTransactionId('ai_image_refund', refId),
+      userId: targetUserId,
+      delta: imageApplication.cost,
+      type: 'refund',
+      reason: 'Image 生成失败退款',
+      refId,
+    }, rollbackState)
+  }
+  const message = error instanceof Error ? error.message : '图片生成失败'
+  updateApplicationForImage(rollbackState, applicationId, targetUserId, 'rejected', message)
+  await writeWelfareState(env, rollbackState, { expectedVersion: rollbackRecord.version })
+  await updateImageJob(env, jobId, 'failed', '', '', message)
+  await createAndDispatchNotification(env, {
+    userId: targetUserId,
+    event: 'ai_image_failed',
+    title: '图片生成失败',
+    body: `${message}。已退回本次图片生成积分。`,
+    data: { jobId, applicationId },
+  })
+}
+
+async function runImageGenerationJob(env: WorkerEnv, jobId: string, payload?: AiImageJobPayload) {
+  const job = await getImageJob(env, jobId)
+  if (!job)
+    throw new Error('图片任务不存在')
+  if (job.status !== 'pending')
+    return
+  if (!env.AI_ASSETS)
+    throw new Error('AI_ASSETS R2 Binding 未配置')
+
+  const config = await getEffectiveAiConfig(env)
+  if (!config.enabled)
+    throw new Error('AI Provider 未启用')
+
+  const targetUserId = job.user_id
+  const applicationId = job.application_id || payload?.applicationId
+  const refId = applicationId || jobId
+  const imagePayload: AiImageJobPayload = {
+    prompt: payload?.prompt || job.prompt,
+    applicationId,
+    size: payload?.size,
+    quality: payload?.quality,
+  }
+
+  try {
+    const image = await callImageProvider(env, config, imagePayload.prompt, imagePayload)
+    const objectKey = `ai-images/${targetUserId}/${jobId}.png`
+    await env.AI_ASSETS.put(objectKey, image.bytes, {
+      httpMetadata: {
+        contentType: image.contentType,
+      },
+    })
+
+    const latestRecord = await readWelfareStateRecord(env)
+    const latestState = latestRecord.state as Partial<WelfareState>
+    assertWelfareState(latestState)
+    updateApplicationForImage(latestState, applicationId, targetUserId, 'completed', `图片生成已完成：/api/ai/images/${jobId}/file`)
+    await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
+    await updateImageJob(env, jobId, 'succeeded', objectKey, image.contentType)
+    await createAndDispatchNotification(env, {
+      userId: targetUserId,
+      event: 'ai_image_succeeded',
+      title: '图片生成完成',
+      body: '你的图片生成任务已完成，可在申请记录中查看结果。',
+      data: { jobId, applicationId },
+    })
+  }
+  catch (error) {
+    if (isStateVersionConflict(error))
+      throw error
+    await failImageGenerationJob(env, jobId, targetUserId, applicationId, refId, error)
+    throw error
+  }
+}
+
+export async function handleAiImageJob(env: WorkerEnv, jobId: string) {
+  await runImageGenerationJob(env, jobId)
 }
 
 function mapImageJob(row: AiImageJobRow) {

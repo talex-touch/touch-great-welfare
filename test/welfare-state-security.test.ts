@@ -12,6 +12,7 @@ const { createSessionCookie } = await import('../src/worker/session')
 const { appendPointTransaction, pointTransactionId } = await import('../src/worker/points')
 const { STUDENT_REVIEW_FEE } = await import('../src/composables/welfare')
 const { handleRechargeRequest } = await import('../src/worker/recharge')
+const { handleUploadRequest } = await import('../src/worker/uploads')
 const { handleApplicationSubmitRequest, handleWelfareStateRequest, readWelfareState, writeWelfareState } = await import('../src/worker/welfare-state')
 
 function user(overrides: Partial<User> = {}): User {
@@ -29,6 +30,10 @@ function user(overrides: Partial<User> = {}): User {
     lastLoginAt: '2026-06-02T00:00:00.000Z',
     ...overrides,
   }
+}
+
+function recordLike(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
 async function passwordHash(password: string) {
@@ -223,6 +228,14 @@ function createMemoryD1(initialState: WelfareState) {
         },
         async all() {
           queries.push({ method: 'all', query, values: [...this.values] })
+          if (query.includes('select payload from welfare_applications')) {
+            const applications = recordLike(storedState) && Array.isArray(storedState.applications) ? storedState.applications : []
+            return {
+              results: applications
+                .filter(item => recordLike(item) && item.userId === this.values[0])
+                .map(item => ({ payload: JSON.stringify(item) })),
+            }
+          }
           if (query.includes('from point_transactions') && query.includes('row_number()')) {
             const userIds = new Set(this.values.map(String))
             const latestByUser = new Map<string, Record<string, unknown>>()
@@ -284,6 +297,46 @@ function codeApplication(overrides: Partial<WelfareApplication> = {}): WelfareAp
 }
 
 describe('welfare state security', () => {
+  it('rejects forged attachment metadata that points at another user upload', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ id: 'user_a' }), user({ id: 'user_b' })],
+      applications: [
+        codeApplication({
+          id: 'app_b',
+          userId: 'user_b',
+          attachments: [{
+            id: 'att_forged',
+            name: 'forged.png',
+            size: 4,
+            type: 'image/png',
+            r2Key: 'user-uploads/user_a/att_real.png',
+            url: '/api/uploads/att_forged/file',
+          }],
+        }),
+      ],
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      AI_ASSETS: {
+        async get(key: string) {
+          return key === 'user-uploads/user_a/att_real.png'
+            ? new Response('real', { headers: { 'content-type': 'image/png' } })
+            : null
+        },
+      } as unknown as R2Bucket,
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_b')
+
+    const response = await handleUploadRequest(new Request('https://example.com/api/uploads/att_forged/file', {
+      headers: { cookie },
+    }), env)
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error: '无权读取该图片' })
+  })
+
   it('initializes the welfare schema once per D1 binding', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
@@ -372,6 +425,119 @@ describe('welfare state security', () => {
     await writeWelfareState(env, await readWelfareState(env))
 
     expect(d1.batchCalls).toContain(3)
+  })
+
+  it('hides delivery answer and internal messages before a reviewer claims the application', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ role: 'reviewer' }), user({ id: 'user_2' })],
+      applications: [
+        codeApplication({
+          id: 'app_1',
+          userId: 'user_2',
+          status: 'answered',
+          answer: '<p>内部交付答案</p>',
+          messages: [
+            {
+              id: 'msg_system',
+              applicationId: 'app_1',
+              userId: 'admin_1',
+              type: 'system',
+              content: '<p>内部系统说明</p>',
+              attachments: [],
+              createdAt: '2026-06-02T01:00:00.000Z',
+            },
+            {
+              id: 'msg_result',
+              applicationId: 'app_1',
+              userId: 'user_2',
+              type: 'result_submission',
+              content: '<p>交付提交内容</p>',
+              attachments: [],
+              createdAt: '2026-06-02T02:00:00.000Z',
+            },
+          ],
+        }),
+      ],
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state/me', {
+      headers: { cookie },
+    }), env)
+    const payload = await response.json() as { state: WelfareState }
+    const application = payload.state.applications.find(item => item.id === 'app_1')
+
+    expect(response.status).toBe(200)
+    expect(application?.answer).toBeUndefined()
+    expect(application?.messages ?? []).toHaveLength(0)
+  })
+
+  it('deletes stale welfare snapshots when action commits remove applications or coupons', async () => {
+    const previous = {
+      ...state(),
+      applications: [
+        codeApplication({ id: 'app_deleted', userId: 'user_1' }),
+        codeApplication({ id: 'app_kept', userId: 'user_1' }),
+      ],
+      coupons: [
+        {
+          id: 'coupon_deleted',
+          userId: 'user_1',
+          name: '过期券',
+          scope: 'all' as const,
+          discountType: 'rate' as const,
+          discountRate: 0.8,
+          createdAt: '2026-06-02T00:00:00.000Z',
+        },
+        {
+          id: 'coupon_kept',
+          userId: 'user_1',
+          name: '保留券',
+          scope: 'all' as const,
+          discountType: 'rate' as const,
+          discountRate: 0.9,
+          createdAt: '2026-06-02T00:00:00.000Z',
+        },
+      ],
+    }
+    const next = {
+      ...previous,
+      applications: previous.applications.filter(item => item.id !== 'app_deleted'),
+      coupons: previous.coupons.filter(item => item.id !== 'coupon_deleted'),
+    }
+    const d1 = createMemoryD1(previous)
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    await writeWelfareState(env, next, { expectedVersion: 1, previousState: previous })
+
+    expect(d1.queries.some(item => item.query.includes('delete from welfare_applications') && item.values[0] === 'app_deleted')).toBe(true)
+    expect(d1.queries.some(item => item.query.includes('delete from user_coupons') && item.values[0] === 'coupon_deleted')).toBe(true)
+    expect(d1.queries.some(item => item.query.includes('delete from welfare_applications') && item.values[0] === 'app_kept')).toBe(false)
+    expect(d1.queries.some(item => item.query.includes('delete from user_coupons') && item.values[0] === 'coupon_kept')).toBe(false)
+  })
+
+  it('syncs only changed welfare snapshots for action commits', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ role: 'reviewer' }), user({ id: 'user_2' })],
+      applications: [
+        codeApplication({ id: 'app_1', userId: 'user_2', status: 'answered', answer: '可认领' }),
+        codeApplication({ id: 'app_2', userId: 'user_2', status: 'answered', answer: '不变' }),
+      ],
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/deliveries/claim', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ applicationId: 'app_1' }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    expect(d1.batchCalls.at(-1)).toBe(1)
   })
 
   it('keeps anonymous bootstrap reads off the point ledger', async () => {
@@ -1124,6 +1290,7 @@ describe('welfare state security', () => {
     const applicationPayload = await applications.json() as { applications: WelfareApplication[], users: User[] }
     expect(applicationPayload.applications.map(item => item.id)).toEqual(['app_1'])
     expect(applicationPayload.users.map(item => item.id)).toEqual(['user_1'])
+    expect(d1.queries.some(item => item.method === 'all' && item.query.includes('select payload from welfare_applications'))).toBe(true)
 
     const walletPayload = await wallet.json() as { coupons: UserCoupon[], transactions: unknown[] }
     expect(walletPayload.coupons.map(item => item.id)).toEqual(['coupon_1'])

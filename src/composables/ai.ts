@@ -75,11 +75,16 @@ export interface CreateTemporaryKeyPayload {
   quota?: number
 }
 
-export interface CreateImageResult {
-  jobId: string
-  status: 'succeeded'
-  fileUrl: string
-}
+export type CreateImageResult
+  = | {
+    jobId: string
+    status: 'pending'
+  }
+  | {
+    jobId: string
+    status: 'succeeded'
+    fileUrl: string
+  }
 
 export interface CreateApplicationReviewResult {
   applicationId: string
@@ -91,10 +96,16 @@ export interface CreateApplicationReviewResult {
     model?: string
     reviewedAt?: string
   }
+  persisted: boolean
 }
 
 export type ProvisionApplicationRewardResult
   = | {
+    status: 'pending'
+    applicationId: string
+    itemId?: string
+  }
+  | {
     status: 'provisioned'
     provider: 'newapi'
     applicationId: string

@@ -848,7 +848,7 @@ async function deleteSub2ApiKeyByAdminApi(config: Awaited<ReturnType<typeof getE
 }
 
 async function createKey(request: Request, env: WorkerEnv) {
-  const auth = await getAuthenticatedRequest(request, env)
+  const auth = await assertAdminRequest(request, env)
   const payload = await readJson<CreateSub2ApiKeyPayload>(request)
   return await createSub2ApiKeyForUser(env, auth.user, payload)
 }
@@ -997,6 +997,6 @@ export async function handleSub2ApiRequest(request: Request, env: WorkerEnv) {
     return json({ error: 'Method Not Allowed' }, 405)
   }
   catch (error) {
-    return errorResponse(error)
+    return errorResponse(error, error instanceof Error && error.message === '需要管理员权限' ? 403 : 500)
   }
 }

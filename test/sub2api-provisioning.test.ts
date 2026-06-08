@@ -229,7 +229,90 @@ function createState(): WelfareState {
   }
 }
 
+describe('ai application review security', () => {
+  it('does not persist AI review results when requested by the application owner', async () => {
+    const currentState = createState()
+    currentState.applications[0] = {
+      ...currentState.applications[0],
+      type: 'pro',
+      status: 'pending_review',
+      answer: undefined,
+      aiReview: undefined,
+    }
+    const d1 = createMemoryD1(currentState)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-ai-review',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-ai-review',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'user_1')
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/reviews', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ applicationId: 'app_1' }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    await expect(response.json()).resolves.toMatchObject({ applicationId: 'app_1', persisted: false })
+    const updatedState = await readWelfareState(env) as WelfareState
+    expect(updatedState.applications[0].aiReview).toBeUndefined()
+    expect(updatedState.applications[0].answer).toBeUndefined()
+  })
+})
+
 describe('sub2api resource provisioning', () => {
+  it('rejects direct Sub2API key creation by regular users', async () => {
+    const d1 = createMemoryD1(createState())
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-sub2api',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'user_1')
+
+    const response = await handleSub2ApiRequest(new Request('https://welfare.example.com/api/sub2api/keys', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'bypass', quotaUsd: 100000, expiresInDays: 365 }),
+    }), env)
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error: '需要管理员权限' })
+    expect(d1.data.bindings).toHaveLength(0)
+  })
+
+  it('enqueues resource provisioning when async jobs are configured', async () => {
+    const d1 = createMemoryD1(createState())
+    const jobs: unknown[] = []
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-sub2api',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
+      ASYNC_JOBS: {
+        send: async (job: unknown) => {
+          jobs.push(job)
+        },
+      } as unknown as Queue<unknown>,
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('external Sub2API should not be called during enqueue')
+    }))
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+    const result = await response.json() as { status: string }
+
+    expect(response.ok).toBe(true)
+    expect(result.status).toBe('pending')
+    expect(jobs).toEqual([{ type: 'resource.provision', applicationId: 'app_1', adminUserId: 'admin_1', itemId: 'item_1' }])
+    expect(d1.data.bindings).toHaveLength(0)
+  })
+
   it('passes approved LLM resource limits to the Sub2API admin create endpoint', async () => {
     const d1 = createMemoryD1(createState())
     const env = {

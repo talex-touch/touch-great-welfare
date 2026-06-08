@@ -36,11 +36,25 @@ function attachmentUrl(id: string) {
   return `/api/uploads/${encodeURIComponent(id)}/file`
 }
 
+function r2KeyOwnerId(r2Key: string | undefined) {
+  if (!r2Key)
+    return ''
+
+  const match = r2Key.match(/^user-uploads\/([^/]+)\//)
+  return match?.[1] ?? ''
+}
+
+function attachmentBelongsToOwner(file: AttachmentMeta, ownerId: string) {
+  return !file.r2Key || r2KeyOwnerId(file.r2Key) === ownerId
+}
+
 function attachmentVisibleToUser(file: AttachmentMeta, userId: string, state: WelfareState) {
   const canRead = (itemUserId: string) => itemUserId === userId || state.users.find(item => item.id === userId)?.role === 'admin'
-  const matches = (item: AttachmentMeta) => item.id === file.id || item.r2Key === file.r2Key
+  const matches = (item: AttachmentMeta) => item.id === file.id && item.r2Key === file.r2Key
 
   for (const application of state.applications) {
+    if (!attachmentBelongsToOwner(file, application.userId))
+      continue
     if (!canRead(application.userId))
       continue
     if (application.attachments.some(matches))
@@ -49,7 +63,7 @@ function attachmentVisibleToUser(file: AttachmentMeta, userId: string, state: We
       return true
   }
 
-  return state.studentVerifications.some(verification => canRead(verification.userId) && verification.attachments.some(matches))
+  return state.studentVerifications.some(verification => attachmentBelongsToOwner(file, verification.userId) && canRead(verification.userId) && verification.attachments.some(matches))
 }
 
 function findAttachment(state: WelfareState, fileId: string) {

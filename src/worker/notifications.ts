@@ -113,6 +113,11 @@ export interface CreateNotificationInput {
   data?: Record<string, unknown>
 }
 
+export interface NotificationQueueJob {
+  type: 'notification.dispatch'
+  input: CreateNotificationInput
+}
+
 const NOTIFICATION_LIMIT = 80
 const ADMIN_ANNOUNCEMENT_LIMIT = 1200
 const NOTIFICATION_PROVIDER_CONFIG_ID = 'default'
@@ -1981,6 +1986,26 @@ async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: Cre
   return listAdminAnnouncements(env)
 }
 
+export function isNotificationQueueJob(value: unknown): value is NotificationQueueJob {
+  return !!value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).type === 'notification.dispatch'
+    && !!(value as Record<string, unknown>).input
+}
+
+async function enqueueNotification(env: WorkerEnv, input: CreateNotificationInput, fallbackUser?: User) {
+  if (env.ASYNC_JOBS) {
+    await env.ASYNC_JOBS.send({ type: 'notification.dispatch', input } satisfies NotificationQueueJob)
+    return undefined
+  }
+
+  if (fallbackUser)
+    return createAndDispatchNotificationForUser(env, fallbackUser, input)
+
+  return createAndDispatchNotification(env, input)
+}
+
 async function createAndDispatchNotificationForUser(env: WorkerEnv, user: User, input: CreateNotificationInput) {
   const notificationId = await insertNotification(env, input)
   await recordDelivery(env, notificationId, 'in_app', 'sent')
@@ -2129,7 +2154,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     const user = usersById.get(input.userId)
     if (!user)
       throw new Error('通知用户不存在')
-    return createAndDispatchNotificationForUser(env, user, input)
+    return enqueueNotification(env, input, user)
   }
   const previousApplications = new Map((Array.isArray(previous.applications) ? previous.applications : []).map(item => [item.id, item]))
   const nextApplications = Array.isArray(next.applications) ? next.applications : []
@@ -2251,6 +2276,10 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
       })
     }
   }
+}
+
+export async function handleNotificationJob(job: NotificationQueueJob, env: WorkerEnv) {
+  await createAndDispatchNotification(env, job.input)
 }
 
 export async function handleNotificationRequest(request: Request, env: WorkerEnv) {

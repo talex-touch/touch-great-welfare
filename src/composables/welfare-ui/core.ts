@@ -1344,6 +1344,9 @@ export function useWelfareUiState() {
   }
 
   function autoProvisionMessage(result: ProvisionApplicationRewardResult) {
+    if (result.status === 'pending')
+      return result.itemId ? `资源 ${result.itemId} 已进入后台自动发放队列，请稍后刷新查看结果。` : '自动发放已进入后台队列，请稍后刷新查看结果。'
+
     if (result.status === 'provisioned' && result.provider === 'newapi')
       return `NewAPI 自动发放：${result.key.name}\nKey: ${result.key.key}\n有效期：${result.key.expiresAt}`
 
@@ -1397,7 +1400,7 @@ export function useWelfareUiState() {
     resourceAutoProvisionMessage.value = message
     if (message.includes('数据库资源'))
       databaseProvisionConfigForm.message = message
-    if (message.includes('Sub2API 资源'))
+    if (message.includes('Sub2API 资源') || message.includes('后台自动发放队列'))
       sub2ApiKeyForm.message = message
     if (message.includes('NewAPI 自动发放')) {
       temporaryAiKey.value = result.status === 'provisioned' && result.provider === 'newapi' ? result.key.key : temporaryAiKey.value
@@ -1424,9 +1427,13 @@ export function useWelfareUiState() {
       rejectReason: draft.note,
     })
     delete resourceReviewDrafts[itemId]
-    if (['approved', 'adjusted_approved'].includes(draft.status))
-      applyAutoProvisionMessage(await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId))
-    await welfare.reloadWelfareState()
+    let provisionResult: ProvisionApplicationRewardResult | undefined
+    if (['approved', 'adjusted_approved'].includes(draft.status)) {
+      provisionResult = await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId)
+      applyAutoProvisionMessage(provisionResult)
+    }
+    if (provisionResult?.status !== 'pending')
+      await welfare.reloadWelfareState()
   }
 
   async function completeResourceProvision(applicationId: string, itemId: string) {
@@ -1702,9 +1709,12 @@ export function useWelfareUiState() {
 
   async function answerApplication(applicationId: string, answer: string) {
     await answerApplicationAction(applicationId, answer)
-    applyAutoProvisionMessage(await provisionApplicationReward(welfare.currentUser.value!.id, applicationId))
-    await welfare.reloadWelfareState()
-    await refreshPointTransactions()
+    const provisionResult = await provisionApplicationReward(welfare.currentUser.value!.id, applicationId)
+    applyAutoProvisionMessage(provisionResult)
+    if (provisionResult.status !== 'pending') {
+      await welfare.reloadWelfareState()
+      await refreshPointTransactions()
+    }
   }
 
   async function completeApplication(applicationId: string) {
@@ -2587,12 +2597,20 @@ export function useWelfareUiState() {
     if (application && application.type !== 'image')
       throw new Error('图片申请不存在')
     try {
-      await createImageJob(welfare.currentUser.value.id, application?.description ?? payload.description, targetApplicationId)
+      const result = await createImageJob(welfare.currentUser.value.id, application?.description ?? payload.description, targetApplicationId)
+      applicationSecurityForm.message = result.status === 'pending'
+        ? '图片生成已进入后台队列，请稍后刷新任务状态。'
+        : '图片生成已完成'
       resetApplicationFiles()
+      if (result.status !== 'pending') {
+        await welfare.reloadWelfareState()
+        await refreshPointTransactions()
+      }
     }
-    finally {
+    catch (error) {
       await welfare.reloadWelfareState()
       await refreshPointTransactions()
+      throw error
     }
   }
 
