@@ -103,7 +103,7 @@ const currentCreateTitle = computed(() => {
 const currentModeBadge = computed(() => applicationMode.value === 'resource' ? '公益资源支持' : applicationMode.value === 'image' ? '图片资源' : '高级权益')
 const currentModeTagline = computed(() => {
   if (applicationMode.value === 'resource')
-    return '为公益项目申请科技资源，助力更高效地创造社会价值。'
+    return ''
   if (applicationMode.value === 'image')
     return '提交图片生成需求，补充用途、风格、尺寸与限制说明。'
   return '提交 Pro 能力申请，说明协作场景、目标产出和时效要求。'
@@ -253,6 +253,11 @@ function formatUsd(value: number) {
 
 function formatRounds(value: number) {
   return `${Math.trunc(Number(value || 0)).toLocaleString('zh-CN')} 轮`
+}
+
+function resourceItemAttachmentBytes(item: { payload: Record<string, any> }) {
+  const attachments = Array.isArray(item.payload.attachments) ? item.payload.attachments : []
+  return attachments.reduce((sum, file) => sum + Math.max(0, Math.trunc(Number(file?.size || 0))), 0)
 }
 
 interface ResourceDraftItem {
@@ -1021,7 +1026,7 @@ onBeforeUnmount(() => {
             </h2>
             <span class="resource-create-badge">{{ currentModeBadge }}</span>
           </div>
-          <p class="resource-create-subtitle">
+          <p v-if="currentModeTagline" class="resource-create-subtitle">
             {{ currentModeTagline }}
           </p>
         </div>
@@ -1274,7 +1279,7 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="space-y-5">
-                <div v-for="group in groupedResourceItems" :key="group.config!.resourceType" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div v-for="group in groupedResourceItems" :key="group.config!.resourceType" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-black">
                   <div class="flex flex-wrap gap-3 items-center justify-between">
                     <div>
                       <h3 class="text-xl fw-900">
@@ -1290,7 +1295,7 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="mt-4 space-y-4">
-                    <div v-for="item in group.items" :key="item.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+                    <div v-for="item in group.items" :key="item.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-black">
                       <div class="flex flex-wrap gap-3 items-center justify-between">
                         <b>资源明细</b>
                         <TxButton size="sm" variant="danger" @click="removeResourceApplicationItem(item.id)">
@@ -1368,6 +1373,13 @@ onBeforeUnmount(() => {
                           <label class="gap-2 grid md:col-span-2"><span class="field-label">{{ genericResourcePurposeLabel(item.resourceType) }}</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" :placeholder="genericResourcePurposePlaceholder(item.resourceType)" /></label>
                         </template>
                       </div>
+                      <div class="resource-item-attachments mt-4">
+                        <div class="mb-2 flex gap-3 items-center justify-between">
+                          <span class="field-label">明细附件 / 图片</span>
+                          <span class="field-hint">{{ formatBytes(resourceItemAttachmentBytes(item)) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
+                        </div>
+                        <TxFileUploader v-model="item.payload.attachments" :max="20" button-text="上传明细附件" drop-text="把本条明细的图片和补充材料拖拽到这里" hint-text="仅用于当前资源明细；所有明细附件总大小不超过 200MB。" />
+                      </div>
                       <div class="resource-estimate-card mt-4">
                         <div class="flex flex-wrap gap-2 items-center justify-between">
                           <b>本项预估资源</b>
@@ -1402,24 +1414,6 @@ onBeforeUnmount(() => {
               <div class="resource-section-heading">
                 <span>03</span>
                 <div>
-                  <h3>附件材料</h3>
-                  <p>上传图片、Markdown 或补充材料，也可在申请说明中填写外链。</p>
-                </div>
-              </div>
-
-              <div>
-                <div class="mb-2 flex gap-3 items-center justify-between">
-                  <span class="field-label">Markdown 附件 / 图片</span>
-                  <span class="field-hint">{{ formatBytes(totalApplicationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
-                </div>
-                <TxFileUploader v-model="applicationFiles" :max="20" button-text="上传附件" drop-text="图片和补充材料都拖拽到这里" hint-text="图片、Markdown 附件和补充材料都上传到这里；全部文件总大小不超过 200MB。也可在申请说明里填写百度网盘等外链。" />
-              </div>
-            </section>
-
-            <section class="resource-form-section">
-              <div class="resource-section-heading">
-                <span>04</span>
-                <div>
                   <h3>结算与提交</h3>
                   <p>核对资源成本、优惠与安全校验后直接提交。</p>
                 </div>
@@ -1447,7 +1441,7 @@ onBeforeUnmount(() => {
                       大模型额度按申请金额阶梯折扣；RPM/TPM 修改和有效期延长不参与活动折扣。
                     </p>
                   </div>
-                  <span class="text-xs fw-900 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
+                  <span class="text-xs fw-900 px-3 py-1 rounded-full bg-slate-100 dark:bg-black">
                     {{ resourceCheckoutRows.length }} 条
                   </span>
                 </div>

@@ -183,6 +183,40 @@ async function withUploadedImages<T extends { attachments?: UploadableAttachment
   }
 }
 
+function isUploadableAttachment(value: unknown): value is UploadableAttachment {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return false
+
+  const file = value as Partial<UploadableAttachment>
+  return typeof file.name === 'string'
+    && Number.isFinite(Number(file.size))
+    && typeof file.type === 'string'
+}
+
+function uploadableAttachments(value: unknown): UploadableAttachment[] {
+  return Array.isArray(value) ? value.filter(isUploadableAttachment) : []
+}
+
+function attachmentBytes(value: unknown) {
+  return uploadableAttachments(value).reduce((sum, file) => sum + Math.max(0, Math.trunc(Number(file.size || 0))), 0)
+}
+
+async function withUploadedResourceImages<T extends { attachments?: UploadableAttachment[], resourceItems: Array<{ payload: Record<string, any> }> }>(payload: T): Promise<T> {
+  const uploadedPayload = await withUploadedImages(payload)
+  const resourceItems = await Promise.all(uploadedPayload.resourceItems.map(async item => ({
+    ...item,
+    payload: {
+      ...item.payload,
+      attachments: await Promise.all(uploadableAttachments(item.payload.attachments).map(uploadImageToR2)),
+    },
+  })))
+
+  return {
+    ...uploadedPayload,
+    resourceItems,
+  } as T
+}
+
 async function uploadAttachmentImages(files: UploadLikeFile[] = []) {
   return Promise.all(files.map(uploadImageToR2))
 }
@@ -797,7 +831,8 @@ export function useWelfareUiState() {
   const loginFeatureEnabled = computed(() => systemConfig.value.siteEnabled && systemConfig.value.loginEnabled)
   const registrationFeatureEnabled = computed(() => systemConfig.value.siteEnabled && systemConfig.value.registrationEnabled)
   const rechargeFeatureEnabled = computed(() => systemConfig.value.siteEnabled && systemConfig.value.rechargeEnabled)
-  const totalApplicationBytes = computed(() => applicationFiles.value.reduce((sum, file) => sum + file.size, 0))
+  const totalApplicationBytes = computed(() => applicationFiles.value.reduce((sum, file) => sum + file.size, 0)
+    + resourceApplicationItems.value.reduce((sum, item) => sum + attachmentBytes(item.payload.attachments), 0))
   const totalStudentBytes = computed(() => studentFiles.value.reduce((sum, file) => sum + file.size, 0))
   const activeRequestCount = computed(() => welfare.currentUser.value ? welfare.activeRequestCount(welfare.currentUser.value.id) : 0)
   const canCreateRequest = computed(() => activeRequestCount.value < MAX_ACTIVE_USER_REQUESTS)
@@ -1130,6 +1165,7 @@ export function useWelfareUiState() {
       containsSensitiveInfo: false,
       containsPrivacy: false,
       logRetention: 0,
+      attachments: [],
     }
   }
 
@@ -1143,6 +1179,7 @@ export function useWelfareUiState() {
         reason: '',
         operationScope: '',
         duration: RESOURCE_DEFAULT_DURATION,
+        attachments: [],
       }
     }
     if (resourceType === 'llm_api_quota')
@@ -1157,6 +1194,7 @@ export function useWelfareUiState() {
       duration: RESOURCE_DEFAULT_DURATION,
       accessScope: '',
       purpose: '',
+      attachments: [],
     }
   }
 
@@ -1245,17 +1283,27 @@ export function useWelfareUiState() {
     resourceApplicationForm.selectedCouponId = ''
     resourceApplicationForm.shareToSquare = false
     resourceApplicationForm.squarePostContent = ''
+    const legacyApplicationFiles = application.attachments.map(item => ({ ...item }))
     resourceApplicationItems.value = (application.resourceItems ?? []).map(item => ({
       id: item.id,
       resourceType: item.resourceType,
       resourceSubtype: item.resourceSubtype,
-      payload: { ...item.payload },
+      payload: {
+        ...item.payload,
+        attachments: uploadableAttachments(item.payload.attachments).map(file => ({ ...file })),
+      },
       requestedQuota: item.requestedQuota,
       requestedPermission: item.requestedPermission,
       duration: item.duration,
     }))
-    applicationFiles.value = application.attachments.map(item => ({ ...item })) as UploadLikeFile[]
+    applicationFiles.value = []
     ensureSelectedResourceItems()
+    if (legacyApplicationFiles.length && resourceApplicationItems.value[0]) {
+      resourceApplicationItems.value[0].payload.attachments = [
+        ...uploadableAttachments(resourceApplicationItems.value[0].payload.attachments),
+        ...legacyApplicationFiles,
+      ]
+    }
   }
 
   function resourceApplicationPayload(saveAsDraft: boolean, security: Record<string, unknown> = {}) {
@@ -1274,7 +1322,13 @@ export function useWelfareUiState() {
       ownerId: resourceApplicationForm.ownerId || welfare.currentUser.value.id,
       duration: resourceApplicationForm.duration,
       selectedResourceTypes: resourceApplicationForm.selectedResourceTypes,
-      resourceItems: resourceApplicationItems.value,
+      resourceItems: resourceApplicationItems.value.map(item => ({
+        ...item,
+        payload: {
+          ...item.payload,
+          attachments: uploadableAttachments(item.payload.attachments),
+        },
+      })),
       acceptedTermIds: resourceApplicationForm.acceptedTermIds,
       waiveRejectionReviewFee: resourceApplicationForm.waiveRejectionReviewFee,
       couponId: saveAsDraft ? undefined : resourceApplicationForm.selectedCouponId || undefined,
@@ -1305,7 +1359,7 @@ export function useWelfareUiState() {
 
     await submitApplicationCommand({
       type: 'resource',
-      ...await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)),
+      ...await withUploadedResourceImages(resourceApplicationPayload(saveAsDraft, security)),
     })
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
@@ -1331,7 +1385,7 @@ export function useWelfareUiState() {
     await submitApplicationCommand({
       type: 'resource',
       applicationId,
-      ...await withUploadedImages(resourceApplicationPayload(saveAsDraft, security)),
+      ...await withUploadedResourceImages(resourceApplicationPayload(saveAsDraft, security)),
     })
     await welfare.reloadWelfareState()
     await refreshPointTransactions()

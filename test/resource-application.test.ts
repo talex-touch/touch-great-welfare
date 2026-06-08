@@ -10,6 +10,7 @@ describe('resource application platform rules', async () => {
   const {
     aggregateResourceApplicationStatus,
     canApplyResourceType,
+    normalizeResourceItems,
     RESOURCE_POOL_CATEGORIES,
     RESOURCE_TYPE_CONFIGS,
     termsForResourceTypes,
@@ -177,5 +178,24 @@ describe('resource application platform rules', async () => {
     expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved' }, { approvalStatus: 'adjusted_approved' }])).toBe('approved')
     expect(aggregateResourceApplicationStatus([{ approvalStatus: 'rejected' }, { approvalStatus: 'rejected' }])).toBe('rejected')
     expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved' }, { approvalStatus: 'rejected' }])).toBe('partial_approved')
+  })
+
+  it('keeps attachments on each normalized resource item', () => {
+    const [item] = normalizeResourceItems('app_1', [{
+      resourceType: 'database',
+      resourceSubtype: 'postgresql',
+      payload: {
+        name: 'demo_db',
+        attachments: [
+          { id: 'att_1', name: 'schema.png', size: 128, type: 'image/png', url: '/api/uploads/images/schema.png' },
+          { id: 'att_2', name: 'external.png', size: 256, type: 'image/png', url: 'https://example.com/external.png' },
+        ],
+      },
+    }], '2026-06-09T00:00:00.000Z', false)
+
+    expect(item.payload.attachments).toEqual([
+      { id: 'att_1', name: 'schema.png', size: 128, type: 'image/png', r2Key: undefined, url: '/api/uploads/images/schema.png', dataUrl: undefined },
+      { id: 'att_2', name: 'external.png', size: 256, type: 'image/png', r2Key: undefined, url: undefined, dataUrl: undefined },
+    ])
   })
 })

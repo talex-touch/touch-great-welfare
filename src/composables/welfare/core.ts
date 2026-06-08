@@ -2362,6 +2362,17 @@ function isImageDataUrl(value: unknown): value is string {
   return typeof value === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value)
 }
 
+function safeAttachmentUrl(value: unknown) {
+  if (typeof value !== 'string')
+    return undefined
+  const text = value.trim()
+  if (!text)
+    return undefined
+  if (text.startsWith('/api/uploads/') || text.startsWith('/uploads/'))
+    return text
+  return undefined
+}
+
 function toAttachmentMeta(files: FileLike[] = []): AttachmentMeta[] {
   return files.map(file => ({
     id: file.id ?? createId('att'),
@@ -2369,13 +2380,31 @@ function toAttachmentMeta(files: FileLike[] = []): AttachmentMeta[] {
     size: file.size,
     type: file.type || 'application/octet-stream',
     r2Key: file.r2Key,
-    url: file.url,
+    url: safeAttachmentUrl(file.url),
     dataUrl: isImageAttachment(file) && isImageDataUrl(file.dataUrl) ? file.dataUrl : undefined,
   }))
 }
 
 function totalBytes(files: FileLike[] = []) {
   return files.reduce((sum, file) => sum + file.size, 0)
+}
+
+function isFileLike(value: unknown): value is FileLike {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return false
+
+  const file = value as Partial<FileLike>
+  return typeof file.name === 'string'
+    && Number.isFinite(Number(file.size))
+    && typeof file.type === 'string'
+}
+
+function fileLikesFromUnknown(value: unknown): FileLike[] {
+  return Array.isArray(value) ? value.filter(isFileLike) : []
+}
+
+function resourceItemAttachmentFiles(items: SubmitResourceApplicationPayload['resourceItems'] = []) {
+  return items.flatMap(item => fileLikesFromUnknown(item.payload.attachments))
 }
 
 export function resourceTypeConfig(resourceType: ResourceType) {
@@ -2612,12 +2641,16 @@ export function normalizeResourceItems(applicationId: string, items: SubmitResou
     const config = assertKnownResourceType(item.resourceType)
     if (validate)
       validateResourceItemInput(item)
+    const payload = {
+      ...item.payload,
+      attachments: toAttachmentMeta(fileLikesFromUnknown(item.payload.attachments)),
+    }
     return {
       id: item.id ?? createId('item'),
       applicationId,
       resourceType: item.resourceType,
       resourceSubtype: item.resourceSubtype,
-      payload: { ...item.payload },
+      payload,
       requestedQuota: item.requestedQuota?.trim() || undefined,
       requestedPermission: item.requestedPermission?.trim() || readString(item.payload, 'permission') || undefined,
       duration: item.duration?.trim() || readString(item.payload, 'duration') || undefined,
@@ -3347,6 +3380,11 @@ export function useWelfareStore() {
     }
   }
 
+  function publicResourceItemPayload(payload: Record<string, any>) {
+    const { attachments: _attachments, ...publicPayload } = payload
+    return publicPayload
+  }
+
   function buildResourceSquarePost(application: WelfareApplication, payload: SubmitResourceApplicationPayload, actualResourceTypes: ResourceType[], squarePostId: string, createdAt: string): SquarePost {
     return {
       id: squarePostId,
@@ -3371,7 +3409,7 @@ export function useWelfareStore() {
         resourceItems: payload.resourceItems.map(item => ({
           resourceType: item.resourceType,
           resourceSubtype: item.resourceSubtype,
-          payload: item.payload,
+          payload: publicResourceItemPayload(item.payload),
           requestedQuota: item.requestedQuota,
           requestedPermission: item.requestedPermission,
           duration: item.duration,
@@ -3460,7 +3498,7 @@ export function useWelfareStore() {
             resourceItems: application.resourceItems?.map(item => ({
               resourceType: item.resourceType,
               resourceSubtype: item.resourceSubtype,
-              payload: item.payload,
+              payload: publicResourceItemPayload(item.payload),
               requestedQuota: item.requestedQuota,
               requestedPermission: item.requestedPermission,
               duration: item.duration,
@@ -3876,7 +3914,7 @@ export function useWelfareStore() {
         turnstileVerified: payload.turnstileVerified,
       })
     }
-    if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
+    if (totalBytes([...(payload.attachments ?? []), ...resourceItemAttachmentFiles(payload.resourceItems)]) > MAX_ATTACHMENT_BYTES)
       throw new Error('附件总大小不能超过 200MB')
     if (!resourceTypes.length)
       throw new Error('请至少选择一种资源类型')
@@ -4005,7 +4043,7 @@ export function useWelfareStore() {
         turnstileVerified: payload.turnstileVerified,
       })
     }
-    if (totalBytes(payload.attachments) > MAX_ATTACHMENT_BYTES)
+    if (totalBytes([...(payload.attachments ?? []), ...resourceItemAttachmentFiles(payload.resourceItems)]) > MAX_ATTACHMENT_BYTES)
       throw new Error('附件总大小不能超过 200MB')
     if (!resourceTypes.length)
       throw new Error('请至少选择一种资源类型')

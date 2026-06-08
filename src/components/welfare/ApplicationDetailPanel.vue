@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AttachmentMeta } from '~/composables/welfare'
 import type { UploadLikeFile } from '~/composables/welfare-ui'
 import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
@@ -104,6 +105,15 @@ function editDraft() {
   if (props.drawer)
     emit('close')
   router.push(`/dashboard/apply/create?draft=${encodeURIComponent(application.value.id)}`)
+}
+
+function resourceItemAttachments(item: { payload: Record<string, any> }): AttachmentMeta[] {
+  const attachments = Array.isArray(item.payload.attachments) ? item.payload.attachments : []
+  return attachments.filter((file): file is AttachmentMeta => !!file
+    && typeof file.id === 'string'
+    && typeof file.name === 'string'
+    && Number.isFinite(Number(file.size))
+    && typeof file.type === 'string')
 }
 
 function handleSendMessage(type: 'comment' | 'supplement' | 'result_submission', content: string, attachments: UploadLikeFile[] = []) {
@@ -322,6 +332,12 @@ function handleComplete() {
                   <span>{{ field.label }}</span>
                   <b>{{ field.value }}</b>
                 </div>
+              </div>
+              <div v-if="resourceItemAttachments(item).length" class="mt-3 p-3 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-black">
+                <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+                  明细附件
+                </div>
+                <VerificationAttachmentGrid :files="resourceItemAttachments(item)" />
               </div>
               <div v-if="resourceItemApprovedFields(item).length" class="mt-3 p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30">
                 <div class="text-xs text-emerald-900 fw-900 dark:text-emerald-100">

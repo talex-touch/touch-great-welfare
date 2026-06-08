@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AttachmentMeta } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxFlipOverlay, TxSelect, TxSelectItem, TxTag } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -107,6 +108,15 @@ function onRequestSupplement(id: string) {
     delete reviewDrafts[id]
     delete rejectFraudulentDrafts[id]
   }, '已请求用户补充材料')
+}
+
+function resourceItemAttachments(item: { payload: Record<string, any> }): AttachmentMeta[] {
+  const attachments = Array.isArray(item.payload.attachments) ? item.payload.attachments : []
+  return attachments.filter((file): file is AttachmentMeta => !!file
+    && typeof file.id === 'string'
+    && typeof file.name === 'string'
+    && Number.isFinite(Number(file.size))
+    && typeof file.type === 'string')
 }
 
 function onReviewResourceItem(applicationId: string, itemId: string) {
@@ -337,6 +347,12 @@ onMounted(() => {
                     <span>{{ field.label }}</span>
                     <b>{{ field.value }}</b>
                   </div>
+                </div>
+                <div v-if="resourceItemAttachments(resourceItem).length" class="mt-3 p-3 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-black">
+                  <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+                    明细附件
+                  </div>
+                  <VerificationAttachmentGrid :files="resourceItemAttachments(resourceItem)" />
                 </div>
 
                 <div v-if="resourceItem.approvalStatus === 'pending'" class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">

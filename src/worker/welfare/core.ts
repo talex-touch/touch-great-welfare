@@ -2159,6 +2159,11 @@ function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTe
   }))
 }
 
+function publicResourceItemPayload(payload: Record<string, any>) {
+  const { attachments: _attachments, ...publicPayload } = payload
+  return publicPayload
+}
+
 function buildResourceSquarePost(application: WelfareApplication, payload: SubmitResourceApplicationPayload, actualResourceTypes: ResourceType[], squarePostId: string, createdAt: string): SquarePost {
   return {
     id: squarePostId,
@@ -2183,7 +2188,7 @@ function buildResourceSquarePost(application: WelfareApplication, payload: Submi
       resourceItems: payload.resourceItems.map(item => ({
         resourceType: item.resourceType,
         resourceSubtype: item.resourceSubtype,
-        payload: item.payload,
+        payload: publicResourceItemPayload(item.payload),
         requestedQuota: item.requestedQuota,
         requestedPermission: item.requestedPermission,
         duration: item.duration,
@@ -2571,7 +2576,7 @@ async function applyResourceApplicationCommand(env: WorkerEnv, state: Partial<We
     throw new Error('请填写申请标题')
   if (!isDraft && !payload.reason.trim())
     throw new Error('请填写申请说明')
-  if (totalAttachmentBytes(attachmentsFromPayload(payload.attachments)) > MAX_ATTACHMENT_BYTES)
+  if (totalResourceApplicationAttachmentBytes(payload) > MAX_ATTACHMENT_BYTES)
     throw new Error('附件总大小不能超过 200MB')
   if (!resourceTypes.length)
     throw new Error('请至少选择一种资源类型')
@@ -3242,6 +3247,17 @@ function isImageDataUrl(value: unknown): value is string {
 
 function totalAttachmentBytes(attachments: AttachmentMeta[]) {
   return attachments.reduce((sum, item) => sum + Math.max(0, Math.trunc(Number(item.size || 0))), 0)
+}
+
+function resourceItemAttachmentsFromPayload(items: SubmitResourceApplicationPayload['resourceItems'] = []) {
+  return items.flatMap(item => attachmentsFromPayload(item.payload?.attachments))
+}
+
+function totalResourceApplicationAttachmentBytes(payload: Pick<SubmitResourceApplicationPayload, 'attachments' | 'resourceItems'>) {
+  return totalAttachmentBytes([
+    ...attachmentsFromPayload(payload.attachments),
+    ...resourceItemAttachmentsFromPayload(payload.resourceItems),
+  ])
 }
 
 function cloneState<T>(state: T): T {
