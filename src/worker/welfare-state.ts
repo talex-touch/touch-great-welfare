@@ -1,11 +1,16 @@
 import type {
   ApplicationItem,
+  ApplicationMessageType,
   AttachmentMeta,
+  CouponDiscountType,
+  CouponScope,
+  CouponTemplate,
   CreditTransaction,
   CrowdReview,
   DailyCheckIn,
   EducationEmailChallenge,
   InvitationBinding,
+  ResourceApprovalStatus,
   ResourceType,
   SquareBoost,
   SquarePost,
@@ -36,12 +41,16 @@ import {
   COLLABORATION_APPLICATION_MIN_REASON_CHARS,
   COLLABORATION_DELIVERY_REWARD_MAX,
   COLLABORATION_DELIVERY_REWARD_MIN,
+  createFraudRejectionCooldownUntil,
   createProcessingDueAt,
+  createRejectionFeeWaiverBlockedUntil,
   createRetentionExpiresAt,
   createUserInviteCode,
   DAILY_CHECK_IN_COUPON_TTL_DAYS,
   DAILY_CHECK_IN_MAX_POINTS,
   discountedResourceItemCost,
+  EDUCATION_EMAIL_CHALLENGE_TTL_HOURS,
+  EDUCATION_EMAIL_REVIEW_INBOX,
   estimatedResourceItemCost,
   INVITATION_BIND_WINDOW_HOURS,
   isValidApplicationPow,
@@ -50,8 +59,11 @@ import {
   llmApiRequiresExtendedReview,
   MAX_ACTIVE_USER_REQUESTS,
   MAX_ATTACHMENT_BYTES,
+  normalizeApplicationPolicy,
   normalizeLlmApiBudgetUsd,
   normalizeResourceItems,
+  normalizeSiteBanner,
+  normalizeSystemConfig,
   PRO_CONTEXT_APPEND_COST,
   PRO_EXPEDITE_COST,
   PRO_STANDARD_PROCESSING_HOURS,
@@ -59,6 +71,8 @@ import {
   resolveSelectableLlmApiModel,
   RESOURCE_TYPE_CONFIGS,
   resourceActivityPromotionName,
+  resourceApprovalStatusText,
+  resourceTypeLabel,
   rollDailyCheckInPoints,
   SQUARE_BOOST_REPORT_COOLDOWN_DAYS,
   SQUARE_BOOST_REPORT_PENALTY_POINTS,
@@ -2884,7 +2898,7 @@ function cloneState<T>(state: T): T {
   return JSON.parse(JSON.stringify(state)) as T
 }
 
-function pushApplicationMessage(application: WelfareApplication, userId: string, type: 'result_submission' | 'system' | 'supplement', content: string, attachments: AttachmentMeta[] = []) {
+function pushApplicationMessage(application: WelfareApplication, userId: string, type: ApplicationMessageType, content: string, attachments: AttachmentMeta[] = []) {
   application.messages ??= []
   application.messages.push({
     id: createId('msg'),
@@ -3204,6 +3218,829 @@ async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
   return json({ ok: true, applicationId: application.id, ...stateVersionPayload(result.version) })
 }
 
+function publicConfigPayload(state: unknown) {
+  const applicationPolicy = isRecord(state) && isRecord(state.applicationPolicy)
+    ? {
+        ...state.applicationPolicy,
+        turnstileSecretKey: maskSecret(state.applicationPolicy.turnstileSecretKey),
+      }
+    : undefined
+
+  return {
+    siteBanner: isRecord(state) ? state.siteBanner : undefined,
+    systemConfig: isRecord(state) ? state.systemConfig : undefined,
+    applicationPolicy,
+    createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
+  }
+}
+
+async function publicConfigResponse(env: WorkerEnv) {
+  const state = await readWelfareState(env)
+  return json(publicConfigPayload(state))
+}
+
+async function visibleCurrentUserState(request: Request, env: WorkerEnv) {
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
+
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
+  const sourceState = state as Partial<WelfareState>
+  const user = stateUsers(sourceState).find(item => item.id === userId && item.accountStatus !== 'suspended')
+  if (!user)
+    throw new Error('请先登录')
+
+  return {
+    user,
+    userId,
+    version,
+    state: clientVisibleWelfareState(sourceState, userId) as Partial<WelfareState>,
+  }
+}
+
+async function currentUserProfileResponse(request: Request, env: WorkerEnv) {
+  const current = await visibleCurrentUserState(request, env)
+  const currentUser = stateUsers(current.state).find(item => item.id === current.userId) ?? sanitizeUser(current.user)
+  return json({ currentUser, currentUserId: current.userId, version: current.version })
+}
+
+async function currentUserApplicationsResponse(request: Request, env: WorkerEnv) {
+  const current = await visibleCurrentUserState(request, env)
+  return json({
+    applications: current.state.applications ?? [],
+    users: current.state.users ?? [],
+    currentUserId: current.userId,
+    version: current.version,
+  })
+}
+
+async function currentUserWalletResponse(request: Request, env: WorkerEnv) {
+  const current = await visibleCurrentUserState(request, env)
+  return json({
+    coupons: current.state.coupons ?? [],
+    dailyCheckIns: current.state.dailyCheckIns ?? [],
+    invitationBindings: current.state.invitationBindings ?? [],
+    transactions: current.state.transactions ?? [],
+    currentUserId: current.userId,
+    version: current.version,
+  })
+}
+
+async function currentUserVerificationResponse(request: Request, env: WorkerEnv) {
+  const current = await visibleCurrentUserState(request, env)
+  return json({
+    studentVerifications: current.state.studentVerifications ?? [],
+    educationEmailChallenges: current.state.educationEmailChallenges ?? [],
+    currentUserId: current.userId,
+    version: current.version,
+  })
+}
+
+async function squareStateResponse(request: Request, env: WorkerEnv) {
+  const current = await visibleCurrentUserState(request, env)
+  return json({
+    squarePosts: current.state.squarePosts ?? [],
+    squareBoosts: current.state.squareBoosts ?? [],
+    squareReports: current.state.squareReports ?? [],
+    applications: current.state.applications ?? [],
+    users: current.state.users ?? [],
+    currentUserId: current.userId,
+    version: current.version,
+  })
+}
+
+async function collaborationStateResponse(request: Request, env: WorkerEnv) {
+  const current = await visibleCurrentUserState(request, env)
+  const applications = current.state.applications ?? []
+  return json({
+    collaborationApplications: current.state.collaborationApplications ?? [],
+    claimableDeliveryApplications: applications.filter(item => canClaimDeliveryApplication(item, current.user)),
+    currentUserDeliveryApplications: applications.filter(item => item.deliveryAssigneeId === current.userId && item.status !== 'completed'),
+    pendingDeliveryReviewApplications: applications.filter(item => item.deliveryReviewStatus === 'pending_review'),
+    crowdReviews: current.state.crowdReviews ?? [],
+    currentUserId: current.userId,
+    version: current.version,
+  })
+}
+
+async function adminVisibleState(request: Request, env: WorkerEnv) {
+  const { state, version } = await readWelfareStateRecord(env)
+  const sourceState = state as Partial<WelfareState>
+  const user = await authenticatedUser(request, env, sourceState)
+  assertAdminUser(user)
+  await syncUserPointBalancesFromLedger(env, sourceState)
+  return {
+    user,
+    version,
+    state: clientVisibleWelfareState(sourceState, user.id) as Partial<WelfareState>,
+  }
+}
+
+async function adminConfigResponse(request: Request, env: WorkerEnv) {
+  const current = await adminVisibleState(request, env)
+  return json({
+    oauth: current.state.oauth,
+    applicationPolicy: current.state.applicationPolicy,
+    siteBanner: current.state.siteBanner,
+    systemConfig: current.state.systemConfig,
+    currentUserId: current.user.id,
+    version: current.version,
+  })
+}
+
+async function adminApplicationsResponse(request: Request, env: WorkerEnv) {
+  const current = await adminVisibleState(request, env)
+  return json({
+    applications: current.state.applications ?? [],
+    crowdReviews: current.state.crowdReviews ?? [],
+    users: current.state.users ?? [],
+    currentUserId: current.user.id,
+    version: current.version,
+  })
+}
+
+async function adminVerificationsResponse(request: Request, env: WorkerEnv) {
+  const current = await adminVisibleState(request, env)
+  return json({
+    studentVerifications: current.state.studentVerifications ?? [],
+    educationEmailChallenges: current.state.educationEmailChallenges ?? [],
+    users: current.state.users ?? [],
+    currentUserId: current.user.id,
+    version: current.version,
+  })
+}
+
+function payloadRecord(payload: Record<string, unknown>, key: string) {
+  return isRecord(payload[key]) ? payload[key] as Record<string, unknown> : payload
+}
+
+async function commitAdminStateAction(
+  request: Request,
+  env: WorkerEnv,
+  mutate: (state: Partial<WelfareState>, user: User, payload: Record<string, unknown>) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void,
+) {
+  const record = await readWelfareStateRecord(env)
+  const previousState = record.state as Partial<WelfareState>
+  const originalState = cloneState(previousState)
+  const user = await authenticatedUser(request, env, previousState)
+  assertAdminUser(user)
+  const payload = await readPayload(request) as Record<string, unknown>
+  const body = await mutate(previousState, user, payload)
+  const result = await commitActionState(env, originalState, previousState, record.version)
+  return json({ ok: true, ...(body ?? {}), version: result.version })
+}
+
+async function updateAdminSystemConfigAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, user, payload) => {
+    const input = payloadRecord(payload, 'systemConfig') as Partial<WelfareState['systemConfig']>
+    const currentConfig = normalizeSystemConfig(state.systemConfig)
+    state.systemConfig = normalizeSystemConfig({
+      ...currentConfig,
+      ...input,
+      verification: {
+        student: input.verification?.student ?? currentConfig.verification.student,
+        frontline: input.verification?.frontline ?? currentConfig.verification.frontline,
+      },
+      updatedAt: now(),
+      updatedBy: user.id,
+    })
+    return { systemConfig: state.systemConfig }
+  })
+}
+
+async function updateAdminApplicationPolicyAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _user, payload) => {
+    const input = payloadRecord(payload, 'applicationPolicy') as Partial<WelfareState['applicationPolicy']>
+    const previousSecret = state.applicationPolicy?.turnstileSecretKey ?? ''
+    const nextSecret = typeof input.turnstileSecretKey === 'string' ? input.turnstileSecretKey.trim() : ''
+    const applicationPolicy = normalizeApplicationPolicy({
+      ...state.applicationPolicy,
+      ...input,
+      turnstileSecretKey: nextSecret && !isMaskedSecret(nextSecret) ? nextSecret : previousSecret,
+    })
+    state.applicationPolicy = applicationPolicy
+    return { applicationPolicy: { ...applicationPolicy, turnstileSecretKey: maskSecret(applicationPolicy.turnstileSecretKey) } }
+  })
+}
+
+async function updateAdminSiteBannerAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, user, payload) => {
+    const input = payloadRecord(payload, 'siteBanner') as Partial<WelfareState['siteBanner']>
+    state.siteBanner = normalizeSiteBanner({
+      ...state.siteBanner,
+      ...input,
+      updatedAt: now(),
+      updatedBy: user.id,
+    })
+    return { siteBanner: state.siteBanner }
+  })
+}
+
+async function updateAdminOauthAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _user, payload) => {
+    const input = payloadRecord(payload, 'oauth')
+    state.oauth = {
+      enabled: input.enabled === undefined ? !!state.oauth?.enabled : !!input.enabled,
+      provider: input.provider === 'google' || input.provider === 'custom' ? input.provider : 'github',
+      clientId: typeof input.clientId === 'string' ? input.clientId.trim() : state.oauth?.clientId ?? '',
+      authorizeUrl: typeof input.authorizeUrl === 'string' ? input.authorizeUrl.trim() : state.oauth?.authorizeUrl ?? '',
+      tokenUrl: typeof input.tokenUrl === 'string' ? input.tokenUrl.trim() : state.oauth?.tokenUrl ?? '',
+      callbackUrl: typeof input.callbackUrl === 'string' ? input.callbackUrl.trim() : state.oauth?.callbackUrl ?? '',
+      scopes: typeof input.scopes === 'string' ? input.scopes.trim() : state.oauth?.scopes ?? '',
+    }
+    return { oauth: state.oauth }
+  })
+}
+
+function adminTargetUser(state: Partial<WelfareState>, userId: unknown) {
+  const user = stateUsers(state).find(item => item.id === userId)
+  if (!user)
+    throw new Error('用户不存在')
+  return user
+}
+
+async function updateAdminUserRoleAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const target = adminTargetUser(state, payload.userId)
+    if (target.role === 'admin')
+      throw new Error('管理员角色不能在此切换')
+    target.role = payload.enabled === true || payload.role === 'reviewer' ? 'reviewer' : 'user'
+    return { user: sanitizeUser(target) }
+  })
+}
+
+async function updateAdminUserSuspensionAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const target = adminTargetUser(state, payload.userId)
+    if (target.role === 'admin')
+      throw new Error('管理员账号不能封禁')
+    if (target.id === admin.id)
+      throw new Error('不能封禁当前管理员账号')
+    if (payload.suspended) {
+      target.accountStatus = 'suspended'
+      target.suspendedReason = typeof payload.reason === 'string' && payload.reason.trim() ? payload.reason.trim() : '违反平台使用政策'
+      target.suspendedAt = now()
+      target.suspendedBy = admin.id
+    }
+    else {
+      target.accountStatus = 'active'
+      target.suspendedReason = undefined
+      target.suspendedAt = undefined
+      target.suspendedBy = undefined
+    }
+    return { user: sanitizeUser(target) }
+  })
+}
+
+async function updateAdminUserStudentVerifiedAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const target = adminTargetUser(state, payload.userId)
+    target.profile.studentVerified = !!payload.verified
+    return { user: sanitizeUser(target) }
+  })
+}
+
+async function unbindAdminUserGithubAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const target = adminTargetUser(state, payload.userId)
+    if (!target.profile.githubAuthorized && !target.profile.githubUsername && !target.profile.githubId)
+      throw new Error('该用户没有可解绑的 GitHub 认证')
+    target.profile.githubAuthorized = false
+    target.profile.githubAuthorizedAt = undefined
+    target.profile.githubId = undefined
+    target.profile.githubUsername = undefined
+    target.profile.selectedRepo = ''
+    target.profile.githubRepos = []
+    return { user: sanitizeUser(target) }
+  })
+}
+
+async function adjustAdminUserPointsAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, async (state, _admin, payload) => {
+    const target = adminTargetUser(state, payload.userId)
+    const amount = Math.trunc(Number(payload.amount))
+    if (!Number.isFinite(amount) || amount === 0)
+      throw new Error('请输入非零积分调整值')
+    const tx = await appendPointTransaction(env, {
+      userId: target.id,
+      delta: amount,
+      type: 'adjustment',
+      reason: typeof payload.reason === 'string' && payload.reason.trim() ? payload.reason.trim() : '管理员手动调整',
+      createdAt: now(),
+      allowDebt: true,
+    }, state)
+    return { transaction: tx, user: sanitizeUser(target) }
+  })
+}
+
+function adminApplication(state: Partial<WelfareState>, applicationId: unknown) {
+  const application = stateApplications(state).find(item => item.id === applicationId)
+  if (!application)
+    throw new Error('申请不存在')
+  return application
+}
+
+function sanitizeMessageType(value: unknown): ApplicationMessageType {
+  return value === 'comment' || value === 'supplement' || value === 'result_submission' || value === 'system' ? value : 'comment'
+}
+
+async function reviewAdminApplicationItemAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (application.type !== 'resource')
+      throw new Error('资源申请不存在')
+    if (!['submitted', 'in_review'].includes(application.status))
+      throw new Error('该申请不在审批中')
+    const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
+    if (!item)
+      throw new Error('资源明细不存在')
+    if (item.approvalStatus !== 'pending')
+      throw new Error('该资源明细已经审批')
+    const status = payload.status as ResourceApprovalStatus
+    if (!['approved', 'adjusted_approved', 'rejected'].includes(status))
+      throw new Error('审批状态无效')
+    const note = typeof payload.rejectReason === 'string' ? payload.rejectReason.trim() : typeof payload.note === 'string' ? payload.note.trim() : ''
+    if (status === 'rejected' && !note)
+      throw new Error('驳回资源明细时必须填写原因')
+    if (status === 'adjusted_approved' && !isRecord(payload.approvedPayload))
+      throw new Error('调整后通过必须填写批准后的额度/权限')
+    item.approvalStatus = status
+    item.approvedPayload = isRecord(payload.approvedPayload) ? payload.approvedPayload : undefined
+    item.rejectReason = note || undefined
+    item.provisionStatus = ['approved', 'adjusted_approved'].includes(status) ? 'pending' : 'not_required'
+    item.updatedAt = now()
+    application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [])
+    if (['approved', 'partial_approved', 'rejected'].includes(application.status)) {
+      application.reviewedAt = item.updatedAt
+      application.completedAt = item.updatedAt
+    }
+    application.answer = `<p>资源申请审批已更新：${resourceTypeLabel(item.resourceType)} / ${item.resourceSubtype} / ${resourceApprovalStatusText(item.approvalStatus)}。</p>`
+    return { applicationId: application.id, item }
+  })
+}
+
+function aggregateResourceApplicationStatusForWorker(items: Pick<ApplicationItem, 'approvalStatus'>[]) {
+  if (!items.length)
+    return 'draft' as WelfareApplication['status']
+  if (items.every(item => item.approvalStatus === 'rejected'))
+    return 'rejected' as WelfareApplication['status']
+  if (items.every(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus)))
+    return 'approved' as WelfareApplication['status']
+  if (items.some(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus)) && items.every(item => item.approvalStatus !== 'pending'))
+    return 'partial_approved' as WelfareApplication['status']
+  return 'in_review' as WelfareApplication['status']
+}
+
+async function completeAdminResourceProvisionAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (application.type !== 'resource')
+      throw new Error('资源申请不存在')
+    const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
+    if (!item)
+      throw new Error('资源明细不存在')
+    if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
+      throw new Error('只有通过的资源明细需要开通')
+    item.provisionStatus = 'completed'
+    item.provisionNote = typeof payload.note === 'string' ? payload.note.trim() : undefined
+    item.provisionCompletedAt = now()
+    item.updatedAt = item.provisionCompletedAt
+    return { applicationId: application.id, item }
+  })
+}
+
+async function answerAdminApplicationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, async (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('该申请已经处理')
+    const answer = sanitizeWorkerRichText(payload.answer)
+    if (isRichTextEmpty(answer))
+      throw new Error('请填写审核答复')
+    if (!application.costCharged && application.cost > 0) {
+      await appendPointTransaction(env, {
+        id: transactionId('application_cost', application.id),
+        userId: application.userId,
+        delta: -application.cost,
+        type: 'spend',
+        reason: `${application.type.toUpperCase()} 申请历史补扣`,
+        refId: application.id,
+        createdAt: now(),
+      }, state)
+      application.costCharged = true
+    }
+    const reviewedAt = now()
+    application.status = 'answered'
+    application.answer = answer
+    application.reviewedAt = reviewedAt
+    application.processingStartedAt ??= reviewedAt
+    pushApplicationMessage(application, admin.id, 'system', answer)
+    return { applicationId: application.id }
+  })
+}
+
+async function rejectAdminApplicationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, async (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('该申请已经处理')
+    const reason = sanitizeWorkerRichText(payload.reason)
+    if (isRichTextEmpty(reason))
+      throw new Error('请填写退回原因')
+    const reviewedAt = now()
+    const fraudulent = !!payload.fraudulent
+    application.status = 'rejected'
+    application.rejectionFraudulent = fraudulent
+    if (application.costCharged && application.cost > 0) {
+      await appendPointTransaction(env, {
+        id: transactionId('application_refund', application.id),
+        userId: application.userId,
+        delta: application.cost,
+        type: 'refund',
+        reason: `${application.type.toUpperCase()} 申请退回返还预扣`,
+        refId: application.id,
+        createdAt: reviewedAt,
+      }, state)
+      application.costCharged = false
+    }
+    if (application.expediteCost) {
+      await appendPointTransaction(env, {
+        id: transactionId('expedite_refund', application.id),
+        userId: application.userId,
+        delta: application.expediteCost,
+        type: 'refund',
+        reason: 'Pro 处理加速退回返还',
+        refId: application.id,
+        createdAt: reviewedAt,
+      }, state)
+      application.expediteCost = 0
+    }
+    if (fraudulent)
+      application.cooldownUntil = createFraudRejectionCooldownUntil(reviewedAt)
+    if (application.rejectionReviewFeeWaived)
+      application.waiveRejectionReviewFeeBlockedUntil = createRejectionFeeWaiverBlockedUntil(reviewedAt)
+    if (!application.rejectionReviewFeeWaived || fraudulent) {
+      const fee = application.rejectionReviewFee || calculateRejectionReviewFee(application.cost)
+      await appendPointTransaction(env, {
+        id: transactionId('rejection_review_fee', application.id),
+        userId: application.userId,
+        delta: -fee,
+        type: 'spend',
+        reason: '申请退回扣除 AI 审核手续费',
+        refId: application.id,
+        createdAt: reviewedAt,
+        allowDebt: true,
+      }, state)
+    }
+    application.answer = reason
+    application.reviewedAt = reviewedAt
+    pushApplicationMessage(application, admin.id, 'system', reason)
+    return { applicationId: application.id }
+  })
+}
+
+async function completeAdminApplicationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (application.status !== 'answered')
+      throw new Error('只有已答复的申请可以标记完成')
+    const completedAt = now()
+    application.status = 'completed'
+    application.completedAt = completedAt
+    pushApplicationMessage(application, admin.id, 'system', '<p>管理员已确认所有结果，申请完成。</p>')
+    return { applicationId: application.id }
+  })
+}
+
+async function requestAdminApplicationSupplementAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('只有审核中的申请可以请求补充材料')
+    const content = sanitizeWorkerRichText(payload.content)
+    if (isRichTextEmpty(content))
+      throw new Error('请填写补充材料要求')
+    application.status = 'needs_supplement'
+    application.processingStartedAt ??= now()
+    pushApplicationMessage(application, admin.id, 'system', content)
+    return { applicationId: application.id }
+  })
+}
+
+async function addAdminApplicationMessageAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    const content = sanitizeWorkerRichText(payload.content)
+    if (isRichTextEmpty(content))
+      throw new Error('请输入消息内容')
+    const attachments = attachmentsFromPayload(payload.attachments)
+    if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('附件总大小不能超过 200MB')
+    pushApplicationMessage(application, admin.id, sanitizeMessageType(payload.type), content, attachments)
+    return { applicationId: application.id }
+  })
+}
+
+async function reviewAdminStudentVerificationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, async (state, _admin, payload) => {
+    const verification = ensureStudentVerifications(state).find(item => item.id === payload.id)
+    if (!verification)
+      throw new Error('认证申请不存在')
+    if (verification.status !== 'pending')
+      throw new Error('该认证申请已经处理')
+    const decision = payload.status
+    const reply = sanitizeWorkerRichText(payload.reply)
+    const reviewedAt = now()
+    if (decision === 'approved') {
+      verification.status = 'approved'
+      verification.reply = richTextToPlainText(reply) ? reply : '认证通过，审核积分已返还。'
+      verification.reviewedAt = reviewedAt
+      verification.feeReturned = true
+      verification.educationEmailVerified = verification.educationEmailVerified || !!verification.educationEmail
+      verification.educationEmailVerifiedAt ||= verification.educationEmail ? reviewedAt : undefined
+      verification.educationEmailVerificationSource ||= verification.educationEmail ? 'admin_approved' : undefined
+      const target = stateUsers(state).find(item => item.id === verification.userId)
+      if (target && normalizeVerificationType(verification.verificationType) === 'student')
+        target.profile.studentVerified = true
+      await appendPointTransaction(env, {
+        id: transactionId('student_review_refund', verification.id),
+        userId: verification.userId,
+        delta: verification.reviewFee,
+        type: 'refund',
+        reason: `${verificationTypeLabel(normalizeVerificationType(verification.verificationType))}通过返还审核费`,
+        refId: verification.id,
+        createdAt: reviewedAt,
+      }, state)
+      return { verificationId: verification.id }
+    }
+    if (decision === 'needs_supplement') {
+      verification.status = 'needs_supplement'
+      verification.reply = richTextToPlainText(reply) ? reply : '材料不足，请补充有效证明后继续审核。'
+      verification.reviewedAt = reviewedAt
+      verification.supplementRequestedAt = reviewedAt
+      return { verificationId: verification.id }
+    }
+    if (decision === 'rejected') {
+      verification.status = 'rejected'
+      verification.reply = richTextToPlainText(reply) ? reply : '材料不足，审核费不返还。'
+      verification.reviewedAt = reviewedAt
+      return { verificationId: verification.id }
+    }
+    throw new Error('认证审核结果无效')
+  })
+}
+
+async function revokeAdminStudentVerificationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const userId = typeof payload.userId === 'string' ? payload.userId : ''
+    const reason = sanitizeWorkerRichText(payload.reason)
+    if (isRichTextEmpty(reason))
+      throw new Error('请填写撤销学生认证原因')
+    const target = adminTargetUser(state, userId)
+    const verification = ensureStudentVerifications(state)
+      .filter(item => item.userId === userId && normalizeVerificationType(item.verificationType) === 'student' && item.status === 'approved')
+      .sort((left, right) => (right.reviewedAt || right.createdAt).localeCompare(left.reviewedAt || left.createdAt))[0]
+    if (!verification)
+      throw new Error('没有可撤销的已通过学生认证')
+    verification.status = 'revoked'
+    verification.reply = `<p>管理员撤销认证。</p>${reason}`
+    verification.reviewedAt = now()
+    target.profile.studentVerified = false
+    return { verificationId: verification.id, user: sanitizeUser(target) }
+  })
+}
+
+function normalizeWorkerCouponRule(input: Record<string, unknown>) {
+  const scope: CouponScope = input.scope === 'recharge' || input.scope === 'general' ? input.scope : 'resource'
+  const discountType: CouponDiscountType = input.discountType === 'fixed_points' || input.discountType === 'fixed_ldc' || input.discountType === 'rate'
+    ? input.discountType
+    : scope === 'recharge' ? 'fixed_ldc' : 'rate'
+  const knownTypes = new Set(RESOURCE_TYPE_CONFIGS.map(item => item.resourceType))
+  return {
+    scope,
+    discountType,
+    discountRate: Math.max(0.01, Math.min(1, Number(input.discountRate || 1))),
+    discountAmount: Math.max(0, Math.trunc(Number(input.discountAmount || 0))),
+    resourceTypes: Array.isArray(input.resourceTypes) ? Array.from(new Set(input.resourceTypes.filter((item): item is ResourceType => knownTypes.has(item as ResourceType)))) : [],
+    minSpend: Math.max(0, Math.trunc(Number(input.minSpend || 0))),
+    maxDiscount: Math.max(0, Math.trunc(Number(input.maxDiscount || 0))),
+  }
+}
+
+function createCouponCodeValue() {
+  return Math.random().toString(36).slice(2, 10).toUpperCase()
+}
+
+async function createAdminCouponTemplateAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const name = typeof payload.name === 'string' ? payload.name.trim() : ''
+    if (!name)
+      throw new Error('请填写优惠券名称')
+    const rule = normalizeWorkerCouponRule(isRecord(payload.rule) ? payload.rule : payload)
+    if (rule.discountType === 'rate' && (!rule.discountRate || rule.discountRate <= 0 || rule.discountRate > 1))
+      throw new Error('折扣倍率需在 0.01 到 1 之间')
+    if (rule.discountType !== 'rate' && !rule.discountAmount)
+      throw new Error('固定抵扣金额需大于 0')
+    const createdAt = now()
+    const template: CouponTemplate = {
+      id: createId('cpt'),
+      name,
+      description: typeof payload.description === 'string' && payload.description.trim() ? payload.description.trim() : undefined,
+      enabled: payload.enabled !== false,
+      rule,
+      ttlDays: Math.max(0, Math.min(3650, Math.trunc(Number(payload.ttlDays ?? DAILY_CHECK_IN_COUPON_TTL_DAYS)))),
+      totalGrantLimit: payload.totalGrantLimit ? Math.max(1, Math.trunc(Number(payload.totalGrantLimit))) : undefined,
+      grantedCount: 0,
+      createdAt,
+      updatedAt: createdAt,
+      createdBy: admin.id,
+    }
+    state.couponTemplates ??= []
+    state.couponTemplates.unshift(template)
+    return { template }
+  })
+}
+
+async function createAdminCouponCodeAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const template = (state.couponTemplates ?? []).find(item => item.id === payload.templateId)
+    if (!template)
+      throw new Error('优惠券模板不存在')
+    const codeText = (typeof payload.code === 'string' && payload.code.trim() ? payload.code.trim() : createCouponCodeValue()).toUpperCase()
+    state.couponCodes ??= []
+    if (state.couponCodes.some(item => item.code === codeText))
+      throw new Error('兑换码已存在')
+    const code = {
+      id: createId('ccd'),
+      code: codeText,
+      templateId: template.id,
+      enabled: true,
+      maxRedemptions: Math.max(1, Math.trunc(Number(payload.maxRedemptions || 1))),
+      redeemedCount: 0,
+      perUserLimit: Math.max(1, Math.trunc(Number(payload.perUserLimit || 1))),
+      expiresAt: typeof payload.expiresAt === 'string' && payload.expiresAt ? payload.expiresAt : undefined,
+      createdAt: now(),
+      createdBy: admin.id,
+    }
+    state.couponCodes.unshift(code)
+    return { code }
+  })
+}
+
+async function grantAdminCouponsAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, _admin, payload) => {
+    const template = (state.couponTemplates ?? []).find(item => item.id === payload.templateId)
+    if (!template || !template.enabled)
+      throw new Error('优惠券模板不存在或已停用')
+    const userIds = Array.isArray(payload.userIds) ? Array.from(new Set(payload.userIds.filter((item): item is string => typeof item === 'string'))) : []
+    const existingUserIds = userIds.filter(userId => stateUsers(state).some(user => user.id === userId))
+    if (!existingUserIds.length)
+      throw new Error('请选择要发放的用户')
+    if (template.totalGrantLimit && template.grantedCount + existingUserIds.length > template.totalGrantLimit)
+      throw new Error('发放数量超过模板总发放上限')
+    const createdAt = now()
+    const coupons = existingUserIds.map(userId => createUserCouponFromRule(userId, 'bulk_grant', template, createdAt))
+    ensureCoupons(state).unshift(...coupons)
+    template.grantedCount += coupons.length
+    template.updatedAt = createdAt
+    return { coupons }
+  })
+}
+
+async function submitCrowdReviewAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    if (user.role !== 'admin' && user.role !== 'reviewer')
+      throw new Error('需要协作处理员权限')
+    if (payload.targetType !== 'pro_application')
+      throw new Error('协作建议当前只开放 Pro 申请摘要')
+    const targetId = typeof payload.targetId === 'string' ? payload.targetId : ''
+    const application = stateApplications(state).find(item => item.id === targetId && item.type === 'pro')
+    if (!application)
+      throw new Error('申请不存在')
+    if (!['pending_review', 'processing'].includes(application.status))
+      throw new Error('该申请已经处理')
+    if (application.userId === user.id)
+      throw new Error('不能审核自己的申请')
+    const decision = payload.decision === 'approve' || payload.decision === 'reject' || payload.decision === 'needs_admin' ? payload.decision : ''
+    if (!decision)
+      throw new Error('请选择有效的审核建议')
+    const note = sanitizeWorkerRichText(payload.note)
+    if (isRichTextEmpty(note))
+      throw new Error('请填写协作建议')
+    state.crowdReviews ??= []
+    const existing = state.crowdReviews.find(item => item.targetType === 'pro_application' && item.targetId === targetId && item.reviewerId === user.id)
+    if (existing) {
+      existing.decision = decision
+      existing.note = note
+      existing.createdAt = now()
+      return { review: existing }
+    }
+    const review: CrowdReview = {
+      id: createId('crv'),
+      targetType: 'pro_application',
+      targetId,
+      reviewerId: user.id,
+      decision,
+      note,
+      createdAt: now(),
+    }
+    state.crowdReviews.unshift(review)
+    return { review }
+  })
+}
+
+async function createSquarePostAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const title = typeof payload.title === 'string' ? payload.title.trim() : ''
+    const content = sanitizeWorkerRichText(payload.content)
+    if (!title)
+      throw new Error('请填写广场标题')
+    if (isRichTextEmpty(content))
+      throw new Error('请填写广场内容')
+    const applicationId = typeof payload.applicationId === 'string' ? payload.applicationId : ''
+    const application = applicationId ? stateApplications(state).find(item => item.id === applicationId && item.userId === user.id) : undefined
+    if (applicationId && !application)
+      throw new Error('只能分享自己的申请记录')
+    const createdAt = now()
+    const post: SquarePost = {
+      id: createId('square'),
+      userId: user.id,
+      type: application ? 'application_template' : 'review',
+      title,
+      content,
+      applicationId: application?.id,
+      requestType: application?.type,
+      template: payload.shareTemplate && application
+        ? {
+            type: application.type,
+            title: application.title,
+            description: application.description,
+            githubRepo: application.githubRepo,
+            extendStorage: application.storageExtended,
+            expediteProcessing: application.expedited,
+            selectedResourceTypes: application.selectedResourceTypes,
+            resourceItems: application.resourceItems?.map(item => ({
+              resourceType: item.resourceType,
+              resourceSubtype: item.resourceSubtype,
+              payload: item.payload,
+              requestedQuota: item.requestedQuota,
+              requestedPermission: item.requestedPermission,
+              duration: item.duration,
+            })),
+          }
+        : undefined,
+      createdAt,
+      updatedAt: createdAt,
+    }
+    ensureSquarePosts(state).unshift(post)
+    return { post }
+  })
+}
+
+function createEducationEmailCodeValue() {
+  const randomParts = Array.from({ length: 3 }, () => Math.random().toString(36).slice(2, 10).toUpperCase())
+  return `TGW-EDU-${Date.now().toString(36).toUpperCase()}-${randomParts.join('-')}`
+}
+
+async function createEducationEmailChallengeAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const email = normalizeStudentEmail(payload.email)
+    const realName = typeof payload.realName === 'string' ? payload.realName.trim() : ''
+    assertEducationEmail(email)
+    const createdAt = now()
+    const code = createEducationEmailCodeValue()
+    const subject = `Touch Great Welfare 教育邮箱认证 ${code}`
+    const body = [
+      'Touch Great Welfare 学生认证邮件证明',
+      '',
+      `认证码：${code}`,
+      `申请人姓名：${realName || '未填写'}`,
+      `平台用户：${user.profile.displayName || user.profile.email}`,
+      `平台用户 ID：${user.id}`,
+      `教育邮箱：${email}`,
+      '',
+      '我确认该邮件由本人从教育/学校邮箱发出，仅作为学生认证辅助证明，仍需平台人工复核。',
+    ].join('\n')
+    const challenge: EducationEmailChallenge = {
+      id: createId('edu_email'),
+      userId: user.id,
+      email,
+      code,
+      subject,
+      body,
+      mailto: `mailto:${EDUCATION_EMAIL_REVIEW_INBOX}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+      expiresAt: addHours(createdAt, EDUCATION_EMAIL_CHALLENGE_TTL_HOURS),
+      createdAt,
+    }
+    state.educationEmailChallenges = (state.educationEmailChallenges ?? []).filter((item) => {
+      const expiresAt = new Date(item.expiresAt).getTime()
+      return item.verifiedAt || (Number.isFinite(expiresAt) && expiresAt > Date.now())
+    })
+    state.educationEmailChallenges.unshift(challenge)
+    return { challenge }
+  })
+}
+
 async function currentStateResponse(request: Request, env: WorkerEnv) {
   const { state, version } = await readWelfareStateRecord(env)
   const userId = await requestUserId(request, env)
@@ -3263,6 +4100,28 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await bootstrapResponse(env)
       if (url.pathname === '/api/session')
         return await sessionResponse(request, env)
+      if (url.pathname === '/api/me')
+        return await currentUserProfileResponse(request, env)
+      if (url.pathname === '/api/config/public')
+        return await publicConfigResponse(env)
+      if (url.pathname === '/api/applications/mine')
+        return await currentUserApplicationsResponse(request, env)
+      if (url.pathname === '/api/wallet/summary')
+        return await currentUserWalletResponse(request, env)
+      if (url.pathname === '/api/verifications/mine')
+        return await currentUserVerificationResponse(request, env)
+      if (url.pathname === '/api/square/posts')
+        return await squareStateResponse(request, env)
+      if (url.pathname === '/api/collaboration/mine')
+        return await collaborationStateResponse(request, env)
+      if (url.pathname === '/api/admin/welfare/state')
+        return await adminStateResponse(request, env)
+      if (url.pathname === '/api/admin/config/welfare')
+        return await adminConfigResponse(request, env)
+      if (url.pathname === '/api/admin/applications')
+        return await adminApplicationsResponse(request, env)
+      if (url.pathname === '/api/admin/verifications')
+        return await adminVerificationsResponse(request, env)
       if (url.pathname === '/api/welfare-state/me')
         return await currentUserStateResponse(request, env)
       if (url.pathname === '/api/welfare-state/admin')
@@ -3271,7 +4130,93 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return currentStateResponse(request, env)
     }
 
+    if (request.method === 'PATCH') {
+      if (url.pathname === '/api/me/profile')
+        return await updateCurrentProfileAction(request, env)
+    }
+
+    if (request.method === 'PUT') {
+      if (url.pathname === '/api/admin/config/system')
+        return await updateAdminSystemConfigAction(request, env)
+      if (url.pathname === '/api/admin/config/application-policy')
+        return await updateAdminApplicationPolicyAction(request, env)
+      if (url.pathname === '/api/admin/config/site-banner')
+        return await updateAdminSiteBannerAction(request, env)
+      if (url.pathname === '/api/admin/config/oauth')
+        return await updateAdminOauthAction(request, env)
+    }
+
     if (request.method === 'POST') {
+      if (url.pathname === '/api/check-ins/today')
+        return await checkInTodayAction(request, env)
+      if (url.pathname === '/api/invitations/bind')
+        return await bindInvitationCodeAction(request, env)
+      if (url.pathname === '/api/invitations/vouch')
+        return await vouchInvitationAction(request, env)
+      if (url.pathname === '/api/coupons/redeem')
+        return await redeemCouponCodeAction(request, env)
+      if (url.pathname === '/api/square/posts')
+        return await createSquarePostAction(request, env)
+      if (url.pathname === '/api/square/boosts')
+        return await boostSquarePostAction(request, env)
+      if (url.pathname === '/api/square/reports')
+        return await reportSquareBoostAction(request, env)
+      if (url.pathname === '/api/applications/supplements')
+        return await submitApplicationSupplementAction(request, env)
+      if (url.pathname === '/api/verifications/student')
+        return await submitStudentVerificationAction(request, env)
+      if (url.pathname === '/api/verifications/student/supplement')
+        return await supplementStudentVerificationAction(request, env)
+      if (url.pathname === '/api/verifications/education-email-challenges')
+        return await createEducationEmailChallengeAction(request, env)
+      if (url.pathname === '/api/collaboration/applications')
+        return await submitCollaborationApplication(request, env)
+      if (url.pathname === '/api/collaboration/applications/review')
+        return await reviewCollaborationApplication(request, env)
+      if (url.pathname === '/api/collaboration/crowd-reviews')
+        return await submitCrowdReviewAction(request, env)
+      if (url.pathname === '/api/deliveries/claim')
+        return await claimDeliveryApplication(request, env)
+      if (url.pathname === '/api/deliveries/cancel-claim')
+        return await cancelDeliveryClaim(request, env)
+      if (url.pathname === '/api/deliveries/submit')
+        return await submitDeliveryResult(request, env)
+      if (url.pathname === '/api/deliveries/review')
+        return await reviewDeliveryResult(request, env)
+      if (url.pathname === '/api/admin/users/role')
+        return await updateAdminUserRoleAction(request, env)
+      if (url.pathname === '/api/admin/users/suspension')
+        return await updateAdminUserSuspensionAction(request, env)
+      if (url.pathname === '/api/admin/users/student-verification')
+        return await updateAdminUserStudentVerifiedAction(request, env)
+      if (url.pathname === '/api/admin/users/revoke-student-verification')
+        return await revokeAdminStudentVerificationAction(request, env)
+      if (url.pathname === '/api/admin/users/github-unbind')
+        return await unbindAdminUserGithubAction(request, env)
+      if (url.pathname === '/api/admin/users/points')
+        return await adjustAdminUserPointsAction(request, env)
+      if (url.pathname === '/api/admin/applications/review-item')
+        return await reviewAdminApplicationItemAction(request, env)
+      if (url.pathname === '/api/admin/applications/complete-provision')
+        return await completeAdminResourceProvisionAction(request, env)
+      if (url.pathname === '/api/admin/applications/answer')
+        return await answerAdminApplicationAction(request, env)
+      if (url.pathname === '/api/admin/applications/reject')
+        return await rejectAdminApplicationAction(request, env)
+      if (url.pathname === '/api/admin/applications/complete')
+        return await completeAdminApplicationAction(request, env)
+      if (url.pathname === '/api/admin/applications/request-supplement')
+        return await requestAdminApplicationSupplementAction(request, env)
+      if (url.pathname === '/api/admin/applications/messages')
+        return await addAdminApplicationMessageAction(request, env)
+      if (url.pathname === '/api/admin/verifications/student/review')
+        return await reviewAdminStudentVerificationAction(request, env)
+      if (url.pathname === '/api/admin/coupons/templates')
+        return await createAdminCouponTemplateAction(request, env)
+      if (url.pathname === '/api/admin/coupons/codes')
+        return await createAdminCouponCodeAction(request, env)
+      if (url.pathname === '/api/admin/coupons/grants')
+        return await grantAdminCouponsAction(request, env)
       const action = request.headers.get('x-welfare-action')?.trim()
       if (action === 'bootstrap-admin')
         return await bootstrapAdmin(request, env)

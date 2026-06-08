@@ -70,23 +70,44 @@ import {
   useWelfareStore,
 } from './welfare'
 import {
+  addApplicationMessageAction,
+  answerApplicationAction,
   bindInvitationCodeAction,
   boostSquarePostAction,
   cancelDeliveryClaimAction,
   checkInTodayAction,
   claimDeliveryApplicationAction,
+  completeApplicationAction,
+  completeResourceProvisionAction,
+  createCouponCodeAction,
+  createCouponTemplateAction,
+  createEducationEmailChallengeAction,
+  createSquarePostAction,
+  grantCouponsAction,
   redeemCouponCodeAction,
+  rejectApplicationAction,
   reportSquareBoostAction,
+  requestApplicationSupplementAdminAction,
+  reviewApplicationItemAction,
   reviewCollaborationApplicationAction,
   reviewDeliveryResultAction,
-  saveWelfareState,
+  reviewStudentVerificationAction,
+  revokeUserStudentVerificationAction,
+  setUserCrowdReviewerAction,
+  setUserStudentVerifiedAction,
+  setUserSuspendedAction,
   submitApplicationCommand,
   submitApplicationSupplementAction,
   submitCollaborationApplicationAction,
+  submitCrowdReviewAction,
   submitDeliveryResultAction,
   submitStudentVerificationAction,
   supplementStudentVerificationAction,
+  unbindUserGitHubAction,
+  updateApplicationPolicyAction,
   updateCurrentProfileAction,
+  updateSiteBannerAction,
+  updateSystemConfigAction,
   vouchInvitationAction,
 } from './welfare-persistence'
 
@@ -1383,7 +1404,7 @@ export function useWelfareUiState() {
         throw new Error('调整后通过的批准内容必须是合法 JSON')
       }
     }
-    welfare.reviewApplicationItem({
+    await reviewApplicationItemAction({
       applicationId,
       itemId,
       status: draft.status,
@@ -1391,20 +1412,18 @@ export function useWelfareUiState() {
       rejectReason: draft.note,
     })
     delete resourceReviewDrafts[itemId]
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
     if (['approved', 'adjusted_approved'].includes(draft.status))
       applyAutoProvisionMessage(await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId))
     await welfare.reloadWelfareState()
   }
 
   async function completeResourceProvision(applicationId: string, itemId: string) {
-    welfare.completeResourceProvision({
+    await completeResourceProvisionAction({
       applicationId,
       itemId,
       note: resourceProvisionDrafts[itemId],
     })
     delete resourceProvisionDrafts[itemId]
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
     await welfare.reloadWelfareState()
   }
 
@@ -1437,9 +1456,9 @@ export function useWelfareUiState() {
     educationEmailVerificationForm.loading = true
     educationEmailVerificationForm.message = ''
     try {
-      const challenge = welfare.createEducationEmailChallenge(studentForm.educationEmail, studentForm.realName)
-      applyEducationEmailChallenge(challenge)
-      await saveWelfareState(welfare.state)
+      const result = await createEducationEmailChallengeAction(studentForm.educationEmail, studentForm.realName)
+      applyEducationEmailChallenge(result.challenge)
+      await welfare.reloadWelfareState()
     }
     finally {
       educationEmailVerificationForm.loading = false
@@ -1518,7 +1537,7 @@ export function useWelfareUiState() {
     systemConfigForm.loading = true
     systemConfigForm.message = ''
     try {
-      welfare.updateSystemConfig({
+      await updateSystemConfigAction({
         siteEnabled: systemConfigForm.siteEnabled,
         siteClosedReason: systemConfigForm.siteClosedReason,
         loginEnabled: systemConfigForm.loginEnabled,
@@ -1538,7 +1557,6 @@ export function useWelfareUiState() {
           },
         },
       })
-      await saveWelfareState(welfare.state, welfare.currentUser.value.id)
       await welfare.reloadWelfareState()
       refreshSystemConfigForm()
       systemConfigForm.message = '系统开关已保存'
@@ -1556,12 +1574,12 @@ export function useWelfareUiState() {
     applicationPolicyConfigForm.loading = true
     applicationPolicyConfigForm.message = ''
     try {
-      welfare.state.applicationPolicy = normalizeApplicationPolicy(welfare.state.applicationPolicy)
+      const applicationPolicy = normalizeApplicationPolicy(welfare.state.applicationPolicy)
       const turnstileSecretKey = applicationPolicyConfigForm.turnstileSecretKey.trim()
       if (turnstileSecretKey)
-        welfare.state.applicationPolicy.turnstileSecretKey = turnstileSecretKey
+        applicationPolicy.turnstileSecretKey = turnstileSecretKey
 
-      await saveWelfareState(welfare.state, welfare.currentUser.value.id)
+      await updateApplicationPolicyAction(applicationPolicy)
       await welfare.reloadWelfareState()
       applicationPolicyConfigForm.turnstileSecretKey = ''
       applicationPolicyConfigForm.message = '申请策略配置已保存'
@@ -1581,9 +1599,8 @@ export function useWelfareUiState() {
 
   async function submitCrowdReviewDraft(applicationId: string) {
     const draft = crowdReviewDraftFor(applicationId)
-    welfare.submitCrowdReview('pro_application', applicationId, draft.decision, draft.note)
+    await submitCrowdReviewAction('pro_application', applicationId, draft.decision, draft.note)
     delete crowdReviewDrafts[applicationId]
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
     await welfare.reloadWelfareState()
   }
 
@@ -1665,30 +1682,26 @@ export function useWelfareUiState() {
   }
 
   async function rejectApplicationWithOptions(applicationId: string, reason: string, options: RejectApplicationOptions = {}) {
-    welfare.rejectApplication(applicationId, reason, options)
+    await rejectApplicationAction(applicationId, reason, options)
     delete rejectFraudulentDrafts[applicationId]
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
 
   async function answerApplication(applicationId: string, answer: string) {
-    welfare.answerApplication(applicationId, answer)
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await answerApplicationAction(applicationId, answer)
     applyAutoProvisionMessage(await provisionApplicationReward(welfare.currentUser.value!.id, applicationId))
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
 
   async function completeApplication(applicationId: string) {
-    welfare.completeApplication(applicationId)
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await completeApplicationAction(applicationId)
     await welfare.reloadWelfareState()
   }
 
   async function requestApplicationSupplement(applicationId: string, content: string) {
-    welfare.requestApplicationSupplement(applicationId, content)
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await requestApplicationSupplementAdminAction(applicationId, content)
     await welfare.reloadWelfareState()
   }
 
@@ -1698,14 +1711,12 @@ export function useWelfareUiState() {
   }
 
   async function addApplicationMessage(applicationId: string, type: ApplicationMessageType, content: string, attachments: UploadLikeFile[] = []) {
-    welfare.addApplicationMessage(applicationId, type, content, await uploadAttachmentImages(attachments))
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await addApplicationMessageAction(applicationId, type, content, await uploadAttachmentImages(attachments))
     await welfare.reloadWelfareState()
   }
 
   async function submitApplicationResult(applicationId: string, content: string, attachments: UploadLikeFile[] = []) {
-    welfare.submitApplicationResult(applicationId, content, await uploadAttachmentImages(attachments))
-    await saveWelfareState(welfare.state, welfare.currentUser.value?.id)
+    await addApplicationMessageAction(applicationId, 'result_submission', content, await uploadAttachmentImages(attachments))
     await welfare.reloadWelfareState()
   }
 
@@ -2465,13 +2476,12 @@ export function useWelfareUiState() {
     siteBannerConfigForm.loading = true
     siteBannerConfigForm.message = ''
     try {
-      welfare.updateSiteBanner({
+      await updateSiteBannerAction({
         enabled: siteBannerConfigForm.enabled,
         title: siteBannerConfigForm.title,
         body: siteBannerConfigForm.body,
         tone: siteBannerConfigForm.tone,
       })
-      await saveWelfareState(welfare.state, welfare.currentUser.value.id)
       await welfare.reloadWelfareState()
       refreshSiteBannerConfig()
       siteBannerConfigForm.message = '顶部 Banner 已保存'
@@ -2564,8 +2574,6 @@ export function useWelfareUiState() {
       throw new Error('图片申请不存在')
     if (application && application.type !== 'image')
       throw new Error('图片申请不存在')
-    if (applicationId)
-      await saveWelfareState(welfare.state)
     try {
       await createImageJob(welfare.currentUser.value.id, application?.description ?? payload.description, targetApplicationId)
       resetApplicationFiles()
@@ -2756,7 +2764,7 @@ export function useWelfareUiState() {
     if (!user)
       return 0
 
-    await welfare.reloadWelfareState()
+    await welfare.reloadWelfareState({ legacy: true })
     const refreshedUser = welfare.currentUser.value
     if (!refreshedUser)
       return 0
@@ -2850,7 +2858,7 @@ export function useWelfareUiState() {
   }
 
   async function createCouponTemplateFromForm() {
-    const template = welfare.createCouponTemplate({
+    const result = await createCouponTemplateAction({
       name: couponTemplateForm.name,
       description: couponTemplateForm.description,
       enabled: true,
@@ -2866,15 +2874,16 @@ export function useWelfareUiState() {
         maxDiscount: Number(couponTemplateForm.maxDiscount),
       },
     })
-    couponCodeForm.templateId = template.id
-    couponGrantForm.templateId = template.id
-    await saveWelfareState(welfare.state)
+    if (!result.template)
+      throw new Error('优惠券模板创建结果为空')
+    couponCodeForm.templateId = result.template.id
+    couponGrantForm.templateId = result.template.id
     await welfare.reloadWelfareState()
-    return template
+    return result.template
   }
 
   async function createCouponCodeFromForm() {
-    const code = welfare.createCouponRedemptionCode({
+    const result = await createCouponCodeAction({
       templateId: couponCodeForm.templateId,
       code: couponCodeForm.code || undefined,
       maxRedemptions: Number(couponCodeForm.maxRedemptions),
@@ -2882,22 +2891,22 @@ export function useWelfareUiState() {
       expiresAt: couponCodeForm.expiresAt || undefined,
     })
     couponCodeForm.code = ''
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
-    return code
+    if (!result.code)
+      throw new Error('兑换码创建结果为空')
+    return result.code
   }
 
   async function grantCouponFromTemplateForm() {
-    const coupons = welfare.grantCouponFromTemplate(couponGrantForm.userIds, couponGrantForm.templateId)
+    const result = await grantCouponsAction(couponGrantForm.userIds, couponGrantForm.templateId)
     couponGrantForm.userIds = []
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
-    return coupons
+    return result.coupons ?? []
   }
 
   async function createSquarePost() {
     const postType = squarePostForm.applicationId ? 'application_template' : squarePostForm.postType
-    const result = welfare.createSquarePost({
+    const result = await createSquarePostAction({
       type: postType,
       title: squarePostForm.title,
       content: squarePostForm.content,
@@ -2909,9 +2918,10 @@ export function useWelfareUiState() {
     squarePostForm.content = ''
     squarePostForm.applicationId = ''
     squarePostForm.shareTemplate = true
-    await saveWelfareState(welfare.state)
     await welfare.reloadWelfareState()
-    return result
+    if (!result.post)
+      throw new Error('广场内容创建结果为空')
+    return result.post
   }
 
   async function boostSquarePost(postId: string) {
@@ -2931,40 +2941,36 @@ export function useWelfareUiState() {
   }
 
   async function submitStudentVerification(payload: Parameters<typeof welfare.submitStudentVerification>[0]) {
-    await welfare.reloadWelfareState()
+    await welfare.reloadWelfareState({ legacy: true })
     await submitStudentVerificationAction(await withUploadedImages(payload))
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
 
   async function supplementStudentVerification(payload: Parameters<typeof welfare.supplementStudentVerification>[0]) {
-    await welfare.reloadWelfareState()
+    await welfare.reloadWelfareState({ legacy: true })
     await supplementStudentVerificationAction(await withUploadedImages(payload))
     await welfare.reloadWelfareState()
   }
 
   async function approveStudentVerification(id: string, reply: string) {
-    welfare.approveStudentVerification(id, reply)
-    await saveWelfareState(welfare.state)
+    await reviewStudentVerificationAction(id, 'approved', reply)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
 
   async function requestStudentSupplement(id: string, reason: string) {
-    welfare.requestStudentSupplement(id, reason)
-    await saveWelfareState(welfare.state)
+    await reviewStudentVerificationAction(id, 'needs_supplement', reason)
     await welfare.reloadWelfareState()
   }
 
   async function rejectStudentVerification(id: string, reason: string) {
-    welfare.rejectStudentVerification(id, reason)
-    await saveWelfareState(welfare.state)
+    await reviewStudentVerificationAction(id, 'rejected', reason)
     await welfare.reloadWelfareState()
     await refreshPointTransactions()
   }
 
-  async function persistStateAndReload(userId = welfare.currentUser.value?.id) {
-    await saveWelfareState(welfare.state, userId)
+  async function persistStateAndReload() {
     await welfare.reloadWelfareState()
   }
 
@@ -2974,27 +2980,27 @@ export function useWelfareUiState() {
   }
 
   async function setUserCrowdReviewer(userId: string, enabled: boolean) {
-    welfare.setUserCrowdReviewer(userId, enabled)
+    await setUserCrowdReviewerAction(userId, enabled)
     await persistStateAndReload()
   }
 
   async function setUserSuspended(userId: string, suspended: boolean, reason = '') {
-    welfare.setUserSuspended(userId, suspended, reason)
+    await setUserSuspendedAction(userId, suspended, reason)
     await persistStateAndReload()
   }
 
   async function setUserStudentVerified(userId: string, verified: boolean) {
-    welfare.setUserStudentVerified(userId, verified)
+    await setUserStudentVerifiedAction(userId, verified)
     await persistStateAndReload()
   }
 
   async function revokeUserStudentVerification(userId: string, reason: string) {
-    welfare.revokeUserStudentVerification(userId, reason)
+    await revokeUserStudentVerificationAction(userId, reason)
     await persistStateAndReload()
   }
 
   async function unbindUserGitHub(userId: string) {
-    welfare.unbindUserGitHub(userId)
+    await unbindUserGitHubAction(userId)
     await persistStateAndReload()
   }
 

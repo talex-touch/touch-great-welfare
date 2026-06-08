@@ -6,7 +6,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { formatDate, formatPoints, isGptProModel, normalizeVerificationType, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
-import { saveWelfareState } from '~/composables/welfare-persistence'
+import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
@@ -45,7 +45,6 @@ const {
   deliveryReviewDraftFor,
   reviewCollaborationApplication,
   reviewDeliveryResult,
-  adjustUserPoints,
   refreshRechargeConfig,
   persistRechargeConfig,
   refreshGitHubAppConfig,
@@ -1250,8 +1249,10 @@ function saveOauthConfig() {
       throw new Error('需要管理员权限')
     if (!state.oauth.clientId.trim())
       throw new Error('请填写 OAuth Client ID')
-    state.oauth.enabled = true
-    await saveWelfareState(state, state.currentUserId)
+    await updateOauthConfigAction({
+      ...state.oauth,
+      enabled: true,
+    })
     await reloadWelfareState()
   }, 'OAuth 配置已启用')
 }
@@ -1263,14 +1264,15 @@ function fillOauthFromGitHubApp() {
     if (!githubAppConfigForm.clientId.trim())
       throw new Error('请先填写 GitHub App Client ID')
 
-    state.oauth.provider = 'github'
-    state.oauth.clientId = githubAppConfigForm.clientId
-    state.oauth.authorizeUrl = githubAppConfigForm.authorizeUrl
-    state.oauth.tokenUrl = githubAppConfigForm.tokenUrl
-    state.oauth.callbackUrl = githubAppConfigForm.callbackUrl
-    state.oauth.scopes = githubAppConfigForm.scopes
-    state.oauth.enabled = true
-    await saveWelfareState(state, state.currentUserId)
+    await updateOauthConfigAction({
+      provider: 'github',
+      clientId: githubAppConfigForm.clientId,
+      authorizeUrl: githubAppConfigForm.authorizeUrl,
+      tokenUrl: githubAppConfigForm.tokenUrl,
+      callbackUrl: githubAppConfigForm.callbackUrl,
+      scopes: githubAppConfigForm.scopes,
+      enabled: true,
+    })
     await reloadWelfareState()
   }, '已同步 GitHub App 登录配置')
 }
@@ -1422,8 +1424,7 @@ function saveApplicationPolicyConfig() {
 
 function onAdjustPoints(userId: string) {
   runSafely(async () => {
-    adjustUserPoints(userId, pointDrafts[userId] ?? 0, '后台积分充值 / 调整')
-    await saveWelfareState(state, state.currentUserId)
+    await adjustUserPointsAction(userId, pointDrafts[userId] ?? 0, '后台积分充值 / 调整')
     await reloadWelfareState()
     await refreshPointTransactions({ limit: 200, scope: 'admin' })
   }, '积分已调整')

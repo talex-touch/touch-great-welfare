@@ -1,7 +1,7 @@
 import { computed, reactive, ref } from 'vue'
 import { applyWelfareRetentionPolicy, DATA_RETENTION_DAYS, DATA_RETENTION_MS } from '~/shared/welfare-retention'
 import { isRichTextEmpty, richTextToPlainText, sanitizeRichText } from '~/utils/rich-text'
-import { bootstrapAdmin, endSession, loadInitialWelfareState, loadWelfareState, loginAdmin as requestAdminLogin } from './welfare-persistence'
+import { bootstrapAdmin, endSession, loadInitialWelfareState, loadLegacyWelfareState, loadWelfareState, loginAdmin as requestAdminLogin } from './welfare-persistence'
 
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
@@ -555,6 +555,77 @@ export interface WelfareState {
   squareReports: SquareReport[]
   transactions: CreditTransaction[]
   createdAt: string
+}
+
+export interface VersionedWelfarePayload {
+  version?: number
+}
+
+export interface PublicConfigDTO {
+  siteBanner?: SiteBannerConfig
+  systemConfig?: SystemConfig
+  applicationPolicy?: Omit<ApplicationPolicyConfig, 'turnstileSecretKey'> & { turnstileSecretKey?: string }
+  createdAt: string
+}
+
+export interface PublicBootstrapDTO extends PublicConfigDTO {
+  hasAdmin: boolean
+}
+
+export interface SessionDTO {
+  currentUser: User | null
+}
+
+export interface UserProfileDTO extends VersionedWelfarePayload {
+  currentUser: User
+  currentUserId: string
+}
+
+export interface UserApplicationsDTO extends VersionedWelfarePayload {
+  applications: WelfareApplication[]
+  users: User[]
+}
+
+export interface UserWalletDTO extends VersionedWelfarePayload {
+  coupons: UserCoupon[]
+  dailyCheckIns: DailyCheckIn[]
+  invitationBindings: InvitationBinding[]
+  transactions: CreditTransaction[]
+  currentUserId: string
+}
+
+export interface UserVerificationDTO extends VersionedWelfarePayload {
+  studentVerifications: StudentVerification[]
+  educationEmailChallenges: EducationEmailChallenge[]
+}
+
+export interface SquareDTO extends VersionedWelfarePayload {
+  squarePosts: SquarePost[]
+  squareBoosts: SquareBoost[]
+  squareReports: SquareReport[]
+  applications: WelfareApplication[]
+  users: User[]
+}
+
+export interface CollaborationDTO extends VersionedWelfarePayload {
+  collaborationApplications: CollaborationApplication[]
+  claimableDeliveryApplications: WelfareApplication[]
+  currentUserDeliveryApplications: WelfareApplication[]
+  pendingDeliveryReviewApplications: WelfareApplication[]
+  crowdReviews: CrowdReview[]
+}
+
+export interface UserWelfareStateDTO extends VersionedWelfarePayload {
+  state: Partial<WelfareState>
+  currentUserId: string
+}
+
+export interface AdminWelfareStateDTO extends UserWelfareStateDTO {}
+
+/** @deprecated Use domain DTOs and endpoints instead of full-state payloads. */
+export interface LegacyFullWelfareStateDTO extends VersionedWelfarePayload {
+  state: Partial<WelfareState>
+  currentUserId?: string
 }
 
 interface FileLike {
@@ -2620,12 +2691,13 @@ export function ensureWelfareStateLoaded() {
   return hydratePromise
 }
 
-export async function reloadWelfareState(options: { initial?: boolean } = {}) {
+export async function reloadWelfareState(options: { initial?: boolean, legacy?: boolean } = {}) {
   reloadPromise ??= (async () => {
     const current = state.users.find(user => user.id === state.currentUserId)
+    const loader = options.legacy ? loadLegacyWelfareState : loadWelfareState
     const storedState = options.initial || !current
       ? await loadInitialWelfareState()
-      : await loadWelfareState(current.role)
+      : await loader(current.role)
     applyRemoteState(storedState, !!current && !options.initial)
   })()
     .catch((error) => {
@@ -5095,6 +5167,137 @@ export function useWelfareStore() {
     ensureWelfareStateLoaded,
     reloadWelfareState,
     assertPersistenceReady,
+  }
+}
+
+export function useSessionStore() {
+  const welfare = useWelfareStore()
+  return {
+    isHydrated: welfare.isHydrated,
+    isFullStateLoaded: welfare.isFullStateLoaded,
+    persistenceError: welfare.persistenceError,
+    hasAdmin: welfare.hasAdmin,
+    currentUser: welfare.currentUser,
+    currentUserLevelCard: welfare.currentUserLevelCard,
+    isAdmin: welfare.isAdmin,
+    createAdmin: welfare.createAdmin,
+    loginAsAdmin: welfare.loginAsAdmin,
+    logout: welfare.logout,
+    updateCurrentProfile: welfare.updateCurrentProfile,
+    ensureWelfareStateLoaded: welfare.ensureWelfareStateLoaded,
+    reloadWelfareState: welfare.reloadWelfareState,
+    assertPersistenceReady: welfare.assertPersistenceReady,
+  }
+}
+
+export function useApplicationStore() {
+  const welfare = useWelfareStore()
+  return {
+    state: welfare.state,
+    currentUserApplications: welfare.currentUserApplications,
+    pendingApplications: welfare.pendingApplications,
+    pendingProApplications: welfare.pendingProApplications,
+    claimableDeliveryApplications: welfare.claimableDeliveryApplications,
+    currentUserDeliveryApplications: welfare.currentUserDeliveryApplications,
+    pendingDeliveryReviewApplications: welfare.pendingDeliveryReviewApplications,
+    totalReservedApplications: welfare.totalReservedApplications,
+    applicationPolicyStatus: welfare.applicationPolicyStatus,
+    activeRequestCount: welfare.activeRequestCount,
+    submitApplication: welfare.submitApplication,
+    submitResourceApplication: welfare.submitResourceApplication,
+    updateResourceDraft: welfare.updateResourceDraft,
+    reviewApplicationItem: welfare.reviewApplicationItem,
+    completeResourceProvision: welfare.completeResourceProvision,
+    appendApplicationContext: welfare.appendApplicationContext,
+    answerApplication: welfare.answerApplication,
+    rejectApplication: welfare.rejectApplication,
+    completeApplication: welfare.completeApplication,
+    requestApplicationSupplement: welfare.requestApplicationSupplement,
+    submitApplicationSupplement: welfare.submitApplicationSupplement,
+    addApplicationMessage: welfare.addApplicationMessage,
+    submitApplicationResult: welfare.submitApplicationResult,
+    answerProApplication: welfare.answerProApplication,
+    rejectProApplication: welfare.rejectProApplication,
+  }
+}
+
+export function useWalletStore() {
+  const welfare = useWelfareStore()
+  return {
+    currentUserCoupons: welfare.currentUserCoupons,
+    currentUserDailyCheckIns: welfare.currentUserDailyCheckIns,
+    currentUserInvitationBinding: welfare.currentUserInvitationBinding,
+    currentUserInviteeBindings: welfare.currentUserInviteeBindings,
+    availableCouponsForUser: welfare.availableCouponsForUser,
+    availableCouponsForTarget: welfare.availableCouponsForTarget,
+    checkInToday: welfare.checkInToday,
+    bindInvitationCode: welfare.bindInvitationCode,
+    vouchInvitation: welfare.vouchInvitation,
+    redeemCouponCode: welfare.redeemCouponCode,
+    grantUserCoupon: welfare.grantUserCoupon,
+    adjustUserPoints: welfare.adjustUserPoints,
+  }
+}
+
+export function useVerificationStore() {
+  const welfare = useWelfareStore()
+  return {
+    currentStudentVerifications: welfare.currentStudentVerifications,
+    pendingStudentVerifications: welfare.pendingStudentVerifications,
+    createEducationEmailChallenge: welfare.createEducationEmailChallenge,
+    confirmEducationEmailChallengeSent: welfare.confirmEducationEmailChallengeSent,
+    submitStudentVerification: welfare.submitStudentVerification,
+    supplementStudentVerification: welfare.supplementStudentVerification,
+    approveStudentVerification: welfare.approveStudentVerification,
+    requestStudentSupplement: welfare.requestStudentSupplement,
+    rejectStudentVerification: welfare.rejectStudentVerification,
+    revokeUserStudentVerification: welfare.revokeUserStudentVerification,
+    setUserStudentVerified: welfare.setUserStudentVerified,
+  }
+}
+
+export function useSquareStore() {
+  const welfare = useWelfareStore()
+  return {
+    squarePosts: welfare.squarePosts,
+    currentUserSquareBoosts: welfare.currentUserSquareBoosts,
+    squarePostBoosts: welfare.squarePostBoosts,
+    squarePostValidBoosts: welfare.squarePostValidBoosts,
+    squarePostDiscountRate: welfare.squarePostDiscountRate,
+    isSquarePostAfterApproval: welfare.isSquarePostAfterApproval,
+    squareBoostCooldownUntil: welfare.squareBoostCooldownUntil,
+    createSquarePost: welfare.createSquarePost,
+    boostSquarePost: welfare.boostSquarePost,
+    reportSquareBoost: welfare.reportSquareBoost,
+  }
+}
+
+export function useAdminWelfareStore() {
+  const welfare = useWelfareStore()
+  return {
+    state: welfare.state,
+    isAdmin: welfare.isAdmin,
+    pendingCollaborationApplications: welfare.pendingCollaborationApplications,
+    currentUserCollaborationApplication: welfare.currentUserCollaborationApplication,
+    canCrowdReview: welfare.canCrowdReview,
+    crowdReviewsFor: welfare.crowdReviewsFor,
+    submitCrowdReview: welfare.submitCrowdReview,
+    submitCollaborationApplication: welfare.submitCollaborationApplication,
+    reviewCollaborationApplication: welfare.reviewCollaborationApplication,
+    claimDeliveryApplication: welfare.claimDeliveryApplication,
+    cancelDeliveryClaim: welfare.cancelDeliveryClaim,
+    submitDeliveryResult: welfare.submitDeliveryResult,
+    reviewDeliveryResult: welfare.reviewDeliveryResult,
+    canClaimDeliveryApplication: welfare.canClaimDeliveryApplication,
+    setUserCrowdReviewer: welfare.setUserCrowdReviewer,
+    setUserSuspended: welfare.setUserSuspended,
+    unbindUserGitHub: welfare.unbindUserGitHub,
+    updateSiteBanner: welfare.updateSiteBanner,
+    updateSystemConfig: welfare.updateSystemConfig,
+    createCouponTemplate: welfare.createCouponTemplate,
+    updateCouponTemplate: welfare.updateCouponTemplate,
+    createCouponRedemptionCode: welfare.createCouponRedemptionCode,
+    grantCouponFromTemplate: welfare.grantCouponFromTemplate,
   }
 }
 

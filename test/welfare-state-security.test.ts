@@ -715,4 +715,96 @@ describe('welfare state security', () => {
     expect(payload.state.users[0].points).toBe(1000)
     expect(payload.state.transactions).toEqual([])
   })
+
+  it('serves segmented current-user read DTOs without leaking hidden users', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user(), user({ id: 'user_2', profile: { displayName: '其他用户', email: 'other@example.com', studentVerified: false } })],
+      applications: [codeApplication(), codeApplication({ id: 'app_2', userId: 'user_2', title: '其他人的申请' })],
+      coupons: [{ id: 'coupon_1', userId: 'user_1', name: '测试券', discountRate: 0.8, source: 'manual', createdAt: '2026-06-02T00:00:00.000Z' }],
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const me = await handleWelfareStateRequest(new Request('https://example.com/api/me', { headers: { cookie } }), env)
+    const applications = await handleWelfareStateRequest(new Request('https://example.com/api/applications/mine', { headers: { cookie } }), env)
+    const wallet = await handleWelfareStateRequest(new Request('https://example.com/api/wallet/summary', { headers: { cookie } }), env)
+
+    expect(me.status).toBe(200)
+    await expect(me.json()).resolves.toMatchObject({ currentUser: { id: 'user_1' }, currentUserId: 'user_1', version: 1 })
+
+    const applicationPayload = await applications.json() as { applications: WelfareApplication[], users: User[] }
+    expect(applicationPayload.applications.map(item => item.id)).toEqual(['app_1'])
+    expect(applicationPayload.users.map(item => item.id)).toEqual(['user_1'])
+
+    const walletPayload = await wallet.json() as { coupons: UserCoupon[], transactions: unknown[] }
+    expect(walletPayload.coupons.map(item => item.id)).toEqual(['coupon_1'])
+    expect(walletPayload.transactions).toEqual([])
+  })
+
+  it('accepts domain check-in actions while keeping the legacy action compatible', async () => {
+    const d1 = createMemoryD1(state())
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/check-ins/today', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}',
+    }), env)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, version: 2, checkIn: { userId: 'user_1' } })
+    expect(d1.pointTransactions).toHaveLength(1)
+
+    const legacy = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json', 'x-welfare-action': 'check-in-today' },
+      body: '{}',
+    }), env)
+    expect(legacy.status).toBe(500)
+    await expect(legacy.json()).resolves.toMatchObject({ error: '今日已签到' })
+  })
+
+  it('updates admin config through segmented admin endpoints', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin' })
+    const d1 = createMemoryD1({ ...state(), users: [admin] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/admin/config/system', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ systemConfig: { siteEnabled: false, siteClosedReason: '维护中' } }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, systemConfig: { siteEnabled: false, siteClosedReason: '维护中' }, version: 2 })
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.systemConfig.siteEnabled).toBe(false)
+    expect(latest.systemConfig.siteClosedReason).toBe('维护中')
+  })
+
+  it('adjusts points through segmented admin user endpoints', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const normalUser = user({ id: 'user_1', points: 100 })
+    const d1 = createMemoryD1({ ...state(), users: [admin, normalUser] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/admin/users/points', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: 'user_1', amount: 25, reason: '测试调整' }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, version: 2 })
+    expect(d1.pointTransactions).toHaveLength(1)
+    expect(d1.pointTransactions[0]).toMatchObject({ user_id: 'user_1', delta: 25, type: 'adjustment', reason: '测试调整' })
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(125)
+  })
 })

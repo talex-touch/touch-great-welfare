@@ -50,10 +50,31 @@ export default {
     if (blocked)
       return blocked
 
-    if (url.pathname === '/api/bootstrap' || url.pathname === '/api/session' || url.pathname === '/api/welfare-state' || url.pathname.startsWith('/api/welfare-state/'))
-      return handleWelfareStateRequest(request, env)
     if (url.pathname === '/api/applications/submit')
       return handleApplicationSubmitRequest(request, env)
+    if (url.pathname === '/api/bootstrap'
+      || url.pathname === '/api/session'
+      || url.pathname === '/api/me'
+      || url.pathname === '/api/welfare-state'
+      || url.pathname.startsWith('/api/welfare-state/')
+      || url.pathname.startsWith('/api/config/')
+      || url.pathname.startsWith('/api/wallet/')
+      || url.pathname.startsWith('/api/applications/')
+      || url.pathname.startsWith('/api/verifications/')
+      || url.pathname.startsWith('/api/check-ins/')
+      || url.pathname.startsWith('/api/invitations/')
+      || url.pathname.startsWith('/api/coupons/')
+      || url.pathname.startsWith('/api/square/')
+      || url.pathname.startsWith('/api/collaboration/')
+      || url.pathname.startsWith('/api/deliveries/')
+      || url.pathname.startsWith('/api/admin/welfare')
+      || url.pathname.startsWith('/api/admin/config/')
+      || url.pathname.startsWith('/api/admin/applications/')
+      || url.pathname.startsWith('/api/admin/verifications/')
+      || url.pathname.startsWith('/api/admin/coupons/')
+      || url.pathname.startsWith('/api/admin/users/')) {
+      return handleWelfareStateRequest(request, env)
+    }
     if (url.pathname.startsWith('/api/ai/'))
       return handleAiRequest(request, env)
     if (url.pathname.startsWith('/api/database-provision/'))
