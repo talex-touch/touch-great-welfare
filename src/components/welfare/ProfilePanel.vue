@@ -42,6 +42,8 @@ const {
   persistNotificationSettings,
   sendNotificationEmailTest,
   enableBrowserPush,
+  disableBrowserPush,
+  clearFeishuWebhook,
   refreshPointTransactions,
   startRecharge,
   submitCollaborationApplicationFromForm,
@@ -303,6 +305,14 @@ function submitCollaborationApplication() {
 
 function startBrowserPush() {
   runSafely(() => enableBrowserPush(), '浏览器 Push 已启用')
+}
+
+function stopBrowserPush() {
+  runSafely(() => disableBrowserPush(), '浏览器 Push 已关闭')
+}
+
+function clearFeishu() {
+  runSafely(() => clearFeishuWebhook(), '飞书 Webhook 已清除')
 }
 
 function couponDiscountText(coupon: { discountType?: string, discountRate: number, discountAmount?: number }) {
@@ -626,6 +636,9 @@ onUnmounted(() => {
                   <TxButton size="sm" variant="secondary" @click="startBrowserPush">
                     启用 Push
                   </TxButton>
+                  <TxButton v-if="notificationSettingsForm.browserPushEnabled || notificationSettingsForm.pushSubscriptionCount" size="sm" variant="secondary" @click="stopBrowserPush">
+                    关闭 Push
+                  </TxButton>
                   <label class="profile-setting-toggle">
                     <TxCheckbox v-model="notificationSettingsForm.browserPushEnabled" variant="checkmark" aria-label="浏览器 Push" />
                     <TxStatusBadge :text="notificationSettingsForm.browserPushEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.browserPushEnabled ? 'success' : 'warning'" size="sm" />
@@ -643,6 +656,9 @@ onUnmounted(() => {
                 <p>使用飞书机器人 Webhook 接收通知，已保存值只显示脱敏文本。</p>
                 <div class="profile-setting-action profile-setting-action--webhook">
                   <TxInput v-model="notificationSettingsForm.feishuWebhookUrl" type="password" :placeholder="notificationSettingsForm.feishuWebhookMasked || 'https://open.feishu.cn/open-apis/bot/...'" />
+                  <TxButton v-if="notificationSettingsForm.feishuWebhookMasked" size="sm" variant="secondary" @click="clearFeishu">
+                    清除 Webhook
+                  </TxButton>
                   <label class="profile-setting-toggle">
                     <TxCheckbox v-model="notificationSettingsForm.feishuEnabled" variant="checkmark" aria-label="飞书通知" />
                     <TxStatusBadge :text="notificationSettingsForm.feishuEnabled ? '已启用' : '未启用'" :status="notificationSettingsForm.feishuEnabled ? 'success' : 'warning'" size="sm" />

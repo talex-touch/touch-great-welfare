@@ -10,6 +10,8 @@ const {
   refreshNotificationSettings,
   persistNotificationSettings,
   enableBrowserPush,
+  disableBrowserPush,
+  clearFeishuWebhook,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
@@ -20,6 +22,14 @@ function saveNotifications() {
 
 function startBrowserPush() {
   runSafely(() => enableBrowserPush(), '浏览器 Push 已启用')
+}
+
+function stopBrowserPush() {
+  runSafely(() => disableBrowserPush(), '浏览器 Push 已关闭')
+}
+
+function clearFeishu() {
+  runSafely(() => clearFeishuWebhook(), '飞书 Webhook 已清除')
 }
 
 onMounted(() => {
@@ -67,6 +77,9 @@ onMounted(() => {
               使用个人飞书机器人 Webhook；已保存值只显示脱敏文本。
             </p>
             <TxInput v-model="notificationSettingsForm.feishuWebhookUrl" class="mt-4" type="password" :placeholder="notificationSettingsForm.feishuWebhookMasked || 'https://open.feishu.cn/open-apis/bot/v2/hook/...'" />
+            <TxButton v-if="notificationSettingsForm.feishuWebhookMasked" class="mt-3" size="sm" variant="secondary" @click="clearFeishu">
+              清除 Webhook
+            </TxButton>
           </div>
 
           <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
@@ -77,9 +90,14 @@ onMounted(() => {
             <p class="text-xs text-slate-500 leading-5 mt-2">
               当前权限：{{ notificationSettingsForm.permission }}；需要服务端 VAPID Key。
             </p>
-            <TxButton class="mt-4" size="sm" variant="secondary" @click="startBrowserPush">
-              注册 Push
-            </TxButton>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <TxButton size="sm" variant="secondary" @click="startBrowserPush">
+                注册 Push
+              </TxButton>
+              <TxButton v-if="notificationSettingsForm.browserPushEnabled || notificationSettingsForm.pushSubscriptionCount" size="sm" variant="secondary" @click="stopBrowserPush">
+                关闭 Push
+              </TxButton>
+            </div>
           </div>
         </div>
 
