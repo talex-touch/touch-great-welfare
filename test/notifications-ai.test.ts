@@ -192,7 +192,12 @@ function createMemoryD1() {
           }
           if (query.includes('update push_subscriptions set enabled = 0')) {
             for (const subscription of pushSubscriptions) {
-              if (!this.values.length || subscription.id === this.values[0]) {
+              const matchesEndpoint = query.includes('where user_id = ?1 and endpoint = ?2')
+                && subscription.user_id === this.values[0]
+                && subscription.endpoint === this.values[1]
+              const matchesId = !query.includes('where user_id = ?1 and endpoint = ?2')
+                && (this.values.length === 0 || subscription.id === this.values[0])
+              if (matchesEndpoint || matchesId) {
                 subscription.enabled = 0
                 subscription.disabled_at = '2026-06-01T00:00:00.000Z'
               }
@@ -650,6 +655,46 @@ describe('notification dispatch', () => {
     expect(response.ok).toBe(false)
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('本地或内网地址') })
     expect(d1.data.pushSubscriptions).toHaveLength(0)
+  })
+
+  it('disables the current browser push subscription by endpoint', async () => {
+    const stored = state()
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    d1.data.pushSubscriptions.push({
+      id: 'psh_1',
+      user_id: 'user_1',
+      endpoint: 'https://push.example.com/send/1',
+      p256dh: 'valid-p256dh-key-1234567890',
+      auth: 'valid-auth-key-1234567890',
+      enabled: 1,
+    })
+    d1.data.settings.push({
+      user_id: 'user_1',
+      email_enabled: 0,
+      email_address: 'user_1@example.com',
+      feishu_enabled: 0,
+      browser_push_enabled: 1,
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/push-subscriptions', {
+      method: 'DELETE',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ endpoint: 'https://push.example.com/send/1' }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    await expect(response.json()).resolves.toMatchObject({ browserPushEnabled: false, pushSubscriptionCount: 0 })
+    expect(d1.data.pushSubscriptions[0].enabled).toBe(0)
+    expect(d1.data.settings[0].browser_push_enabled).toBe(0)
   })
 
   it('disables old push subscriptions when VAPID keys are regenerated', async () => {
