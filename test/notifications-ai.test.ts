@@ -145,14 +145,24 @@ function createMemoryD1() {
           }
           if (query.includes('insert into notification_settings')) {
             const existing = settings.find(item => item.user_id === this.values[0])
-            const next = {
-              user_id: this.values[0],
-              email_enabled: this.values[1] ?? existing?.email_enabled ?? 0,
-              email_address: this.values[2] ?? existing?.email_address ?? '',
-              feishu_enabled: this.values[3] ?? existing?.feishu_enabled ?? 0,
-              feishu_webhook_encrypted: this.values[4] ?? existing?.feishu_webhook_encrypted ?? null,
-              browser_push_enabled: this.values[5] ?? existing?.browser_push_enabled ?? 0,
-            }
+            const onlyBrowserPush = query.includes('(user_id, browser_push_enabled, updated_at)')
+            const next = onlyBrowserPush
+              ? {
+                  user_id: this.values[0],
+                  email_enabled: existing?.email_enabled ?? 0,
+                  email_address: existing?.email_address ?? '',
+                  feishu_enabled: existing?.feishu_enabled ?? 0,
+                  feishu_webhook_encrypted: existing?.feishu_webhook_encrypted ?? null,
+                  browser_push_enabled: this.values[1] ?? 0,
+                }
+              : {
+                  user_id: this.values[0],
+                  email_enabled: this.values[1] ?? existing?.email_enabled ?? 0,
+                  email_address: this.values[2] ?? existing?.email_address ?? '',
+                  feishu_enabled: this.values[3] ?? existing?.feishu_enabled ?? 0,
+                  feishu_webhook_encrypted: this.values[4] ?? existing?.feishu_webhook_encrypted ?? null,
+                  browser_push_enabled: this.values[5] ?? existing?.browser_push_enabled ?? 0,
+                }
             if (existing)
               Object.assign(existing, next)
             else
@@ -161,7 +171,7 @@ function createMemoryD1() {
           if (query.includes('update notification_settings set browser_push_enabled')) {
             for (const setting of settings) {
               if (this.values.length < 2 || setting.user_id === this.values[1])
-                setting.browser_push_enabled = this.values[0]
+                setting.browser_push_enabled = this.values.length ? this.values[0] : 0
             }
           }
           if (query.includes('insert into push_subscriptions')) {
