@@ -4,7 +4,7 @@ import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from '../github-a
 import type { OAuthProviderConfigView, PublicOAuthProvider } from '../oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from '../recharge'
 import type { Sub2ApiKeyView } from '../sub2api'
-import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceTermId, ResourceType, SquarePostType, StudentVerification, UserProfile, VerificationType, WelfareApplication } from '../welfare'
+import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceLifecycleActionPayload, ResourceTermId, ResourceType, SquarePostType, StudentVerification, UserProfile, VerificationType, WelfareApplication } from '../welfare'
 import type { NotificationChannel } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
@@ -91,6 +91,7 @@ import {
   rejectApplicationAction,
   reportSquareBoostAction,
   requestApplicationSupplementAdminAction,
+  requestResourceLifecycleAction,
   reviewApplicationItemAction,
   reviewCollaborationApplicationAction,
   reviewDeliveryResultAction,
@@ -109,6 +110,7 @@ import {
   unbindUserGitHubAction,
   updateApplicationPolicyAction,
   updateCurrentProfileAction,
+  updateResourceLifecycleAction,
   updateSiteBannerAction,
   updateSystemConfigAction,
   vouchInvitationAction,
@@ -1500,6 +1502,16 @@ export function useWelfareUiState() {
       note: resourceProvisionDrafts[itemId],
     })
     delete resourceProvisionDrafts[itemId]
+    await welfare.reloadWelfareState()
+  }
+
+  async function updateResourceLifecycle(payload: ResourceLifecycleActionPayload) {
+    await updateResourceLifecycleAction(payload)
+    await welfare.reloadWelfareState()
+  }
+
+  async function requestResourceLifecycle(payload: ResourceLifecycleActionPayload) {
+    await requestResourceLifecycleAction(payload)
     await welfare.reloadWelfareState()
   }
 
@@ -3284,6 +3296,8 @@ export function useWelfareUiState() {
     resourceReviewDraftFor,
     approveResourceItem,
     completeResourceProvision,
+    requestResourceLifecycle,
+    updateResourceLifecycle,
     resetStudentFiles,
     submitStudentVerification,
     supplementStudentVerification,

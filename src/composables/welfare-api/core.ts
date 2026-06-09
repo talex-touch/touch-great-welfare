@@ -1,4 +1,4 @@
-import type { ApplicationMessageType, ApplicationPolicyConfig, CompleteProvisionPayload, CreateAdminPayload, CreateSquarePostPayload, CrowdReviewDecision, CrowdReviewTargetType, LoginAdminPayload, OauthConfig, RejectApplicationOptions, ReviewApplicationItemPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SiteBannerConfig, SubmitApplicationPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, SubmitResourceApplicationPayload, SubmitStudentPayload, SystemConfig, User, UserProfile, UserRole, WelfareState } from '../welfare'
+import type { ApplicationMessageType, ApplicationPolicyConfig, CompleteProvisionPayload, CreateAdminPayload, CreateSquarePostPayload, CrowdReviewDecision, CrowdReviewTargetType, LoginAdminPayload, OauthConfig, RejectApplicationOptions, ResourceLifecycleActionPayload, ReviewApplicationItemPayload, ReviewCollaborationApplicationPayload, ReviewDeliveryPayload, SiteBannerConfig, SubmitApplicationPayload, SubmitCollaborationApplicationPayload, SubmitDeliveryPayload, SubmitResourceApplicationPayload, SubmitStudentPayload, SystemConfig, User, UserProfile, UserRole, WelfareState } from '../welfare'
 
 const STATE_ENDPOINT = '/api/welfare-state'
 const BOOTSTRAP_ENDPOINT = '/api/bootstrap'
@@ -287,6 +287,14 @@ export async function reviewApplicationItemAction(payload: ReviewApplicationItem
 
 export async function completeResourceProvisionAction(payload: CompleteProvisionPayload) {
   return postDomainAction<{ ok: true }>('/api/admin/applications/complete-provision', payload)
+}
+
+export async function requestResourceLifecycleAction(payload: ResourceLifecycleActionPayload) {
+  return postDomainAction<{ ok: true }>('/api/applications/resource-lifecycle', payload)
+}
+
+export async function updateResourceLifecycleAction(payload: ResourceLifecycleActionPayload) {
+  return postDomainAction<{ ok: true }>('/api/admin/applications/resource-lifecycle', payload)
 }
 
 export async function answerApplicationAction(applicationId: string, answer: string) {

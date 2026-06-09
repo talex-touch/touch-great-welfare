@@ -48,6 +48,7 @@ import {
   rejectAdminApplicationAction,
   reportSquareBoostAction,
   requestAdminApplicationSupplementAction,
+  requestCurrentUserResourceLifecycleAction,
   requestUserId,
   reviewAdminApplicationItemAction,
   reviewAdminStudentVerificationAction,
@@ -66,6 +67,7 @@ import {
   unbindAdminUserGithubAction,
   updateAdminApplicationPolicyAction,
   updateAdminOauthAction,
+  updateAdminResourceLifecycleAction,
   updateAdminSiteBannerAction,
   updateAdminSystemConfigAction,
   updateAdminUserRoleAction,
@@ -261,6 +263,8 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await submitApplicationSupplementAction(request, env)
       if (url.pathname === '/api/applications/messages')
         return await addCurrentUserApplicationMessageAction(request, env)
+      if (url.pathname === '/api/applications/resource-lifecycle')
+        return await requestCurrentUserResourceLifecycleAction(request, env)
       if (url.pathname === '/api/verifications/student')
         return await submitStudentVerificationAction(request, env)
       if (url.pathname === '/api/verifications/student/supplement')
@@ -297,6 +301,8 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await reviewAdminApplicationItemAction(request, env)
       if (url.pathname === '/api/admin/applications/complete-provision')
         return await completeAdminResourceProvisionAction(request, env)
+      if (url.pathname === '/api/admin/applications/resource-lifecycle')
+        return await updateAdminResourceLifecycleAction(request, env)
       if (url.pathname === '/api/admin/applications/answer')
         return await answerAdminApplicationAction(request, env)
       if (url.pathname === '/api/admin/applications/reject')

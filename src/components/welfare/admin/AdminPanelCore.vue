@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
-import type { CreditTransaction, RequestKind, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
+import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatPoints, isGptProModel, normalizeVerificationType, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { buildResourceGovernanceSnapshot, formatDate, formatPoints, isGptProModel, normalizeVerificationType, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from '../RichTextEditor.vue'
@@ -45,6 +45,7 @@ const {
   deliveryReviewDraftFor,
   reviewCollaborationApplication,
   reviewDeliveryResult,
+  updateResourceLifecycle,
   refreshRechargeConfig,
   persistRechargeConfig,
   refreshGitHubAppConfig,
@@ -248,6 +249,20 @@ const dashboardActivityTypeText: Record<string, string> = {
   transaction: '积分',
 }
 
+const resourceLifecycleStatusText: Record<string, string> = {
+  pending: '待审批',
+  approved: '待发放',
+  rejected: '已驳回',
+  provisioning: '发放中',
+  active: '使用中',
+  renewal_requested: '续期审批中',
+  expired: '已过期',
+  reclaim_pending: '待回收',
+  returned: '已归还',
+  released: '已释放',
+  closed: '已关闭',
+}
+
 const userRoleFilterOptions = [
   { value: ALL_FILTER, label: '全部角色' },
   { value: 'admin', label: '管理员' },
@@ -441,11 +456,11 @@ function llmBudgetText(application: WelfareApplication) {
 }
 
 function statusPillClass(status: string) {
-  if (['answered', 'approved', 'completed', 'closed', 'success'].includes(status))
+  if (['answered', 'approved', 'completed', 'closed', 'success', 'active', 'released', 'returned'].includes(status))
     return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
-  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning'].includes(status))
+  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning', 'provisioning', 'renewal_requested'].includes(status))
     return 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'
-  if (['rejected', 'revoked', 'danger'].includes(status))
+  if (['rejected', 'revoked', 'danger', 'expired', 'reclaim_pending'].includes(status))
     return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'
   return 'text-slate-700 bg-slate-100 dark:text-slate-200 dark:bg-white/10'
 }
@@ -1086,6 +1101,69 @@ const dashboardActivityRows = computed(() => {
 })
 
 const dashboardActivityPagination = computed(() => paginateRows(dashboardActivityRows.value, dashboardActivityFilters))
+
+const resourceGovernanceSnapshot = computed(() => buildResourceGovernanceSnapshot(state.applications))
+
+const resourceGovernanceCards = computed(() => {
+  const totals = resourceGovernanceSnapshot.value.totals
+  return [
+    {
+      label: '使用中资源',
+      value: totals.active.toLocaleString('zh-CN'),
+      note: `${totals.renewalDue} 个 7 天内到期`,
+      icon: 'i-carbon-play-filled-alt',
+      tone: totals.renewalDue > 0 ? 'warning' : 'success',
+    },
+    {
+      label: '待审批/发放',
+      value: (totals.pendingApproval + totals.pendingProvision).toLocaleString('zh-CN'),
+      note: `${totals.pendingApproval} 个待审批 / ${totals.pendingProvision} 个待发放`,
+      icon: 'i-carbon-review',
+      tone: totals.pendingApproval + totals.pendingProvision > 0 ? 'warning' : 'success',
+    },
+    {
+      label: '过期资源',
+      value: totals.expired.toLocaleString('zh-CN'),
+      note: '需要管理员确认续期或进入回收队列',
+      icon: 'i-carbon-time',
+      tone: totals.expired > 0 ? 'danger' : 'success',
+    },
+    {
+      label: '待回收资源',
+      value: totals.reclaimPending.toLocaleString('zh-CN'),
+      note: `已释放 ${totals.released} 个资源`,
+      icon: 'i-carbon-clean',
+      tone: totals.reclaimPending > 0 ? 'danger' : 'success',
+    },
+  ]
+})
+
+const resourceGovernanceRows = computed(() => [
+  ...resourceGovernanceSnapshot.value.expiredItems,
+  ...resourceGovernanceSnapshot.value.reclaimPendingItems,
+  ...resourceGovernanceSnapshot.value.renewalDueItems,
+  ...resourceGovernanceSnapshot.value.pendingApprovalItems,
+  ...resourceGovernanceSnapshot.value.pendingProvisionItems,
+].slice(0, 8))
+
+function resourceGovernanceRowNote(row: ResourceGovernanceQueueItem) {
+  const expiresAt = row.expiresAt ? `到期 ${formatDate(row.expiresAt)}` : '未设置到期时间'
+  return `${resourceTypeLabel(row.resourceType)} / ${row.resourceSubtype} · ${row.approverGroup} · ${expiresAt}`
+}
+
+function updateResourceGovernanceRow(row: ResourceGovernanceQueueItem, action: 'queue_reclaim' | 'release' | 'return') {
+  const actionText = action === 'queue_reclaim' ? '进入回收队列' : action === 'release' ? '标记释放' : '标记归还'
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await updateResourceLifecycle({
+      applicationId: row.applicationId,
+      itemId: row.itemId,
+      action,
+      note: `管理员已将资源${actionText}。`,
+    })
+  }, `资源已${actionText}`)
+}
 
 const dashboardApplicationTypeChart = computed(() => {
   const applications = dashboardMetricScope.value.applications
@@ -3743,6 +3821,81 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+
+            <section class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+              <div class="flex flex-wrap gap-3 items-start justify-between">
+                <div>
+                  <div class="text-lg fw-900 flex gap-2 items-center">
+                    <span class="i-carbon-cloud-service-management" />
+                    资源治理
+                  </div>
+                  <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
+                    汇总资源申请的审批、发放、续期、过期和回收队列，便于管理员快速发现异常占用。
+                  </p>
+                </div>
+                <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">
+                  {{ state.applications.filter(item => item.type === 'resource').length }} 个资源申请
+                </span>
+              </div>
+
+              <div class="mt-5 gap-4 grid sm:grid-cols-2 xl:grid-cols-4">
+                <div v-for="card in resourceGovernanceCards" :key="card.label" class="admin-metric">
+                  <div class="flex gap-3 items-center justify-between">
+                    <span class="text-sm text-slate-500 fw-800 dark:text-slate-400">{{ card.label }}</span>
+                    <span class="text-xl" :class="card.icon" />
+                  </div>
+                  <div class="text-2xl fw-900 mt-3">
+                    {{ card.value }}
+                  </div>
+                  <div class="text-xs leading-5 mt-2" :class="statusPillClass(card.tone)">
+                    {{ card.note }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="admin-table mt-5">
+                <div class="admin-table-row admin-table-head grid-cols-[minmax(0,1.2fr)_minmax(0,1.5fr)_120px_150px_160px]">
+                  <span>资源</span>
+                  <span>治理信息</span>
+                  <span>状态</span>
+                  <span>更新时间</span>
+                  <span>操作</span>
+                </div>
+                <div v-if="!resourceGovernanceRows.length" class="text-sm text-slate-500 p-5 text-center border border-black/10 rounded-2xl border-dashed dark:text-slate-400 dark:border-white/10">
+                  当前没有待处理资源治理事项。
+                </div>
+                <div v-for="row in resourceGovernanceRows" :key="`${row.applicationId}-${row.itemId}`" class="admin-table-row grid-cols-[minmax(0,1.2fr)_minmax(0,1.5fr)_120px_150px_160px]">
+                  <div class="min-w-0">
+                    <div class="fw-900 truncate">
+                      {{ row.title }}
+                    </div>
+                    <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                      {{ userDisplayName(row.userId) }}
+                    </div>
+                  </div>
+                  <span class="text-xs text-slate-500 leading-5 dark:text-slate-400">
+                    {{ resourceGovernanceRowNote(row) }}
+                  </span>
+                  <span class="admin-pill" :class="statusPillClass(row.status)">
+                    {{ resourceLifecycleStatusText[row.status] ?? row.status }}
+                  </span>
+                  <span class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ formatDate(row.updatedAt) }}
+                  </span>
+                  <div class="flex flex-wrap gap-2 justify-end">
+                    <TxButton v-if="row.status === 'expired'" size="sm" variant="secondary" :disabled="!isAdmin" @click="updateResourceGovernanceRow(row, 'queue_reclaim')">
+                      进回收
+                    </TxButton>
+                    <TxButton v-if="row.status === 'reclaim_pending'" size="sm" variant="danger" :disabled="!isAdmin" @click="updateResourceGovernanceRow(row, 'release')">
+                      标记释放
+                    </TxButton>
+                    <TxButton v-if="row.status === 'active'" size="sm" variant="secondary" :disabled="!isAdmin" @click="updateResourceGovernanceRow(row, 'return')">
+                      标记归还
+                    </TxButton>
+                  </div>
+                </div>
+              </div>
+            </section>
 
             <div class="dashboard-chart-grid">
               <section class="admin-chart-card admin-chart-card--wide">

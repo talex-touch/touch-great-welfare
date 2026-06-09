@@ -38,6 +38,8 @@ export type SquarePostType = 'application_template' | 'review'
 export type ResourceType = 'database' | 'llm_api_quota' | 'content_service' | 'media_publishing' | 'data_productivity' | 'quality_review' | 'git_repository' | 'cicd' | 'vpn' | 'ip_allowlist' | 'notification_channel' | 'identity_security' | 'server' | 'gpu' | 'k8s_namespace' | 'object_storage'
 export type ResourceApprovalStatus = 'pending' | 'approved' | 'rejected' | 'adjusted_approved'
 export type ResourceProvisionStatus = 'not_required' | 'pending' | 'completed'
+export type ResourceLifecycleStatus = 'pending' | 'approved' | 'rejected' | 'provisioning' | 'active' | 'renewal_requested' | 'expired' | 'reclaim_pending' | 'returned' | 'released' | 'closed'
+export type ResourceLifecycleAction = 'approve' | 'reject' | 'provision' | 'activate' | 'request_renewal' | 'approve_renewal' | 'reject_renewal' | 'mark_expired' | 'queue_reclaim' | 'return' | 'release' | 'close'
 export type ResourceUrgency = 'normal' | 'urgent' | 'emergency'
 export type ResourceTermId = 'general_resource_terms' | 'database_security_terms' | 'llm_api_compliance_terms' | 'creative_service_terms' | 'infrastructure_resource_terms'
 export type ResourceAvailability = 'available' | 'level_required' | 'unavailable'
@@ -106,6 +108,37 @@ export interface ResourcePoolCategoryConfig {
   items: ResourcePoolItemConfig[]
 }
 
+export interface ResourceGovernanceQueueItem {
+  applicationId: string
+  itemId: string
+  title: string
+  resourceType: ResourceType
+  resourceSubtype: string
+  status: ResourceLifecycleStatus
+  approverGroup: string
+  ownerId?: string
+  userId: string
+  expiresAt?: string
+  updatedAt: string
+}
+
+export interface ResourceGovernanceSnapshot {
+  totals: {
+    active: number
+    pendingApproval: number
+    pendingProvision: number
+    renewalDue: number
+    expired: number
+    reclaimPending: number
+    released: number
+  }
+  pendingApprovalItems: ResourceGovernanceQueueItem[]
+  pendingProvisionItems: ResourceGovernanceQueueItem[]
+  renewalDueItems: ResourceGovernanceQueueItem[]
+  expiredItems: ResourceGovernanceQueueItem[]
+  reclaimPendingItems: ResourceGovernanceQueueItem[]
+}
+
 export interface ApplicationItem {
   id: string
   applicationId: string
@@ -120,8 +153,16 @@ export interface ApplicationItem {
   approvedPayload?: Record<string, any>
   rejectReason?: string
   provisionStatus?: ResourceProvisionStatus
+  lifecycleStatus?: ResourceLifecycleStatus
   provisionNote?: string
   provisionCompletedAt?: string
+  activatedAt?: string
+  expiresAt?: string
+  renewalRequestedAt?: string
+  renewalReviewedAt?: string
+  returnedAt?: string
+  releasedAt?: string
+  closedAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -738,6 +779,14 @@ export interface CompleteProvisionPayload {
   applicationId: string
   itemId: string
   note?: string
+}
+
+export interface ResourceLifecycleActionPayload {
+  applicationId: string
+  itemId: string
+  action: ResourceLifecycleAction
+  note?: string
+  expiresAt?: string
 }
 
 export interface AppendApplicationContextPayload {
@@ -2067,14 +2116,20 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
       standardProcessingHours: application.standardProcessingHours ?? (application.type === 'resource' ? 72 : application.type === 'pro' ? PRO_STANDARD_PROCESSING_HOURS : llmApiBudgetUsd && llmApiModel ? (llmApiRequiresExtendedReview(llmApiBudgetUsd, llmApiModel) ? LLM_API_EXTENDED_PROCESSING_HOURS : LLM_API_STANDARD_PROCESSING_HOURS) : undefined),
       processingDueAt: application.processingDueAt ?? (llmApiBudgetUsd && llmApiModel ? createLlmApiProcessingDueAt(createdAt, llmApiBudgetUsd, llmApiModel) : createProcessingDueAt(createdAt, application.type, expedited)),
       selectedResourceTypes: application.selectedResourceTypes ?? (application.type === 'resource' ? Array.from(new Set((application.resourceItems ?? []).map(item => item.resourceType))) : undefined),
-      resourceItems: application.resourceItems?.map(item => ({
-        ...item,
-        approverGroup: item.approverGroup || resourceTypeConfig(item.resourceType)?.approverGroup || '管理员',
-        approvalStatus: item.approvalStatus || 'pending',
-        provisionStatus: item.provisionStatus || (['approved', 'adjusted_approved'].includes(item.approvalStatus) ? 'pending' : 'not_required'),
-        createdAt: item.createdAt || createdAt,
-        updatedAt: item.updatedAt || item.createdAt || createdAt,
-      })),
+      resourceItems: application.resourceItems?.map((item) => {
+        const approvalStatus = item.approvalStatus || 'pending'
+        const provisionStatus = item.provisionStatus || (['approved', 'adjusted_approved'].includes(approvalStatus) ? 'pending' : 'not_required')
+        return {
+          ...item,
+          approverGroup: item.approverGroup || resourceTypeConfig(item.resourceType)?.approverGroup || '管理员',
+          approvalStatus,
+          provisionStatus,
+          lifecycleStatus: item.lifecycleStatus ?? resolveResourceLifecycleStatus({ ...item, approvalStatus, provisionStatus }, createdAt),
+          expiresAt: item.expiresAt ?? resourceItemExpiresAt(item),
+          createdAt: item.createdAt || createdAt,
+          updatedAt: item.updatedAt || item.createdAt || createdAt,
+        }
+      }),
       termsAcceptances: application.termsAcceptances ?? [],
       expedited,
       expediteCost: application.expediteCost ?? (application.type === 'pro' && expedited ? PRO_EXPEDITE_COST : 0),
@@ -2450,6 +2505,161 @@ export function provisionStatusText(status?: ResourceProvisionStatus) {
   return map[status ?? 'not_required']
 }
 
+const RESOURCE_LIFECYCLE_TRANSITIONS: Record<ResourceLifecycleStatus, Partial<Record<ResourceLifecycleAction, ResourceLifecycleStatus>>> = {
+  pending: { approve: 'approved', reject: 'rejected', close: 'closed' },
+  approved: { provision: 'provisioning', activate: 'active', close: 'closed' },
+  rejected: { close: 'closed' },
+  provisioning: { activate: 'active', close: 'closed' },
+  active: { request_renewal: 'renewal_requested', mark_expired: 'expired', return: 'returned', release: 'released', close: 'closed' },
+  renewal_requested: { approve_renewal: 'active', reject_renewal: 'expired', return: 'returned', release: 'released', close: 'closed' },
+  expired: { request_renewal: 'renewal_requested', queue_reclaim: 'reclaim_pending', return: 'returned', release: 'released', close: 'closed' },
+  reclaim_pending: { request_renewal: 'renewal_requested', return: 'returned', release: 'released', close: 'closed' },
+  returned: { close: 'closed' },
+  released: { close: 'closed' },
+  closed: {},
+}
+
+export function transitionResourceLifecycleStatus(status: ResourceLifecycleStatus, action: ResourceLifecycleAction) {
+  const nextStatus = RESOURCE_LIFECYCLE_TRANSITIONS[status][action]
+  if (!nextStatus)
+    throw new Error(`资源状态 ${status} 不允许执行 ${action}`)
+  return nextStatus
+}
+
+function resourceItemExpiresAt(item: Pick<ApplicationItem, 'expiresAt' | 'payload' | 'approvedPayload'>) {
+  const value = item.expiresAt ?? item.approvedPayload?.expiresAt ?? item.payload?.expiresAt
+  return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : undefined
+}
+
+function normalizeOptionalIsoDate(value?: string) {
+  const normalized = value?.trim()
+  if (!normalized)
+    return undefined
+  if (!Number.isFinite(Date.parse(normalized)))
+    throw new Error('资源到期时间不合法')
+  return new Date(normalized).toISOString()
+}
+
+export function applyResourceLifecycleAction(item: ApplicationItem, payload: Pick<ResourceLifecycleActionPayload, 'action' | 'expiresAt'>, actedAt = now()) {
+  const currentStatus = resolveResourceLifecycleStatus(item, actedAt)
+  const nextStatus = transitionResourceLifecycleStatus(currentStatus, payload.action)
+  item.lifecycleStatus = nextStatus
+  if (payload.expiresAt)
+    item.expiresAt = normalizeOptionalIsoDate(payload.expiresAt)
+  if (payload.action === 'approve_renewal') {
+    item.renewalReviewedAt = actedAt
+    item.expiresAt = normalizeOptionalIsoDate(payload.expiresAt) ?? item.expiresAt
+  }
+  if (payload.action === 'request_renewal')
+    item.renewalRequestedAt = actedAt
+  if (payload.action === 'reject_renewal')
+    item.renewalReviewedAt = actedAt
+  if (payload.action === 'return')
+    item.returnedAt = actedAt
+  if (payload.action === 'release')
+    item.releasedAt = actedAt
+  if (payload.action === 'close')
+    item.closedAt = actedAt
+  if (payload.action === 'activate')
+    item.activatedAt = actedAt
+  item.updatedAt = actedAt
+  return item
+}
+
+export function resolveResourceLifecycleStatus(item: Pick<ApplicationItem, 'approvalStatus' | 'provisionStatus' | 'lifecycleStatus' | 'expiresAt' | 'payload' | 'approvedPayload'>, referenceTime = now()): ResourceLifecycleStatus {
+  if (item.lifecycleStatus && ['returned', 'released', 'closed', 'renewal_requested', 'reclaim_pending'].includes(item.lifecycleStatus))
+    return item.lifecycleStatus
+  if (item.approvalStatus === 'pending')
+    return 'pending'
+  if (item.approvalStatus === 'rejected')
+    return 'rejected'
+  if (item.provisionStatus === 'pending')
+    return 'provisioning'
+  if (['approved', 'adjusted_approved'].includes(item.approvalStatus)) {
+    const expiresAt = resourceItemExpiresAt(item)
+    if (expiresAt && Date.parse(expiresAt) < Date.parse(referenceTime))
+      return 'expired'
+    return item.provisionStatus === 'completed' ? 'active' : 'approved'
+  }
+  return item.lifecycleStatus ?? 'pending'
+}
+
+function resourceGovernanceQueueItem(application: WelfareApplication, item: ApplicationItem, status: ResourceLifecycleStatus, referenceTime: string): ResourceGovernanceQueueItem {
+  return {
+    applicationId: application.id,
+    itemId: item.id,
+    title: application.title,
+    resourceType: item.resourceType,
+    resourceSubtype: item.resourceSubtype,
+    status,
+    approverGroup: item.approverGroup,
+    ownerId: application.ownerId,
+    userId: application.userId,
+    expiresAt: resourceItemExpiresAt(item),
+    updatedAt: item.updatedAt || referenceTime,
+  }
+}
+
+export function buildResourceGovernanceSnapshot(applications: WelfareApplication[], referenceTime = now(), renewalWindowDays = 7): ResourceGovernanceSnapshot {
+  const snapshot: ResourceGovernanceSnapshot = {
+    totals: {
+      active: 0,
+      pendingApproval: 0,
+      pendingProvision: 0,
+      renewalDue: 0,
+      expired: 0,
+      reclaimPending: 0,
+      released: 0,
+    },
+    pendingApprovalItems: [],
+    pendingProvisionItems: [],
+    renewalDueItems: [],
+    expiredItems: [],
+    reclaimPendingItems: [],
+  }
+  const referenceMs = Date.parse(referenceTime)
+  const renewalWindowMs = Math.max(0, renewalWindowDays) * 24 * 60 * 60 * 1000
+
+  for (const application of applications) {
+    if (application.type !== 'resource')
+      continue
+
+    for (const item of application.resourceItems ?? []) {
+      const status = resolveResourceLifecycleStatus(item, referenceTime)
+      const row = resourceGovernanceQueueItem(application, item, status, referenceTime)
+      if (status === 'pending') {
+        snapshot.totals.pendingApproval += 1
+        snapshot.pendingApprovalItems.push(row)
+      }
+      else if (status === 'approved' || status === 'provisioning') {
+        snapshot.totals.pendingProvision += 1
+        snapshot.pendingProvisionItems.push(row)
+      }
+      else if (status === 'active') {
+        snapshot.totals.active += 1
+        const expiresAt = resourceItemExpiresAt(item)
+        if (expiresAt && Date.parse(expiresAt) - referenceMs <= renewalWindowMs) {
+          snapshot.totals.renewalDue += 1
+          snapshot.renewalDueItems.push(row)
+        }
+      }
+      else if (status === 'expired') {
+        snapshot.totals.expired += 1
+        snapshot.expiredItems.push(row)
+      }
+      else if (status === 'reclaim_pending') {
+        snapshot.totals.reclaimPending += 1
+        snapshot.reclaimPendingItems.push(row)
+      }
+      else if (status === 'released') {
+        snapshot.totals.released += 1
+      }
+    }
+  }
+
+  return snapshot
+}
+
 export function termsForResourceTypes(resourceTypes: ResourceType[]) {
   const ids = new Set<ResourceTermId>(['general_resource_terms'])
   for (const resourceType of resourceTypes) {
@@ -2657,6 +2867,8 @@ export function normalizeResourceItems(applicationId: string, items: SubmitResou
       approverGroup: config.approverGroup,
       approvalStatus: 'pending',
       provisionStatus: 'not_required',
+      lifecycleStatus: 'pending',
+      expiresAt: resourceItemExpiresAt({ ...item, approvedPayload: undefined }),
       createdAt,
       updatedAt: createdAt,
     }
@@ -4138,6 +4350,8 @@ export function useWelfareStore() {
     item.approvedPayload = payload.approvedPayload
     item.rejectReason = payload.rejectReason?.trim()
     item.provisionStatus = ['approved', 'adjusted_approved'].includes(payload.status) ? 'pending' : 'not_required'
+    item.lifecycleStatus = payload.status === 'rejected' ? 'rejected' : 'provisioning'
+    item.expiresAt = resourceItemExpiresAt(item)
     item.updatedAt = now()
 
     application.status = aggregateResourceApplicationStatus(application.resourceItems ?? [])
@@ -4163,9 +4377,39 @@ export function useWelfareStore() {
       throw new Error('只有通过的资源明细需要开通')
 
     item.provisionStatus = 'completed'
+    item.lifecycleStatus = resolveResourceLifecycleStatus({ ...item, provisionStatus: 'completed', lifecycleStatus: undefined })
     item.provisionNote = payload.note?.trim()
     item.provisionCompletedAt = now()
+    item.activatedAt = item.lifecycleStatus === 'active' ? item.provisionCompletedAt : item.activatedAt
     item.updatedAt = item.provisionCompletedAt
+    return item
+  }
+
+  function updateResourceLifecycle(payload: ResourceLifecycleActionPayload) {
+    assertPersistenceReady()
+    assertAdmin(currentUser.value)
+
+    const application = state.applications.find(item => item.id === payload.applicationId)
+    if (!application || application.type !== 'resource')
+      throw new Error('资源申请不存在')
+    const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
+    if (!item)
+      throw new Error('资源明细不存在')
+
+    const updatedAt = now()
+    applyResourceLifecycleAction(item, payload, updatedAt)
+    if (payload.note?.trim()) {
+      application.messages ??= []
+      application.messages.push({
+        id: createId('msg'),
+        applicationId: application.id,
+        userId: currentUser.value.id,
+        type: 'system',
+        content: sanitizeRichText(payload.note),
+        attachments: [],
+        createdAt: updatedAt,
+      })
+    }
     return item
   }
 
@@ -5180,6 +5424,7 @@ export function useWelfareStore() {
     updateResourceDraft,
     reviewApplicationItem,
     completeResourceProvision,
+    updateResourceLifecycle,
     appendApplicationContext,
     answerApplication,
     rejectApplication,
@@ -5262,6 +5507,7 @@ export function useApplicationStore() {
     updateResourceDraft: welfare.updateResourceDraft,
     reviewApplicationItem: welfare.reviewApplicationItem,
     completeResourceProvision: welfare.completeResourceProvision,
+    updateResourceLifecycle: welfare.updateResourceLifecycle,
     appendApplicationContext: welfare.appendApplicationContext,
     answerApplication: welfare.answerApplication,
     rejectApplication: welfare.rejectApplication,

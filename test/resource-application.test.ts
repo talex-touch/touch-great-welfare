@@ -9,11 +9,15 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 describe('resource application platform rules', async () => {
   const {
     aggregateResourceApplicationStatus,
+    applyResourceLifecycleAction,
+    buildResourceGovernanceSnapshot,
     canApplyResourceType,
     normalizeResourceItems,
+    resolveResourceLifecycleStatus,
     RESOURCE_POOL_CATEGORIES,
     RESOURCE_TYPE_CONFIGS,
     termsForResourceTypes,
+    transitionResourceLifecycleStatus,
   } = await import('../src/composables/welfare')
 
   it('provides static resource type configuration for first-phase resources', () => {
@@ -197,5 +201,92 @@ describe('resource application platform rules', async () => {
       { id: 'att_1', name: 'schema.png', size: 128, type: 'image/png', r2Key: undefined, url: '/api/uploads/images/schema.png', dataUrl: undefined },
       { id: 'att_2', name: 'external.png', size: 256, type: 'image/png', r2Key: undefined, url: undefined, dataUrl: undefined },
     ])
+  })
+
+  it('guards resource lifecycle transitions for release governance', () => {
+    expect(transitionResourceLifecycleStatus('pending', 'approve')).toBe('approved')
+    expect(transitionResourceLifecycleStatus('approved', 'provision')).toBe('provisioning')
+    expect(transitionResourceLifecycleStatus('provisioning', 'activate')).toBe('active')
+    expect(transitionResourceLifecycleStatus('active', 'request_renewal')).toBe('renewal_requested')
+    expect(transitionResourceLifecycleStatus('renewal_requested', 'approve_renewal')).toBe('active')
+    expect(transitionResourceLifecycleStatus('active', 'mark_expired')).toBe('expired')
+    expect(transitionResourceLifecycleStatus('expired', 'queue_reclaim')).toBe('reclaim_pending')
+    expect(transitionResourceLifecycleStatus('reclaim_pending', 'release')).toBe('released')
+    expect(transitionResourceLifecycleStatus('active', 'return')).toBe('returned')
+    expect(transitionResourceLifecycleStatus('returned', 'close')).toBe('closed')
+
+    expect(() => transitionResourceLifecycleStatus('pending', 'release')).toThrow('资源状态 pending 不允许执行 release')
+    expect(() => transitionResourceLifecycleStatus('released', 'activate')).toThrow('资源状态 released 不允许执行 activate')
+  })
+
+  it('derives lifecycle and governance queues from resource item dates', () => {
+    const item = {
+      id: 'item_1',
+      applicationId: 'app_1',
+      resourceType: 'database',
+      resourceSubtype: 'postgresql',
+      payload: { name: 'demo_db', expiresAt: '2026-06-10T00:00:00.000Z' },
+      approverGroup: 'DBA',
+      approvalStatus: 'approved',
+      provisionStatus: 'completed',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    } as const
+
+    expect(resolveResourceLifecycleStatus(item, '2026-06-09T00:00:00.000Z')).toBe('active')
+    expect(resolveResourceLifecycleStatus(item, '2026-06-11T00:00:00.000Z')).toBe('expired')
+
+    const snapshot = buildResourceGovernanceSnapshot([{
+      id: 'app_1',
+      userId: 'user_1',
+      type: 'resource',
+      title: '数据库临时权限',
+      description: 'demo',
+      hasOpenSourceBadge: false,
+      attachments: [],
+      status: 'approved',
+      cost: 0,
+      costCharged: false,
+      aiReviewFeeRate: 0,
+      rejectionReviewFee: 0,
+      rejectionReviewFeeWaived: false,
+      storageExtended: false,
+      storageExtensionCost: 0,
+      retentionExpiresAt: '2026-07-01T00:00:00.000Z',
+      resourceItems: [item],
+      createdAt: '2026-06-01T00:00:00.000Z',
+    }], '2026-06-09T00:00:00.000Z')
+
+    expect(snapshot.totals).toEqual({ active: 1, pendingApproval: 0, pendingProvision: 0, renewalDue: 1, expired: 0, reclaimPending: 0, released: 0 })
+    expect(snapshot.renewalDueItems.map(row => row.itemId)).toEqual(['item_1'])
+  })
+
+  it('applies lifecycle actions with audit timestamps', () => {
+    const item = {
+      id: 'item_2',
+      applicationId: 'app_2',
+      resourceType: 'database',
+      resourceSubtype: 'postgresql',
+      payload: { name: 'demo_db' },
+      approverGroup: 'DBA',
+      approvalStatus: 'approved',
+      provisionStatus: 'completed',
+      lifecycleStatus: 'active',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    } as any
+
+    applyResourceLifecycleAction(item, { action: 'request_renewal' }, '2026-06-08T00:00:00.000Z')
+    expect(item.lifecycleStatus).toBe('renewal_requested')
+    expect(item.renewalRequestedAt).toBe('2026-06-08T00:00:00.000Z')
+
+    applyResourceLifecycleAction(item, { action: 'approve_renewal', expiresAt: '2026-07-01T00:00:00.000Z' }, '2026-06-09T00:00:00.000Z')
+    expect(item.lifecycleStatus).toBe('active')
+    expect(item.expiresAt).toBe('2026-07-01T00:00:00.000Z')
+    expect(item.renewalReviewedAt).toBe('2026-06-09T00:00:00.000Z')
+
+    applyResourceLifecycleAction(item, { action: 'return' }, '2026-06-10T00:00:00.000Z')
+    expect(item.lifecycleStatus).toBe('returned')
+    expect(item.returnedAt).toBe('2026-06-10T00:00:00.000Z')
   })
 })

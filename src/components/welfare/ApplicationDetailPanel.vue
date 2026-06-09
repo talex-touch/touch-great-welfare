@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { AttachmentMeta } from '~/composables/welfare'
+import type { ApplicationItem, AttachmentMeta } from '~/composables/welfare'
 import type { UploadLikeFile } from '~/composables/welfare-ui'
 import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { formatDate, formatPoints, isGptProModel, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
+import { formatDate, formatPoints, isGptProModel, resolveResourceLifecycleStatus, resourceApprovalStatusText, resourceTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText, resourceTicketStatus, resourceTicketSteps } from '~/composables/welfare/resource-display'
 import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
@@ -40,6 +40,7 @@ const {
   userName,
   completeApplication,
   addApplicationMessage,
+  requestResourceLifecycle,
 } = useWelfareUiState()
 
 const applicationId = computed(() => {
@@ -105,6 +106,57 @@ function editDraft() {
   if (props.drawer)
     emit('close')
   router.push(`/dashboard/apply/create?draft=${encodeURIComponent(application.value.id)}`)
+}
+
+function resourceLifecycleText(item: ApplicationItem) {
+  const status = resolveResourceLifecycleStatus(item)
+  const map: Record<string, string> = {
+    active: '使用中',
+    renewal_requested: '续期审批中',
+    expired: '已过期',
+    reclaim_pending: '待回收',
+    returned: '已归还',
+    released: '已释放',
+    closed: '已关闭',
+    provisioning: '发放中',
+    approved: '待发放',
+    pending: '待审批',
+    rejected: '已驳回',
+  }
+  return map[status] ?? status
+}
+
+function resourceLifecycleTone(item: ApplicationItem) {
+  const status = resolveResourceLifecycleStatus(item)
+  if (['active', 'returned', 'released', 'closed'].includes(status))
+    return 'success'
+  if (['renewal_requested', 'provisioning', 'pending', 'approved'].includes(status))
+    return 'warning'
+  if (['expired', 'reclaim_pending', 'rejected'].includes(status))
+    return 'danger'
+  return 'info'
+}
+
+function canRequestResourceRenewal(item: ApplicationItem) {
+  return application.value?.userId === currentUser.value?.id && resolveResourceLifecycleStatus(item) === 'active'
+}
+
+function canReturnResource(item: ApplicationItem) {
+  return application.value?.userId === currentUser.value?.id && ['active', 'expired', 'renewal_requested'].includes(resolveResourceLifecycleStatus(item))
+}
+
+function handleResourceLifecycle(itemId: string, action: 'request_renewal' | 'return') {
+  if (!application.value)
+    return
+
+  const actionText = action === 'request_renewal' ? '续期申请' : '资源归还'
+  runSafely(async () => {
+    await requestResourceLifecycle({
+      applicationId: application.value!.id,
+      itemId,
+      action,
+    })
+  }, `${actionText}已提交`)
 }
 
 function resourceItemAttachments(item: { payload: Record<string, any> }): AttachmentMeta[] {
@@ -325,6 +377,7 @@ function handleComplete() {
                 <div class="flex flex-wrap gap-2">
                   <TxStatusBadge :text="resourceApprovalStatusText(item.approvalStatus)" :status="item.approvalStatus === 'rejected' ? 'danger' : item.approvalStatus === 'pending' ? 'warning' : 'success'" size="sm" />
                   <TxStatusBadge :text="resourceProvisionStatusText(item.provisionStatus)" :status="item.provisionStatus === 'completed' ? 'success' : item.provisionStatus === 'pending' ? 'warning' : 'info'" size="sm" />
+                  <TxStatusBadge :text="resourceLifecycleText(item)" :status="resourceLifecycleTone(item)" size="sm" />
                 </div>
               </div>
               <div class="mt-3 gap-2 grid md:grid-cols-2 xl:grid-cols-3">
@@ -355,6 +408,14 @@ function handleComplete() {
               </div>
               <div v-if="item.provisionNote" class="text-xs text-slate-500 mt-2 dark:text-slate-400">
                 开通备注：{{ item.provisionNote }} · {{ formatDate(item.provisionCompletedAt) }}
+              </div>
+              <div v-if="canRequestResourceRenewal(item) || canReturnResource(item)" class="mt-3 flex flex-wrap gap-2">
+                <TxButton v-if="canRequestResourceRenewal(item)" size="sm" variant="secondary" @click="handleResourceLifecycle(item.id, 'request_renewal')">
+                  申请续期
+                </TxButton>
+                <TxButton v-if="canReturnResource(item)" size="sm" variant="secondary" @click="handleResourceLifecycle(item.id, 'return')">
+                  主动归还
+                </TxButton>
               </div>
               <details v-if="isAdmin" class="text-xs text-slate-500 mt-3 dark:text-slate-400">
                 <summary class="fw-800 cursor-pointer">

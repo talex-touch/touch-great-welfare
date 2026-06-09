@@ -11,6 +11,7 @@ import type {
   EducationEmailChallenge,
   InvitationBinding,
   ResourceApprovalStatus,
+  ResourceLifecycleAction,
   ResourceType,
   SquareBoost,
   SquarePost,
@@ -29,6 +30,7 @@ import {
   ACTIVITY_END_AT,
   applicationPowChallenge,
   applyRateDiscount,
+  applyResourceLifecycleAction,
   BASE_REQUEST_COST,
   buildPricingSnapshot,
   buildUserLevelCard,
@@ -68,6 +70,7 @@ import {
   PRO_EXPEDITE_COST,
   PRO_STANDARD_PROCESSING_HOURS,
   REJECTION_REVIEW_FEE_RATE,
+  resolveResourceLifecycleStatus,
   resolveSelectableLlmApiModel,
   RESOURCE_TYPE_CONFIGS,
   resourceActivityPromotionName,
@@ -3991,6 +3994,13 @@ function sanitizeMessageType(value: unknown): ApplicationMessageType {
   return value === 'comment' || value === 'supplement' || value === 'result_submission' || value === 'system' ? value : 'comment'
 }
 
+function sanitizeResourceLifecycleAction(value: unknown): ResourceLifecycleAction {
+  const actions: ResourceLifecycleAction[] = ['approve', 'reject', 'provision', 'activate', 'request_renewal', 'approve_renewal', 'reject_renewal', 'mark_expired', 'queue_reclaim', 'return', 'release', 'close']
+  if (actions.includes(value as ResourceLifecycleAction))
+    return value as ResourceLifecycleAction
+  throw new Error('资源生命周期动作无效')
+}
+
 export async function reviewAdminApplicationItemAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, _admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
@@ -4015,6 +4025,8 @@ export async function reviewAdminApplicationItemAction(request: Request, env: Wo
     item.approvedPayload = isRecord(payload.approvedPayload) ? payload.approvedPayload : undefined
     item.rejectReason = note || undefined
     item.provisionStatus = ['approved', 'adjusted_approved'].includes(status) ? 'pending' : 'not_required'
+    item.lifecycleStatus = status === 'rejected' ? 'rejected' : 'provisioning'
+    item.expiresAt = typeof item.expiresAt === 'string' ? item.expiresAt : typeof item.approvedPayload?.expiresAt === 'string' ? item.approvedPayload.expiresAt : typeof item.payload?.expiresAt === 'string' ? item.payload.expiresAt : undefined
     item.updatedAt = now()
     application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [])
     if (['approved', 'partial_approved', 'rejected'].includes(application.status)) {
@@ -4049,9 +4061,54 @@ export async function completeAdminResourceProvisionAction(request: Request, env
     if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
       throw new Error('只有通过的资源明细需要开通')
     item.provisionStatus = 'completed'
+    item.lifecycleStatus = resolveResourceLifecycleStatus({ ...item, provisionStatus: 'completed', lifecycleStatus: undefined })
     item.provisionNote = typeof payload.note === 'string' ? payload.note.trim() : undefined
     item.provisionCompletedAt = now()
+    item.activatedAt = item.lifecycleStatus === 'active' ? item.provisionCompletedAt : item.activatedAt
     item.updatedAt = item.provisionCompletedAt
+    return { applicationId: application.id, item }
+  })
+}
+
+export async function requestCurrentUserResourceLifecycleAction(request: Request, env: WorkerEnv) {
+  return commitCurrentUserAction(request, env, (state, user, payload) => {
+    const application = (state.applications ?? []).find(item => item.id === payload.applicationId && item.userId === user.id)
+    if (!application || application.type !== 'resource')
+      throw new Error('资源申请不存在')
+    const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
+    if (!item)
+      throw new Error('资源明细不存在')
+    const action = sanitizeResourceLifecycleAction(payload.action)
+    if (!['request_renewal', 'return'].includes(action))
+      throw new Error('该资源操作仅管理员可执行')
+    const actedAt = now()
+    applyResourceLifecycleAction(item, { action }, actedAt)
+    const note = typeof payload.note === 'string' && payload.note.trim()
+      ? payload.note.trim()
+      : action === 'request_renewal'
+        ? '申请人已发起资源续期申请。'
+        : '申请人已主动归还资源。'
+    pushApplicationMessage(application, user.id, 'system', note)
+    return { applicationId: application.id, item }
+  })
+}
+
+export async function updateAdminResourceLifecycleAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (application.type !== 'resource')
+      throw new Error('资源申请不存在')
+    const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
+    if (!item)
+      throw new Error('资源明细不存在')
+    const actedAt = now()
+    applyResourceLifecycleAction(item, {
+      action: sanitizeResourceLifecycleAction(payload.action),
+      expiresAt: typeof payload.expiresAt === 'string' ? payload.expiresAt : undefined,
+    }, actedAt)
+    const note = typeof payload.note === 'string' ? payload.note.trim() : ''
+    if (note)
+      pushApplicationMessage(application, admin.id, 'system', note)
     return { applicationId: application.id, item }
   })
 }
