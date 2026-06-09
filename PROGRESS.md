@@ -2,8 +2,8 @@
 
 **项目**: Touch Great Welfare - 从 JSONB 到规范化表架构迁移  
 **开始日期**: 2026-06-09  
-**当前状态**: Phase 1 完成 ✅  
-**总体进度**: **40% (2/5 阶段)**
+**当前状态**: Phase 2 完成 ✅  
+**总体进度**: **60% (3/5 阶段)**
 
 ---
 
@@ -13,14 +13,14 @@
 |------|------|------|------|------|---------|
 | **Phase 0** | 紧急止血 | 1-2天 | 2.5小时 | ✅ | 2026-06-09 |
 | **Phase 1** | 数据模型设计 | 3-5天 | 3小时 | ✅ | 2026-06-09 |
-| **Phase 2** | 实现双写层 | 1周 | - | ⏳ | - |
-| **Phase 3** | 灰度切换读取 | 2周 | - | 📋 | - |
+| **Phase 2** | 实现双写层 | 1周 | 4小时 | ✅ | 2026-06-09 |
+| **Phase 3** | 灰度切换读取 | 2周 | - | ⏳ | - |
 | **Phase 4** | 完全迁移 | 1周 | - | 📋 | - |
-| **总计** | | **4-6周** | **5.5小时** | **40%** | - |
+| **总计** | | **4-6周** | **9.5小时** | **60%** | - |
 
 ---
 
-## ✅ 已完成 (40%)
+## ✅ 已完成 (60%)
 
 ### Phase 0: 紧急止血 (100%) ✅
 
@@ -78,6 +78,54 @@ scripts/migrate-jsonb-to-normalized.ts
 - `PHASE1_REPORT.md` - 执行报告
 
 **Commit**: `decec4f`
+
+---
+
+### Phase 2: 实现双写层 (100%) ✅
+
+**耗时**: 4 小时 (预计 1 周)
+
+**成果**:
+- ✅ Repository 抽象层 (BaseRepository, UserRepository, ApplicationRepository)
+- ✅ 双写模式实现
+- ✅ 灰度切换机制
+- ✅ 数据一致性验证工具
+- ✅ 业务逻辑重构示例
+
+**交付**:
+```
+src/worker/welfare/core/repository/
+  ├── base.ts                    # Repository 基类
+  ├── user-repository.ts         # 用户 Repository
+  ├── application-repository.ts  # 申请 Repository
+  └── index.ts                   # 统一导出
+
+src/worker/welfare/core/examples/
+  └── user-actions-refactored.ts # 重构示例
+
+scripts/validate-consistency.ts  # 一致性验证工具
+```
+
+**配置示例**:
+```typescript
+// Phase 2: 双写 + 从 state 读取
+setMigrationConfig({
+  writeMode: { target: 'dual-write' },
+  readMode: { source: 'state' },
+})
+
+// Phase 3: 10% 灰度
+setMigrationConfig({
+  readMode: { source: 'canary', canaryPercentage: 10 },
+})
+```
+
+**文档**:
+- `PHASE2_REPORT.md` - 执行报告
+- `REPOSITORY_GUIDE.md` - 使用指南
+- `CORE_SPLIT_PLAN.md` - 拆分计划
+
+**Commit**: `51e95a7`, `5bf9e15`
 
 ---
 
