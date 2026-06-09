@@ -914,3 +914,27 @@
   opacity: 0;
   transform: translateY(-0.4rem) scale(0.96);
 }
+.admin-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(8px);
+}
+
+.admin-confirm-dialog {
+  width: min(100%, 30rem);
+  padding: 1.1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+}
+
+.dark .admin-confirm-dialog {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(21, 24, 32, 0.98);
+}

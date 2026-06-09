@@ -108,6 +108,10 @@ interface NotificationProviderConfigPayload {
   clearFeishuRefreshToken?: boolean
 }
 
+interface GenerateVapidKeysPayload {
+  regenerate?: boolean
+}
+
 export interface CreateNotificationInput {
   userId: string
   event: NotificationEvent
@@ -1494,6 +1498,55 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
   return getEffectiveNotificationProviderConfig(env)
 }
 
+async function createVapidKeyPair() {
+  const keyPair = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  )
+  const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey) as JsonWebKey
+  const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey) as JsonWebKey
+  if (!publicJwk.x || !publicJwk.y || !privateJwk.d)
+    throw new Error('VAPID 密钥生成失败')
+
+  return {
+    publicKey: base64UrlEncode(new Uint8Array([
+      4,
+      ...base64UrlDecode(publicJwk.x),
+      ...base64UrlDecode(publicJwk.y),
+    ])),
+    privateKey: privateJwk.d,
+  }
+}
+
+async function generateVapidKeys(env: WorkerEnv, payload: GenerateVapidKeysPayload) {
+  const current = await getEffectiveNotificationProviderConfig(env)
+  if (current.vapidPublicKey && current.vapidPrivateKey && !payload.regenerate)
+    throw new Error('VAPID 已配置，如需替换请确认重新生成')
+
+  const keys = await createVapidKeyPair()
+  const next = await saveNotificationProviderConfig(env, {
+    resendFromEmail: current.resendFromEmail,
+    vapidPublicKey: keys.publicKey,
+    vapidPrivateKey: keys.privateKey,
+    vapidSubject: current.vapidSubject || DEFAULT_VAPID_SUBJECT,
+    feishuMailEnabled: current.feishuMailEnabled,
+    feishuAppId: current.feishuAppId,
+    feishuUserAccessToken: current.feishuUserAccessToken,
+    feishuRefreshToken: current.feishuRefreshToken,
+    feishuAccessTokenExpiresAt: current.feishuAccessTokenExpiresAt,
+    feishuRefreshTokenExpiresAt: current.feishuRefreshTokenExpiresAt,
+    feishuUserMailboxId: current.feishuUserMailboxId,
+    feishuSiteBaseUrl: current.feishuSiteBaseUrl,
+    feishuDailyLimit: current.feishuDailyLimit,
+  })
+
+  return {
+    ...serializeNotificationProviderConfig(next),
+    regenerated: !!(current.vapidPublicKey && current.vapidPrivateKey),
+  }
+}
+
 async function countSentFeishuMailToday(env: WorkerEnv) {
   await ensureNotificationSchema(env)
   const dateKey = shanghaiDateKey()
@@ -2403,6 +2456,12 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
       await assertAdminRequest(request, env)
       const payload = await readJson<NotificationProviderConfigPayload>(request)
       return json(serializeNotificationProviderConfig(await saveNotificationProviderConfig(env, payload)))
+    }
+
+    if (path === '/provider-config/vapid/generate' && request.method === 'POST') {
+      await assertAdminRequest(request, env)
+      const payload = await readJson<GenerateVapidKeysPayload>(request)
+      return json(await generateVapidKeys(env, payload))
     }
 
     if (path === '/admin-announcements' && request.method === 'GET') {

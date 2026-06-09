@@ -14,6 +14,7 @@ import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChal
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from '../github-app'
 import {
   createAdminAnnouncement,
+  generateVapidKeys,
   loadAdminAnnouncements,
   loadNotificationProviderConfig,
   loadNotifications,
@@ -476,6 +477,7 @@ export const notificationProviderConfigForm = reactive({
   pushConfigured: false,
   feishuMailConfigured: false,
   loading: false,
+  generatingVapid: false,
   message: '',
 })
 
@@ -2552,6 +2554,29 @@ export function useWelfareUiState() {
     }
   }
 
+  async function generateNotificationVapidKeys(regenerate = false) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    notificationProviderConfigForm.generatingVapid = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await generateVapidKeys(welfare.currentUser.value.id, regenerate)
+      notificationProviderConfigForm.vapidPublicKey = result.vapidPublicKey
+      notificationProviderConfigForm.vapidPrivateKey = ''
+      notificationProviderConfigForm.vapidPrivateKeyMasked = result.vapidPrivateKeyMasked
+      notificationProviderConfigForm.vapidSubject = result.vapidSubject
+      notificationProviderConfigForm.emailConfigured = result.configured.email
+      notificationProviderConfigForm.pushConfigured = result.configured.push
+      notificationProviderConfigForm.feishuMailConfigured = result.configured.feishuMail
+      notificationProviderConfigForm.message = result.regenerated ? '浏览器 Push 密钥已重新生成' : '浏览器 Push 密钥已生成'
+    }
+    finally {
+      notificationProviderConfigForm.generatingVapid = false
+    }
+  }
+
   function refreshSiteBannerConfig() {
     siteBannerConfigForm.enabled = welfare.state.siteBanner.enabled
     siteBannerConfigForm.title = welfare.state.siteBanner.title
@@ -3367,6 +3392,7 @@ export function useWelfareUiState() {
     revokeTemporaryAiKey,
     refreshNotificationProviderConfig,
     persistNotificationProviderConfig,
+    generateNotificationVapidKeys,
     refreshSiteBannerConfig,
     persistSiteBannerConfig,
     refreshAdminAnnouncements,

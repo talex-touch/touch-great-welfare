@@ -33,6 +33,10 @@ export interface NotificationProviderConfigView {
   source: 'env' | 'admin' | 'empty'
 }
 
+export interface GenerateVapidKeysResult extends NotificationProviderConfigView {
+  regenerated: boolean
+}
+
 export interface SaveNotificationProviderConfigPayload {
   resendApiKey?: string
   resendFromEmail: string
@@ -129,6 +133,13 @@ export function saveNotificationProviderConfig(adminUserId: string, payload: Sav
   return requestNotifications<NotificationProviderConfigView>('/api/notifications/provider-config', adminUserId, {
     method: 'PUT',
     body: JSON.stringify(payload),
+  })
+}
+
+export function generateVapidKeys(adminUserId: string, regenerate: boolean) {
+  return requestNotifications<GenerateVapidKeysResult>('/api/notifications/provider-config/vapid/generate', adminUserId, {
+    method: 'POST',
+    body: JSON.stringify({ regenerate }),
   })
 }
 

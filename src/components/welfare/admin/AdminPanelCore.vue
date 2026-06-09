@@ -68,6 +68,7 @@ const {
   syncEducationMailVerifications,
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
+  generateNotificationVapidKeys,
   refreshSiteBannerConfig,
   persistSiteBannerConfig,
   refreshSystemConfigForm,
@@ -176,6 +177,7 @@ const LINUX_DO_OAUTH_PRESET: EditableOAuthProviderConfig = {
 }
 
 const isOAuthProviderDialogOpen = ref(false)
+const isVapidRegenerateDialogOpen = ref(false)
 const oauthProviderDialogMode = ref<'create' | 'edit'>('create')
 const editingOAuthProviderId = ref('')
 const oauthProviderDraft = reactive<EditableOAuthProviderConfig>({
@@ -1860,6 +1862,26 @@ function saveNotificationProviderConfig() {
   }, '通知供应商配置已保存')
 }
 
+function openVapidRegenerateDialog() {
+  isVapidRegenerateDialogOpen.value = true
+}
+
+function closeVapidRegenerateDialog() {
+  if (notificationProviderConfigForm.generatingVapid)
+    return
+
+  isVapidRegenerateDialogOpen.value = false
+}
+
+function generateVapidKeys(regenerate = false) {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await generateNotificationVapidKeys(regenerate)
+    closeVapidRegenerateDialog()
+  }, regenerate ? '浏览器 Push 密钥已重新生成' : '浏览器 Push 密钥已生成')
+}
+
 function saveSiteBannerConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -2814,18 +2836,36 @@ onMounted(() => {
                 <span class="field-label">Resend 发件人</span>
                 <TxInput v-model="notificationProviderConfigForm.resendFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="Touch Great Welfare <notice@example.com>" />
               </label>
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">VAPID Public Key</span>
-                <TxInput v-model="notificationProviderConfigForm.vapidPublicKey" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="Web Push 公钥" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">VAPID Private Key</span>
-                <TxInput v-model="notificationProviderConfigForm.vapidPrivateKey" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.vapidPrivateKeyMasked || '保存到服务端加密配置'" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">VAPID Subject</span>
-                <TxInput v-model="notificationProviderConfigForm.vapidSubject" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="mailto:admin@example.com" />
-              </label>
+              <div class="p-4 border border-emerald-200 rounded-3xl bg-emerald-50/70 dark:border-emerald-400/20 dark:bg-emerald-950/10 lg:col-span-2">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-base fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-notification" />
+                      浏览器 Push
+                    </div>
+                    <p class="text-xs text-slate-600 leading-5 mt-1 dark:text-slate-300">
+                      VAPID 密钥由服务端自动生成并加密保存，无需手动填写。重新生成后，已订阅用户可能需要重新启用 Push。
+                    </p>
+                  </div>
+                  <TxStatusBadge :text="notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置'" :status="notificationProviderConfigForm.pushConfigured ? 'success' : 'warning'" size="sm" />
+                </div>
+                <div class="mt-4 p-3 rounded-2xl bg-white/75 dark:bg-white/8">
+                  <div class="text-xs text-slate-500 fw-900 dark:text-slate-400">
+                    Public Key
+                  </div>
+                  <div class="text-xs leading-5 mt-1 break-all dark:text-slate-200">
+                    {{ notificationProviderConfigForm.vapidPublicKey || '生成后自动显示公钥，私钥不会暴露在页面。' }}
+                  </div>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-3 items-center">
+                  <TxButton v-if="!notificationProviderConfigForm.pushConfigured" size="sm" variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.generatingVapid" @click="generateVapidKeys(false)">
+                    {{ notificationProviderConfigForm.generatingVapid ? '生成中...' : '生成 Push 密钥' }}
+                  </TxButton>
+                  <TxButton v-else size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.generatingVapid" @click="openVapidRegenerateDialog">
+                    {{ notificationProviderConfigForm.generatingVapid ? '重新生成中...' : '重新生成密钥' }}
+                  </TxButton>
+                </div>
+              </div>
               <label class="text-sm flex gap-2 items-center lg:col-span-2">
                 <TxCheckbox v-model="notificationProviderConfigForm.feishuMailEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用飞书邮件通知" />
                 启用飞书邮件通知
@@ -4493,5 +4533,34 @@ onMounted(() => {
         </TxTabItem>
       </TxTabs>
     </TxCard>
+
+    <div v-if="isVapidRegenerateDialogOpen" class="admin-confirm-backdrop" @click.self="closeVapidRegenerateDialog">
+      <div class="admin-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-vapid-regenerate-title">
+        <div class="flex flex-wrap gap-3 items-start justify-between">
+          <div>
+            <h3 id="admin-vapid-regenerate-title" class="text-lg fw-950 m-0">
+              重新生成 Push 密钥？
+            </h3>
+            <p class="text-sm text-slate-500 leading-6 mt-2 dark:text-slate-400">
+              重新生成会替换现有 VAPID 公私钥，已订阅浏览器 Push 的用户可能需要重新启用 Push。
+            </p>
+          </div>
+          <TxButton variant="ghost" size="sm" :disabled="notificationProviderConfigForm.generatingVapid" aria-label="取消重新生成 Push 密钥" @click="closeVapidRegenerateDialog">
+            <span class="i-carbon-close" />
+          </TxButton>
+        </div>
+        <div class="text-sm text-amber-800 mt-5 p-3 rounded-2xl bg-amber-50 dark:text-amber-100 dark:bg-amber-950/30">
+          如果只是普通保存通知配置，请点击取消；只有确认要让用户重新订阅时才重新生成。
+        </div>
+        <div class="mt-5 flex flex-wrap gap-3 justify-end">
+          <TxButton variant="secondary" :disabled="notificationProviderConfigForm.generatingVapid" @click="closeVapidRegenerateDialog">
+            取消
+          </TxButton>
+          <TxButton variant="primary" :disabled="notificationProviderConfigForm.generatingVapid" @click="generateVapidKeys(true)">
+            {{ notificationProviderConfigForm.generatingVapid ? '重新生成中...' : '确认重新生成' }}
+          </TxButton>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
