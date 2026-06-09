@@ -38,6 +38,11 @@ export interface GenerateVapidKeysResult extends NotificationProviderConfigView 
   regenerated: boolean
 }
 
+export interface FeishuMailAuthorizationResult {
+  authorizationUrl: string
+  callbackUrl: string
+}
+
 export interface SaveNotificationProviderConfigPayload {
   resendApiKey?: string
   resendFromEmail: string
@@ -148,6 +153,13 @@ export function generateVapidKeys(adminUserId: string, regenerate: boolean) {
   return requestNotifications<GenerateVapidKeysResult>('/api/notifications/provider-config/vapid/generate', adminUserId, {
     method: 'POST',
     body: JSON.stringify({ regenerate }),
+  })
+}
+
+export function createFeishuMailAuthorization(adminUserId: string, payload: { redirect?: string, providerConfig?: SaveNotificationProviderConfigPayload }) {
+  return requestNotifications<FeishuMailAuthorizationResult>('/api/notifications/provider-config/feishu/authorize', adminUserId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

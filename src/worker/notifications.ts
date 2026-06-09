@@ -139,6 +139,16 @@ interface GenerateVapidKeysPayload {
   regenerate?: boolean
 }
 
+interface FeishuMailAuthorizePayload {
+  redirect?: string
+  providerConfig?: NotificationProviderConfigPayload
+}
+
+interface FeishuMailOAuthState {
+  createdAt: number
+  redirect: string
+}
+
 export interface CreateNotificationInput {
   userId: string
   event: NotificationEvent
@@ -161,6 +171,9 @@ const DEFAULT_FEISHU_DAILY_LIMIT = 400
 const MAX_FEISHU_DAILY_LIMIT = 400
 const FEISHU_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000
 const EMAIL_BODY_TEXT_LIMIT = 1800
+const FEISHU_MAIL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000
+const FEISHU_MAIL_AUTHORIZE_URL = 'https://open.feishu.cn/open-apis/authen/v1/index'
+const FEISHU_MAIL_AUTH_SCOPE = 'offline_access'
 const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
 type EmailDeliveryProvider = EmailDeliveryAttempt['provider']
 type EmailDeliveryStatus = EmailDeliveryAttempt['status']
@@ -226,6 +239,22 @@ function normalizeNotificationChannels(channels: NotificationChannel[] | undefin
 function assertEmail(value: string) {
   if (!/^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/.test(value))
     throw new Error('请填写有效邮箱')
+}
+
+function requestOrigin(request: Request) {
+  const url = new URL(request.url)
+  return `${url.protocol}//${url.host}`
+}
+
+function normalizeAdminRedirect(input?: string) {
+  const value = input?.trim() || '/dashboard/admin'
+  if (!value.startsWith('/') || value.startsWith('//'))
+    return '/dashboard/admin'
+  return value.startsWith('/dashboard') ? value : '/dashboard/admin'
+}
+
+function feishuMailCallbackUrl(request: Request) {
+  return `${requestOrigin(request)}/api/notifications/provider-config/feishu/callback`
 }
 
 function normalizeExternalHttpsUrl(value: string, label: string) {
@@ -1781,6 +1810,22 @@ async function countSentFeishuMailToday(env: WorkerEnv) {
   return Number(result.rows[0]?.count ?? 0)
 }
 
+async function createFeishuMailOAuthState(env: WorkerEnv, input: Omit<FeishuMailOAuthState, 'createdAt'>) {
+  return encryptSecret(JSON.stringify({ ...input, createdAt: Date.now() }), encryptionSecret(env))
+}
+
+async function consumeFeishuMailOAuthState(env: WorkerEnv, stateText?: string) {
+  if (!stateText)
+    throw new Error('缺少飞书授权 state')
+  const state = JSON.parse(await decryptSecret(stateText, encryptionSecret(env))) as FeishuMailOAuthState
+  if (!state.createdAt || Date.now() - state.createdAt > FEISHU_MAIL_OAUTH_STATE_TTL_MS)
+    throw new Error('飞书授权 state 已失效，请重新授权')
+  return {
+    redirect: normalizeAdminRedirect(state.redirect),
+    createdAt: state.createdAt,
+  }
+}
+
 async function updateFeishuTokens(
   env: WorkerEnv,
   accessToken: string,
@@ -1817,9 +1862,111 @@ async function updateFeishuTokens(
   `, [accessTokenEncrypted, refreshTokenEncrypted, accessTokenExpiresAt, refreshTokenExpiresAt, NOTIFICATION_PROVIDER_CONFIG_ID])
 }
 
+async function createFeishuMailAuthorization(env: WorkerEnv, request: Request, payload: FeishuMailAuthorizePayload) {
+  if (payload.providerConfig)
+    await saveNotificationProviderConfig(env, payload.providerConfig)
+  const config = await getEffectiveNotificationProviderConfig(env)
+  if (!config.feishuAppId || !config.feishuAppSecret)
+    throw new Error('请先保存飞书 App ID 和 App Secret')
+
+  const callbackUrl = feishuMailCallbackUrl(request)
+  const state = await createFeishuMailOAuthState(env, { redirect: normalizeAdminRedirect(payload.redirect) })
+  const authorizeUrl = new URL(FEISHU_MAIL_AUTHORIZE_URL)
+  authorizeUrl.searchParams.set('app_id', config.feishuAppId)
+  authorizeUrl.searchParams.set('redirect_uri', callbackUrl)
+  authorizeUrl.searchParams.set('state', state)
+  authorizeUrl.searchParams.set('scope', FEISHU_MAIL_AUTH_SCOPE)
+  return {
+    authorizationUrl: authorizeUrl.toString(),
+    callbackUrl,
+  }
+}
+
+async function exchangeFeishuAuthorizationCode(
+  env: WorkerEnv,
+  config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>,
+  code: string,
+  redirectUri: string,
+) {
+  if (!config.feishuAppId || !config.feishuAppSecret)
+    throw new Error('飞书 App ID 或 App Secret 未配置')
+  if (!code)
+    throw new Error('飞书授权未返回 code')
+
+  const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      client_id: config.feishuAppId,
+      client_secret: config.feishuAppSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+  })
+  const text = await response.text()
+  const result = text
+    ? JSON.parse(text) as {
+      code?: number
+      access_token?: string
+      expires_in?: number
+      refresh_token?: string
+      refresh_token_expires_in?: number
+      error?: string
+      error_description?: string
+      msg?: string
+    }
+    : {}
+  if (!response.ok || result.code !== 0)
+    throw new Error(result.error_description || result.error || result.msg || `飞书授权换取 token 失败：${response.status}`)
+  if (!result.access_token || !result.refresh_token)
+    throw new Error('飞书授权响应缺少 access_token 或 refresh_token')
+
+  const accessTokenExpiresAt = expiresAtFromNow(result.expires_in)
+  const refreshTokenExpiresAt = expiresAtFromNow(result.refresh_token_expires_in)
+  await updateFeishuTokens(env, result.access_token, result.refresh_token, accessTokenExpiresAt, refreshTokenExpiresAt)
+  return { accessTokenExpiresAt, refreshTokenExpiresAt }
+}
+
+function redirectAfterFeishuMailAuthorization(request: Request, path: string, params: Record<string, string>) {
+  const url = new URL(path, requestOrigin(request))
+  for (const [key, value] of Object.entries(params))
+    url.searchParams.set(key, value)
+  return new Response(null, { status: 302, headers: { location: url.toString() } })
+}
+
+async function completeFeishuMailAuthorization(request: Request, env: WorkerEnv) {
+  const url = new URL(request.url)
+  const state = await consumeFeishuMailOAuthState(env, url.searchParams.get('state') || '')
+  try {
+    const config = await getEffectiveNotificationProviderConfig(env)
+    const result = await exchangeFeishuAuthorizationCode(env, config, url.searchParams.get('code') || '', feishuMailCallbackUrl(request))
+    await writeSystemLog(env, {
+      level: 'success',
+      module: 'notifications',
+      action: 'feishu_mail.authorized',
+      message: '飞书邮箱授权成功',
+      details: result,
+    }).catch(() => {})
+    return redirectAfterFeishuMailAuthorization(request, state.redirect, { feishu_mail_auth: 'success' })
+  }
+  catch (error) {
+    const message = errorMessage(error, '飞书邮箱授权失败')
+    await writeSystemLog(env, {
+      level: 'error',
+      module: 'notifications',
+      action: 'feishu_mail.authorize_failed',
+      message,
+    }).catch(() => {})
+    return redirectAfterFeishuMailAuthorization(request, state.redirect, { feishu_mail_auth: 'error', message })
+  }
+}
+
 async function refreshFeishuUserAccessToken(env: WorkerEnv, config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
   if (!config.feishuAppId || !config.feishuAppSecret || !config.feishuRefreshToken)
-    throw new Error('飞书用户授权凭证未配置')
+    throw new Error('飞书用户授权凭证未配置，请先点击“授权飞书邮箱”完成授权')
 
   const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
     method: 'POST',
@@ -1856,34 +2003,9 @@ async function refreshFeishuUserAccessToken(env: WorkerEnv, config: Awaited<Retu
   return result.access_token
 }
 
-async function getFeishuTenantAccessToken(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
-  if (!config.feishuAppId || !config.feishuAppSecret)
-    throw new Error('飞书 App ID 或 App Secret 未配置')
-
-  const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-    },
-    body: JSON.stringify({
-      app_id: config.feishuAppId,
-      app_secret: config.feishuAppSecret,
-    }),
-  })
-  const text = await response.text()
-  const result = text
-    ? JSON.parse(text) as { code?: number, tenant_access_token?: string, msg?: string, error?: string, error_description?: string }
-    : {}
-  if (!response.ok || result.code !== 0)
-    throw new Error(result.error_description || result.error || result.msg || `飞书 tenant_access_token 获取失败：${response.status}`)
-  if (!result.tenant_access_token)
-    throw new Error('飞书 tenant_access_token 响应为空')
-  return result.tenant_access_token
-}
-
 async function feishuAccessTokenForSend(env: WorkerEnv, config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
   if (!config.feishuUserAccessToken && !config.feishuRefreshToken)
-    return getFeishuTenantAccessToken(config)
+    throw new Error('飞书邮箱尚未授权，请先点击“授权飞书邮箱”完成授权')
   if (shouldRefreshFeishuAccessToken(config.feishuUserAccessToken, config.feishuAccessTokenExpiresAt))
     return refreshFeishuUserAccessToken(env, config)
   return config.feishuUserAccessToken
@@ -2845,6 +2967,15 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
       const payload = await readJson<GenerateVapidKeysPayload>(request)
       return json(await generateVapidKeys(env, payload))
     }
+
+    if (path === '/provider-config/feishu/authorize' && request.method === 'POST') {
+      await assertAdminRequest(request, env)
+      const payload = await readJson<FeishuMailAuthorizePayload>(request)
+      return json(await createFeishuMailAuthorization(env, request, payload))
+    }
+
+    if (path === '/provider-config/feishu/callback' && request.method === 'GET')
+      return completeFeishuMailAuthorization(request, env)
 
     if (path === '/admin-announcements' && request.method === 'GET') {
       await assertAdminRequest(request, env)

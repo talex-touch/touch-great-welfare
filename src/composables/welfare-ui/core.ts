@@ -15,6 +15,7 @@ import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChal
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from '../github-app'
 import {
   createAdminAnnouncement,
+  createFeishuMailAuthorization,
   deletePushSubscription,
   generateVapidKeys,
   loadAdminAnnouncements,
@@ -483,6 +484,7 @@ export const notificationProviderConfigForm = reactive({
   feishuDailyLimit: 400,
   testEmailAddress: '',
   testingEmail: false,
+  authorizingFeishu: false,
   emailConfigured: false,
   pushConfigured: false,
   feishuMailConfigured: false,
@@ -2532,6 +2534,22 @@ export function useWelfareUiState() {
     }
   }
 
+  function notificationProviderConfigPayload() {
+    return {
+      resendApiKey: notificationProviderConfigForm.resendApiKey,
+      resendFromEmail: notificationProviderConfigForm.resendFromEmail,
+      vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
+      vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
+      vapidSubject: notificationProviderConfigForm.vapidSubject,
+      feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
+      feishuAppId: notificationProviderConfigForm.feishuAppId,
+      feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
+      feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
+      feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
+      feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
+    }
+  }
+
   async function persistNotificationProviderConfig() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
@@ -2540,24 +2558,33 @@ export function useWelfareUiState() {
     notificationProviderConfigForm.loading = true
     notificationProviderConfigForm.message = ''
     try {
-      const result = await saveNotificationProviderConfig(welfare.currentUser.value.id, {
-        resendApiKey: notificationProviderConfigForm.resendApiKey,
-        resendFromEmail: notificationProviderConfigForm.resendFromEmail,
-        vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
-        vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
-        vapidSubject: notificationProviderConfigForm.vapidSubject,
-        feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
-        feishuAppId: notificationProviderConfigForm.feishuAppId,
-        feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
-        feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
-        feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
-        feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
-      })
+      const result = await saveNotificationProviderConfig(welfare.currentUser.value.id, notificationProviderConfigPayload())
       applyNotificationProviderConfig(result)
       notificationProviderConfigForm.message = '通知供应商配置已保存'
     }
     finally {
       notificationProviderConfigForm.loading = false
+    }
+  }
+
+  async function authorizeFeishuMailProvider() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    notificationProviderConfigForm.authorizingFeishu = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await createFeishuMailAuthorization(welfare.currentUser.value.id, {
+        redirect: typeof globalThis.location !== 'undefined' ? `${globalThis.location.pathname}${globalThis.location.search}` : '/dashboard/admin',
+        providerConfig: notificationProviderConfigPayload(),
+      })
+      notificationProviderConfigForm.message = '正在跳转到飞书授权页'
+      if (typeof globalThis.location !== 'undefined')
+        globalThis.location.href = result.authorizationUrl
+    }
+    finally {
+      notificationProviderConfigForm.authorizingFeishu = false
     }
   }
 
@@ -2573,19 +2600,7 @@ export function useWelfareUiState() {
         emailAddress: notificationProviderConfigForm.testEmailAddress,
         provider: 'feishu_mail',
         free: true,
-        providerConfig: {
-          resendApiKey: notificationProviderConfigForm.resendApiKey,
-          resendFromEmail: notificationProviderConfigForm.resendFromEmail,
-          vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
-          vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
-          vapidSubject: notificationProviderConfigForm.vapidSubject,
-          feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
-          feishuAppId: notificationProviderConfigForm.feishuAppId,
-          feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
-          feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
-          feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
-          feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
-        },
+        providerConfig: notificationProviderConfigPayload(),
       })
       notificationProviderConfigForm.testEmailAddress = result.emailAddress
       notificationProviderConfigForm.message = `飞书邮件测试已发送到 ${result.emailAddress}：${result.deliveryAttempts.map(formatEmailDeliveryAttempt).join('；')}`
@@ -3454,6 +3469,7 @@ export function useWelfareUiState() {
     revokeTemporaryAiKey,
     refreshNotificationProviderConfig,
     persistNotificationProviderConfig,
+    authorizeFeishuMailProvider,
     sendProviderEmailTestMessage,
     generateNotificationVapidKeys,
     refreshSiteBannerConfig,

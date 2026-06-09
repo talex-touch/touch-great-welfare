@@ -597,7 +597,7 @@ describe('notification dispatch', () => {
     expect(saved.feishuRefreshTokenMasked).toBe('')
   })
 
-  it('tests Feishu mail with the current unsaved provider config', async () => {
+  it('tests Feishu mail with the current provider config and saved user authorization', async () => {
     const stored = {
       ...state(),
       users: [user(0, 'admin_1', 'admin')],
@@ -607,8 +607,15 @@ describe('notification dispatch', () => {
     vi.stubGlobal('crypto', globalThis.crypto)
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.includes('/auth/v3/tenant_access_token/internal'))
-        return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }))
+      if (url.includes('/authen/v2/oauth/token')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          access_token: 'access_new',
+          expires_in: 7200,
+          refresh_token: 'refresh_new',
+          refresh_token_expires_in: 604800,
+        }))
+      }
       if (url.includes('/mail/v1/user_mailboxes/'))
         return new Response(JSON.stringify({ code: 0, msg: 'success', data: { message_id: 'msg_test' } }))
       return new Response(JSON.stringify({ id: 'unexpected' }))
@@ -618,6 +625,7 @@ describe('notification dispatch', () => {
       NOTIFY_SECRET_KEY: 'test-secret',
     }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+    await saveNotificationProvider(d1)
 
     const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/email-test', {
       method: 'POST',
@@ -645,6 +653,94 @@ describe('notification dispatch', () => {
       emailAddress: 'tagzxxia@gmail.com',
     })
     expect(d1.data.providerConfig?.feishu_app_id).toBe('cli_current')
+  })
+
+  it('rejects Feishu mail tests before user authorization', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/email-test', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        emailAddress: 'tagzxxia@gmail.com',
+        provider: 'feishu_mail',
+        providerConfig: {
+          feishuMailEnabled: true,
+          feishuAppId: 'cli_current',
+          feishuAppSecret: 'current_secret',
+          feishuUserMailboxId: 'welfare@example.com',
+          feishuDailyLimit: 400,
+        },
+      }),
+    }), env)
+
+    expect(response.ok).toBe(false)
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('授权飞书邮箱') })
+  })
+
+  it('authorizes Feishu mail and stores user tokens from callback', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: 0,
+      access_token: 'access_authorized',
+      expires_in: 7200,
+      refresh_token: 'refresh_authorized',
+      refresh_token_expires_in: 604800,
+    }))))
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const authorize = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/feishu/authorize', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        redirect: '/dashboard/admin?tab=system',
+        providerConfig: {
+          feishuMailEnabled: true,
+          feishuAppId: 'cli_current',
+          feishuAppSecret: 'current_secret',
+          feishuUserMailboxId: 'welfare@example.com',
+          feishuDailyLimit: 400,
+        },
+      }),
+    }), env)
+
+    expect(authorize.ok).toBe(true)
+    const authorizationPayload = await authorize.json() as { authorizationUrl: string }
+    const stateParam = new URL(authorizationPayload.authorizationUrl).searchParams.get('state')
+    expect(stateParam).toBeTruthy()
+
+    const callback = await notifications.handleNotificationRequest(new Request(`https://example.com/api/notifications/provider-config/feishu/callback?code=auth_code&state=${encodeURIComponent(stateParam!)}`), env)
+    expect(callback.status).toBe(302)
+    expect(callback.headers.get('location')).toContain('feishu_mail_auth=success')
+    expect(d1.data.providerConfig?.feishu_user_access_token_encrypted).toBeTruthy()
+    expect(d1.data.providerConfig?.feishu_refresh_token_encrypted).toBeTruthy()
   })
 
   it('rejects unsafe Feishu webhook URLs in user settings', async () => {

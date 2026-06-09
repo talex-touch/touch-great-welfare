@@ -69,6 +69,7 @@ const {
   syncEducationMailVerifications,
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
+  authorizeFeishuMailProvider,
   sendProviderEmailTestMessage,
   generateNotificationVapidKeys,
   refreshSiteBannerConfig,
@@ -1865,6 +1866,14 @@ function saveNotificationProviderConfig() {
   }, '通知供应商配置已保存')
 }
 
+function authorizeFeishuProvider() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await authorizeFeishuMailProvider()
+  }, '正在跳转飞书授权')
+}
+
 function sendFeishuProviderTest() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -1946,6 +1955,27 @@ function notificationChannelLabel(channel: string) {
   return announcementChannelOptions.find(item => item.value === channel)?.label ?? channel
 }
 
+function handleFeishuMailAuthCallbackMessage() {
+  const status = typeof route.query.feishu_mail_auth === 'string' ? route.query.feishu_mail_auth : ''
+  if (!status)
+    return
+
+  if (status === 'success') {
+    notificationProviderConfigForm.message = '飞书邮箱授权成功，可以发送测试邮件了'
+    notify('飞书邮箱授权成功')
+  }
+  else {
+    const message = typeof route.query.message === 'string' ? route.query.message : '飞书邮箱授权失败'
+    notificationProviderConfigForm.message = message
+    notify(message)
+  }
+
+  const nextQuery = { ...route.query }
+  delete nextQuery.feishu_mail_auth
+  delete nextQuery.message
+  router.replace({ query: nextQuery }).catch(() => {})
+}
+
 onMounted(() => {
   if (!isAdmin.value)
     return
@@ -1959,7 +1989,7 @@ onMounted(() => {
   refreshSub2ApiConfig().catch(() => {})
   refreshDatabaseProvisionConfig().catch(() => {})
   refreshEducationMailConfig().catch(() => {})
-  refreshNotificationProviderConfig().catch(() => {})
+  refreshNotificationProviderConfig().then(handleFeishuMailAuthCallbackMessage).catch(() => {})
   refreshAdminAnnouncements().catch(() => {})
   refreshSystemLogs().catch(() => {})
   refreshPointTransactions({ limit: 200, scope: 'admin' }).catch(() => {})
@@ -2912,7 +2942,14 @@ onMounted(() => {
                 <TxInput v-model="notificationProviderConfigForm.feishuAppSecret" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuAppSecretMasked || '保存到服务端加密配置'" />
               </label>
               <div class="text-xs text-slate-500 leading-5 p-3 rounded-2xl bg-slate-50 dark:text-slate-300 dark:bg-white/8 lg:col-span-2">
-                飞书邮件测试和投递会优先使用服务端 App ID / Secret 获取访问凭证；历史授权 token 若已存在会自动兼容，无需在后台手动填写。
+                飞书邮件发送需要邮箱账号授权。请先保存 App ID / Secret，并点击“授权飞书邮箱”；授权成功后系统会自动加密保存 user_access_token / refresh_token。
+                <div class="mt-3 flex flex-wrap gap-3 items-center">
+                  <TxButton size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.authorizingFeishu || !notificationProviderConfigForm.feishuAppId" @click="authorizeFeishuProvider">
+                    {{ notificationProviderConfigForm.authorizingFeishu ? '跳转中...' : '授权飞书邮箱' }}
+                  </TxButton>
+                  <span v-if="notificationProviderConfigForm.feishuRefreshTokenMasked" class="text-emerald-700 fw-800 dark:text-emerald-300">已保存飞书邮箱授权</span>
+                  <span v-else class="text-amber-700 fw-800 dark:text-amber-300">尚未授权邮箱账号</span>
+                </div>
               </div>
               <label class="gap-2 grid">
                 <span class="field-label">飞书发信邮箱</span>
