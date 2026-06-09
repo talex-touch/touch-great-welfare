@@ -592,6 +592,120 @@ describe('notification dispatch', () => {
     expect(saved.feishuRefreshTokenMasked).toBe('')
   })
 
+  it('rejects unsafe Feishu webhook URLs in user settings', async () => {
+    const stored = state()
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/settings', {
+      method: 'PUT',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        emailEnabled: false,
+        feishuEnabled: true,
+        feishuWebhookUrl: 'https://127.0.0.1/webhook',
+        browserPushEnabled: false,
+      }),
+    }), env)
+
+    expect(response.ok).toBe(false)
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('本地或内网地址') })
+    expect(d1.data.settings).toHaveLength(0)
+  })
+
+  it('rejects unsafe browser push endpoints', async () => {
+    const stored = state()
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/push-subscriptions', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        endpoint: 'https://localhost/push/evil',
+        keys: {
+          p256dh: 'valid-p256dh-key-1234567890',
+          auth: 'valid-auth-key-1234567890',
+        },
+      }),
+    }), env)
+
+    expect(response.ok).toBe(false)
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('本地或内网地址') })
+    expect(d1.data.pushSubscriptions).toHaveLength(0)
+  })
+
+  it('disables old push subscriptions when VAPID keys are regenerated', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const first = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/vapid/generate', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    }), env)
+    expect(first.ok).toBe(true)
+    d1.data.pushSubscriptions.push({
+      id: 'psh_1',
+      user_id: 'admin_1',
+      endpoint: 'https://push.example.com/send/1',
+      p256dh: 'valid-p256dh-key-1234567890',
+      auth: 'valid-auth-key-1234567890',
+      enabled: 1,
+    })
+    d1.data.settings.push({
+      user_id: 'admin_1',
+      email_enabled: 0,
+      email_address: 'admin_1@example.com',
+      feishu_enabled: 0,
+      browser_push_enabled: 1,
+    })
+
+    const regenerated = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/vapid/generate', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ regenerate: true }),
+    }), env)
+
+    expect(regenerated.ok).toBe(true)
+    await expect(regenerated.json()).resolves.toMatchObject({ regenerated: true })
+    expect(d1.data.pushSubscriptions[0].enabled).toBe(0)
+    expect(d1.data.settings[0].browser_push_enabled).toBe(0)
+  })
+
   it('uses Feishu mail before Resend and charges email points once', async () => {
     const stored = {
       ...state(),
