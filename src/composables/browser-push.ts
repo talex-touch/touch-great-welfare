@@ -67,3 +67,13 @@ export async function subscribeBrowserPush(publicKey: string): Promise<BrowserPu
     subscription: subscription.toJSON() as PushSubscriptionPayload,
   }
 }
+
+export async function unsubscribeBrowserPush() {
+  assertBrowserPushSupported()
+
+  const registration = await navigator.serviceWorker.getRegistration()
+  const subscription = await registration?.pushManager.getSubscription()
+  const endpoint = subscription?.endpoint ?? ''
+  await subscription?.unsubscribe()
+  return endpoint
+}

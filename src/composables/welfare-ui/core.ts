@@ -9,12 +9,13 @@ import type { NotificationChannel, SystemLogItem } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from '../ai'
-import { subscribeBrowserPush } from '../browser-push'
+import { subscribeBrowserPush, unsubscribeBrowserPush } from '../browser-push'
 import { loadDatabaseProvisionConfig, loadOnePanelStatus, saveDatabaseProvisionConfig, testDatabaseProvisionConfig } from '../database-provisioning'
 import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig, verifyEducationMailChallenge } from '../education-mail'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from '../github-app'
 import {
   createAdminAnnouncement,
+  deletePushSubscription,
   generateVapidKeys,
   loadAdminAnnouncements,
   loadNotificationProviderConfig,
@@ -2879,6 +2880,30 @@ export function useWelfareUiState() {
     ))
   }
 
+  async function disableBrowserPush() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    const endpoint = await unsubscribeBrowserPush()
+    applyNotificationSettings(await deletePushSubscription(welfare.currentUser.value.id, endpoint))
+    notificationSettingsForm.permission = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+  }
+
+  async function clearFeishuWebhook() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value)
+      throw new Error('请先登录')
+
+    applyNotificationSettings(await saveNotificationSettings(welfare.currentUser.value.id, {
+      emailEnabled: notificationSettingsForm.emailEnabled,
+      emailAddress: notificationSettingsForm.emailAddress,
+      feishuEnabled: false,
+      clearFeishuWebhook: true,
+      browserPushEnabled: notificationSettingsForm.browserPushEnabled,
+    }))
+  }
+
   async function readNotification(id: string) {
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
@@ -3432,6 +3457,8 @@ export function useWelfareUiState() {
     persistNotificationSettings,
     sendNotificationEmailTest,
     enableBrowserPush,
+    disableBrowserPush,
+    clearFeishuWebhook,
     readNotification,
     readAllNotifications,
     startRecharge,

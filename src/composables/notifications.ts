@@ -180,6 +180,13 @@ export function savePushSubscription(userId: string, payload: PushSubscriptionPa
   })
 }
 
+export function deletePushSubscription(userId: string, endpoint?: string) {
+  return requestNotifications<NotificationSettingsView>('/api/notifications/push-subscriptions', userId, {
+    method: 'DELETE',
+    body: JSON.stringify({ endpoint }),
+  })
+}
+
 export function urlBase64ToUint8Array(value: string) {
   const padding = '='.repeat((4 - value.length % 4) % 4)
   const base64 = `${value}${padding}`.replace(/-/g, '+').replace(/_/g, '/')

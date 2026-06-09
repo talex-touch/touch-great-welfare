@@ -1375,10 +1375,32 @@ async function deletePushSubscription(env: WorkerEnv, userId: string, id: string
       .prepare('update push_subscriptions set enabled = 0, disabled_at = current_timestamp, updated_at = current_timestamp where id = ?1 and user_id = ?2')
       .bind(id, userId)
       .run()
-    return
+  }
+  else {
+    await getPool(env).query('update push_subscriptions set enabled = false, disabled_at = now(), updated_at = now() where id = $1 and user_id = $2', [id, userId])
   }
 
-  await getPool(env).query('update push_subscriptions set enabled = false, disabled_at = now(), updated_at = now() where id = $1 and user_id = $2', [id, userId])
+  if (await countPushSubscriptions(env, userId) === 0)
+    await setBrowserPushEnabled(env, userId, false)
+}
+
+async function deletePushSubscriptionByEndpoint(env: WorkerEnv, userId: string, rawEndpoint?: string) {
+  await ensureNotificationSchema(env)
+  const endpoint = rawEndpoint?.trim() ? normalizePushEndpoint(rawEndpoint) : ''
+  if (endpoint) {
+    if (shouldUseD1(env)) {
+      await env.LOCAL_DB!
+        .prepare('update push_subscriptions set enabled = 0, disabled_at = current_timestamp, updated_at = current_timestamp where user_id = ?1 and endpoint = ?2')
+        .bind(userId, endpoint)
+        .run()
+    }
+    else {
+      await getPool(env).query('update push_subscriptions set enabled = false, disabled_at = now(), updated_at = now() where user_id = $1 and endpoint = $2', [userId, endpoint])
+    }
+  }
+
+  if (!endpoint || await countPushSubscriptions(env, userId) === 0)
+    await setBrowserPushEnabled(env, userId, false)
 }
 
 async function hasEnoughPoints(env: WorkerEnv, userId: string, points: number) {
@@ -2855,6 +2877,12 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
     if (path === '/push-subscriptions' && request.method === 'POST') {
       const payload = await readJson<PushSubscriptionPayload>(request)
       await savePushSubscription(env, user.id, payload, request.headers.get('user-agent') ?? '')
+      return json(await toSettingsView(env, user, await getSettingsRow(env, user.id)))
+    }
+
+    if (path === '/push-subscriptions' && request.method === 'DELETE') {
+      const payload: { endpoint?: string } = await readJson<{ endpoint?: string }>(request).catch(() => ({}))
+      await deletePushSubscriptionByEndpoint(env, user.id, payload.endpoint)
       return json(await toSettingsView(env, user, await getSettingsRow(env, user.id)))
     }
 
