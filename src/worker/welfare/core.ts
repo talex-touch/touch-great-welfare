@@ -183,11 +183,6 @@ function logWelfarePerf(label: string, startedAt: number, details = '') {
     // 超过 500ms：警告级别
     console.warn(`[welfare:perf:WARN] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
   }
-  else if (duration >= 100) {
-    // 超过 100ms：信息级别（Phase 0 期间开启）
-    console.log(`[welfare:perf] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
-  }
-
   return duration
 }
 

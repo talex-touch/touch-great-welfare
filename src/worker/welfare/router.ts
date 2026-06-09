@@ -110,11 +110,7 @@ async function legacyFullStateSave(request: Request, env: WorkerEnv) {
   const userId = await requestUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
-  // ✅ Phase 0 优化：只同步当前用户积分，避免全量同步导致超时
-  const previousRecord = await readWelfareStateRecord(env, {
-    syncPointBalances: 'current-user',
-    currentUserId: userId,
-  })
+  const previousRecord = await readWelfareStateRecord(env, { syncPointBalances: 'all' })
   const previousState = previousRecord.state as Partial<WelfareState>
   const currentVersion = previousRecord.version
   if (!isAdminUser(previousState, userId))

@@ -266,6 +266,10 @@ export async function submitStudentVerificationAction(payload: SubmitStudentPayl
   return postDomainAction<{ ok: true, verificationId?: string }>('/api/verifications/student', payload)
 }
 
+export async function submitAdminStudentVerificationAction(payload: SubmitStudentPayload & { userId: string }) {
+  return postDomainAction<{ ok: true, verificationId?: string }>('/api/admin/verifications/student', payload)
+}
+
 export async function supplementStudentVerificationAction(payload: SubmitStudentPayload) {
   return postDomainAction<{ ok: true, verificationId?: string }>('/api/verifications/student/supplement', payload)
 }

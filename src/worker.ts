@@ -13,12 +13,14 @@ import { handleTurnstileRequest } from './worker/turnstile'
 import { handleUploadRequest } from './worker/uploads'
 import { handleWebhookRequest } from './worker/webhook'
 import { handleApplicationSubmitRequest, handleWelfareStateRequest } from './worker/welfare-state'
+import { handleMigrateNow } from './worker/migrate-helper'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /** Paths that receive external callbacks (signed or server-to-server) and are exempt from same-origin checks. */
 function isExternalCallbackPath(pathname: string) {
   return pathname === '/api/recharge/notify'
+    || pathname === '/admin/migrate-now'
     || pathname.startsWith('/api/webhooks/')
 }
 
@@ -54,6 +56,14 @@ export default {
     const blocked = rejectCrossOriginWrite(request, url)
     if (blocked)
       return blocked
+
+    // 临时迁移端点
+    if (url.pathname === '/admin/migrate-now' && request.method === 'POST')
+      return handleMigrateNow(env)
+
+    // 临时迁移端点
+    if (url.pathname === '/admin/migrate-now' && request.method === 'POST')
+      return handleMigrateNow(env)
 
     if (url.pathname === '/api/applications/submit')
       return handleApplicationSubmitRequest(request, env)

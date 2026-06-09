@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
-import { TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
+import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { buildResourceGovernanceSnapshot, formatDate, formatPoints, isGptProModel, normalizeVerificationType, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { buildResourceGovernanceSnapshot, formatBytes, formatDate, formatPoints, isGptProModel, MAX_ATTACHMENT_BYTES, normalizeVerificationType, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from '../RichTextEditor.vue'
@@ -21,12 +21,17 @@ const {
   setUserSuspended,
   setUserStudentVerified,
   revokeUserStudentVerification,
+  submitAdminStudentVerificationFromForm,
+  resetAdminStudentVerificationForm,
   unbindUserGitHub,
   rechargeConfigForm,
   githubAppConfigForm,
   oauthConfigForm,
   oauthProviderConfigs,
   applicationPolicyConfigForm,
+  adminStudentVerificationForm,
+  adminStudentVerificationFiles,
+  totalAdminStudentVerificationBytes,
   aiConfigForm,
   sub2ApiConfigForm,
   databaseProvisionConfigForm,
@@ -1691,6 +1696,12 @@ function onAdjustPoints(userId: string) {
     await reloadWelfareState()
     await refreshPointTransactions({ limit: 200, scope: 'admin' })
   }, '积分已调整')
+}
+
+function onSubmitAdminStudentVerification() {
+  runSafely(async () => {
+    await submitAdminStudentVerificationFromForm()
+  }, '已代用户提交认证材料')
 }
 
 function onToggleReviewer(userId: string, enabled: boolean) {
@@ -4381,6 +4392,101 @@ onMounted(() => {
                 <span class="text-xs fw-800 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
                   {{ studentPagination.total }} / {{ state.studentVerifications.length }} 条
                 </span>
+              </div>
+
+              <div class="mt-5 p-4 border border-blue-500/15 rounded-3xl bg-blue-50/60 dark:border-blue-300/15 dark:bg-blue-950/20">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-base fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-user-follow" />
+                      管理员代提交认证
+                    </div>
+                    <p class="text-xs text-slate-500 leading-5 mt-1 dark:text-slate-400">
+                      选择用户并上传材料后，会生成一条待审核认证记录；该入口不扣除用户审核费。
+                    </p>
+                  </div>
+                  <TxButton size="sm" variant="ghost" :disabled="adminStudentVerificationForm.submitting" @click="resetAdminStudentVerificationForm">
+                    清空
+                  </TxButton>
+                </div>
+
+                <div class="admin-filter-bar mt-4">
+                  <label class="admin-filter-field admin-filter-field--wide">
+                    <span class="field-label">用户</span>
+                    <select v-model="adminStudentVerificationForm.userId" class="form-select">
+                      <option value="">
+                        请选择用户
+                      </option>
+                      <option v-for="user in state.users" :key="user.id" :value="user.id">
+                        {{ user.profile.displayName || user.profile.email || user.id }} · {{ user.id }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">认证类型</span>
+                    <select v-model="adminStudentVerificationForm.verificationType" class="form-select">
+                      <option value="student">
+                        学生认证
+                      </option>
+                      <option value="frontline">
+                        一线认证
+                      </option>
+                    </select>
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">真实姓名</span>
+                    <TxInput v-model="adminStudentVerificationForm.realName" placeholder="用于人工复核" />
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">认证类目</span>
+                    <TxInput v-model="adminStudentVerificationForm.category" placeholder="大学生 / 公益一线等" />
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">学校/组织</span>
+                    <TxInput v-model="adminStudentVerificationForm.school" placeholder="学校、单位或项目名称" />
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">年级/周期</span>
+                    <TxInput v-model="adminStudentVerificationForm.grade" placeholder="2026 级 / 服务周期" />
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">学历/身份</span>
+                    <TxInput v-model="adminStudentVerificationForm.educationLevel" placeholder="本科 / 志愿者等" />
+                  </label>
+                  <label class="admin-filter-field admin-filter-field--wide">
+                    <span class="field-label">教育邮箱</span>
+                    <TxInput v-model="adminStudentVerificationForm.educationEmail" type="email" placeholder="可选；填写后可标记管理员已核验" />
+                  </label>
+                  <label class="admin-filter-field">
+                    <span class="field-label">邮箱核验</span>
+                    <span class="text-sm flex gap-2 min-h-11 items-center">
+                      <TxCheckbox v-model="adminStudentVerificationForm.educationEmailVerified" variant="checkmark" aria-label="管理员已核验教育邮箱" />
+                      管理员已核验
+                    </span>
+                  </label>
+                </div>
+
+                <div class="mt-4 gap-3 grid">
+                  <label class="gap-2 grid">
+                    <span class="field-label">材料说明</span>
+                    <RichTextEditor v-model="adminStudentVerificationForm.notes" :min-height="180" placeholder="说明身份背景、材料清单和管理员代提交原因" />
+                  </label>
+                  <div class="gap-2 grid">
+                    <div class="flex flex-wrap gap-2 items-center justify-between">
+                      <span class="field-label">证明材料</span>
+                      <span class="field-hint">{{ formatBytes(totalAdminStudentVerificationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
+                    </div>
+                    <FileUploader v-model="adminStudentVerificationFiles" :max="12" button-text="上传材料" drop-text="拖拽证明材料" hint-text="支持任意材料，总大小 200MB 内" />
+                  </div>
+                  <div class="flex flex-wrap gap-3 items-center justify-between">
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                      {{ adminStudentVerificationForm.message || '提交后记录会进入下方认证申请列表，等待管理员审核。' }}
+                    </p>
+                    <TxButton variant="primary" :disabled="adminStudentVerificationForm.submitting" @click="onSubmitAdminStudentVerification">
+                      {{ adminStudentVerificationForm.submitting ? '提交中...' : '代用户提交认证' }}
+                    </TxButton>
+                  </div>
+                </div>
               </div>
 
               <div class="admin-filter-bar mt-5">

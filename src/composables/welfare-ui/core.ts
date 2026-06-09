@@ -106,6 +106,7 @@ import {
   setUserCrowdReviewerAction,
   setUserStudentVerifiedAction,
   setUserSuspendedAction,
+  submitAdminStudentVerificationAction,
   submitApplicationCommand,
   submitApplicationSupplementAction,
   submitCollaborationApplicationAction,
@@ -647,6 +648,22 @@ export const studentForm = reactive({
   notes: defaultStudentNotes,
 })
 
+export const adminStudentVerificationForm = reactive({
+  userId: '',
+  verificationType: 'student' as VerificationType,
+  realName: '',
+  category: '大学生',
+  school: '',
+  grade: '',
+  educationLevel: '',
+  identity: '',
+  educationEmail: '',
+  educationEmailVerified: false,
+  notes: defaultStudentNotes,
+  submitting: false,
+  message: '',
+})
+
 export const educationEmailVerificationForm = reactive({
   code: '',
   challengeId: '',
@@ -716,6 +733,7 @@ export const studentEducationLevelOptions = [
 ] as const
 
 export const studentFiles = ref<UploadLikeFile[]>([])
+export const adminStudentVerificationFiles = ref<UploadLikeFile[]>([])
 
 export const reviewDrafts = reactive<Record<string, string>>({})
 export const supplementDrafts = reactive<Record<string, string>>({})
@@ -862,6 +880,7 @@ export function useWelfareUiState() {
   const totalApplicationBytes = computed(() => applicationFiles.value.reduce((sum, file) => sum + file.size, 0)
     + resourceApplicationItems.value.reduce((sum, item) => sum + attachmentBytes(item.payload.attachments), 0))
   const totalStudentBytes = computed(() => studentFiles.value.reduce((sum, file) => sum + file.size, 0))
+  const totalAdminStudentVerificationBytes = computed(() => adminStudentVerificationFiles.value.reduce((sum, file) => sum + file.size, 0))
   const activeRequestCount = computed(() => welfare.currentUser.value ? welfare.activeRequestCount(welfare.currentUser.value.id) : 0)
   const canCreateRequest = computed(() => activeRequestCount.value < MAX_ACTIVE_USER_REQUESTS)
   const enabledLlmApiModels = computed(() => aiConfigForm.llmApiModels.filter(item => item.enabled))
@@ -1588,6 +1607,22 @@ export function useWelfareUiState() {
 
   function resetStudentFiles() {
     studentFiles.value = []
+  }
+
+  function resetAdminStudentVerificationForm() {
+    adminStudentVerificationForm.userId = ''
+    adminStudentVerificationForm.verificationType = 'student'
+    adminStudentVerificationForm.realName = ''
+    adminStudentVerificationForm.category = '大学生'
+    adminStudentVerificationForm.school = ''
+    adminStudentVerificationForm.grade = ''
+    adminStudentVerificationForm.educationLevel = ''
+    adminStudentVerificationForm.identity = ''
+    adminStudentVerificationForm.educationEmail = ''
+    adminStudentVerificationForm.educationEmailVerified = false
+    adminStudentVerificationForm.notes = defaultStudentNotes
+    adminStudentVerificationForm.message = ''
+    adminStudentVerificationFiles.value = []
   }
 
   function applyEducationEmailChallenge(challenge: ReturnType<typeof welfare.createEducationEmailChallenge>) {
@@ -3245,6 +3280,36 @@ export function useWelfareUiState() {
     refreshStateInBackground()
   }
 
+  async function submitAdminStudentVerificationFromForm() {
+    if (!adminStudentVerificationForm.userId)
+      throw new Error('请选择用户')
+
+    adminStudentVerificationForm.submitting = true
+    adminStudentVerificationForm.message = ''
+    try {
+      await submitAdminStudentVerificationAction(await withUploadedImages({
+        userId: adminStudentVerificationForm.userId,
+        verificationType: adminStudentVerificationForm.verificationType,
+        realName: adminStudentVerificationForm.realName,
+        category: adminStudentVerificationForm.category,
+        school: adminStudentVerificationForm.school,
+        identity: adminStudentVerificationForm.identity,
+        grade: adminStudentVerificationForm.grade,
+        educationLevel: adminStudentVerificationForm.educationLevel,
+        educationEmail: adminStudentVerificationForm.educationEmail,
+        educationEmailVerified: adminStudentVerificationForm.educationEmailVerified,
+        notes: adminStudentVerificationForm.notes,
+        attachments: adminStudentVerificationFiles.value,
+      }))
+      adminStudentVerificationForm.message = '已代用户提交认证，等待审核处理'
+      resetAdminStudentVerificationForm()
+      await welfare.reloadWelfareState()
+    }
+    finally {
+      adminStudentVerificationForm.submitting = false
+    }
+  }
+
   async function approveStudentVerification(id: string, reply: string) {
     await reviewStudentVerificationAction(id, 'approved', reply)
     refreshStateAndPointsInBackground()
@@ -3366,8 +3431,10 @@ export function useWelfareUiState() {
     resourceAutoProvisionMessage,
     applicationFiles,
     studentForm,
+    adminStudentVerificationForm,
     educationEmailVerificationForm,
     studentFiles,
+    adminStudentVerificationFiles,
     verificationTypeOptions,
     frontlineCategoryOptions,
     studentCategoryOptions,
@@ -3402,6 +3469,7 @@ export function useWelfareUiState() {
     repoOptions,
     totalApplicationBytes,
     totalStudentBytes,
+    totalAdminStudentVerificationBytes,
     activeRequestCount,
     canCreateRequest,
     selectedCost,
@@ -3456,8 +3524,10 @@ export function useWelfareUiState() {
     requestResourceLifecycle,
     updateResourceLifecycle,
     resetStudentFiles,
+    resetAdminStudentVerificationForm,
     submitStudentVerification,
     supplementStudentVerification,
+    submitAdminStudentVerificationFromForm,
     approveStudentVerification,
     requestStudentSupplement,
     rejectStudentVerification,
