@@ -14,6 +14,9 @@ import { handleUploadRequest } from './worker/uploads'
 import { handleWebhookRequest } from './worker/webhook'
 import { handleApplicationSubmitRequest, handleWelfareStateRequest } from './worker/welfare-state'
 import { handleMigrateNow } from './worker/migrate-helper'
+import { handleExportState } from './worker/export-state'
+import { handleFullMigration } from './worker/full-migration'
+import { handleBatchMigration } from './worker/batch-migration'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -21,6 +24,9 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 function isExternalCallbackPath(pathname: string) {
   return pathname === '/api/recharge/notify'
     || pathname === '/admin/migrate-now'
+    || pathname === '/admin/full-migration'
+    || pathname === '/admin/batch-migration'
+    || pathname === '/admin/export-state'
     || pathname.startsWith('/api/webhooks/')
 }
 
@@ -61,9 +67,17 @@ export default {
     if (url.pathname === '/admin/migrate-now' && request.method === 'POST')
       return handleMigrateNow(env)
 
-    // 临时迁移端点
-    if (url.pathname === '/admin/migrate-now' && request.method === 'POST')
-      return handleMigrateNow(env)
+    // 完整数据迁移（推荐）
+    if (url.pathname === '/admin/full-migration' && request.method === 'POST')
+      return handleFullMigration(env)
+
+    // 批量数据迁移（推荐用这个）
+    if (url.pathname === '/admin/batch-migration' && request.method === 'POST')
+      return handleBatchMigration(env, request)
+
+    // 临时导出端点
+    if (url.pathname === '/admin/export-state' && request.method === 'GET')
+      return handleExportState(env)
 
     if (url.pathname === '/api/applications/submit')
       return handleApplicationSubmitRequest(request, env)
