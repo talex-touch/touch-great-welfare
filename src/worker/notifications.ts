@@ -5,6 +5,7 @@ import type {
   AdminAnnouncementSummary,
   CreateAdminAnnouncementPayload,
   DeliveryStatus,
+  EmailDeliveryAttempt,
   NotificationChannel,
   NotificationEvent,
   NotificationItem,
@@ -130,7 +131,18 @@ const MAX_FEISHU_DAILY_LIMIT = 400
 const FEISHU_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000
 const EMAIL_BODY_TEXT_LIMIT = 1800
 const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
-type NotificationDeliveryProvider = '' | 'resend' | 'feishu_mail' | 'feishu_webhook' | 'web_push'
+type EmailDeliveryProvider = EmailDeliveryAttempt['provider']
+type EmailDeliveryStatus = EmailDeliveryAttempt['status']
+type NotificationDeliveryProvider = '' | EmailDeliveryProvider | 'feishu_webhook' | 'web_push'
+const EMAIL_DELIVERY_PROVIDER_LABELS: Record<EmailDeliveryProvider, string> = {
+  feishu_mail: '飞书邮件',
+  resend: 'Resend 邮件',
+}
+const EMAIL_DELIVERY_STATUS_LABELS: Record<EmailDeliveryStatus, string> = {
+  sent: '已发送',
+  failed: '失败',
+  skipped: '跳过',
+}
 
 function encryptionSecret(env: WorkerEnv) {
   return env.NOTIFY_SECRET_KEY ?? ''
@@ -907,6 +919,34 @@ async function recordDelivery(
   `, [id, notificationId, channel, status, error || null, chargedPoints, providerMessageId || null, provider])
 }
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+function emailDeliveryAttempt(provider: EmailDeliveryProvider, status: EmailDeliveryStatus, message: string): EmailDeliveryAttempt {
+  return {
+    provider,
+    providerLabel: EMAIL_DELIVERY_PROVIDER_LABELS[provider],
+    status,
+    message,
+  }
+}
+
+function formatEmailDeliveryAttempt(attempt: EmailDeliveryAttempt) {
+  return `${attempt.providerLabel}：${EMAIL_DELIVERY_STATUS_LABELS[attempt.status]}（${attempt.message || '未返回详情'}）`
+}
+
+function emailTestFailureMessage(attempts: EmailDeliveryAttempt[]) {
+  if (!attempts.length)
+    return '测试邮件发送失败，请检查邮箱通知服务配置'
+
+  return [
+    '测试邮件发送失败，已尝试以下通道：',
+    ...attempts.map(formatEmailDeliveryAttempt),
+    '请根据以上信息检查邮箱通知服务配置。',
+  ].join('\n')
+}
+
 async function getSettingsRow(env: WorkerEnv, userId: string) {
   await ensureNotificationSchema(env)
   if (shouldUseD1(env)) {
@@ -1639,13 +1679,18 @@ async function dispatchEmailChannel(
   chargedPoints = 0,
 ) {
   const config = await getEffectiveNotificationProviderConfig(env)
+  const attempts: EmailDeliveryAttempt[] = []
 
   if (config.feishuMailEnabled) {
     if (!isFeishuMailConfigured(config)) {
-      await recordDelivery(env, notificationId, 'email', 'skipped', '飞书邮件通知未配置完整', 0, '', 'feishu_mail')
+      const message = '飞书邮件通知未配置完整'
+      await recordDelivery(env, notificationId, 'email', 'skipped', message, 0, '', 'feishu_mail')
+      attempts.push(emailDeliveryAttempt('feishu_mail', 'skipped', message))
     }
     else if (await countSentFeishuMailToday(env) >= config.feishuDailyLimit) {
-      await recordDelivery(env, notificationId, 'email', 'skipped', `飞书邮件已达到每日 ${config.feishuDailyLimit} 封限额`, 0, '', 'feishu_mail')
+      const message = `飞书邮件已达到每日 ${config.feishuDailyLimit} 封限额`
+      await recordDelivery(env, notificationId, 'email', 'skipped', message, 0, '', 'feishu_mail')
+      attempts.push(emailDeliveryAttempt('feishu_mail', 'skipped', message))
     }
     else {
       try {
@@ -1653,10 +1698,13 @@ async function dispatchEmailChannel(
         if (chargedPoints)
           await chargeEmailNotification(env, userId, notificationId)
         await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'feishu_mail')
-        return true
+        attempts.push(emailDeliveryAttempt('feishu_mail', 'sent', providerId ? `服务商消息 ID：${providerId}` : '服务商已受理'))
+        return { sent: true, provider: 'feishu_mail' as const, attempts }
       }
       catch (error) {
-        await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '飞书邮件发送失败', 0, '', 'feishu_mail')
+        const message = errorMessage(error, '飞书邮件发送失败')
+        await recordDelivery(env, notificationId, 'email', 'failed', message, 0, '', 'feishu_mail')
+        attempts.push(emailDeliveryAttempt('feishu_mail', 'failed', message))
       }
     }
   }
@@ -1666,11 +1714,14 @@ async function dispatchEmailChannel(
     if (chargedPoints)
       await chargeEmailNotification(env, userId, notificationId)
     await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'resend')
-    return true
+    attempts.push(emailDeliveryAttempt('resend', 'sent', providerId ? `服务商消息 ID：${providerId}` : '服务商已受理'))
+    return { sent: true, provider: 'resend' as const, attempts }
   }
   catch (error) {
-    await recordDelivery(env, notificationId, 'email', 'failed', error instanceof Error ? error.message : '邮箱发送失败', 0, '', 'resend')
-    return false
+    const message = errorMessage(error, '邮箱发送失败')
+    await recordDelivery(env, notificationId, 'email', 'failed', message, 0, '', 'resend')
+    attempts.push(emailDeliveryAttempt('resend', 'failed', message))
+    return { sent: false, provider: undefined, attempts }
   }
 }
 
@@ -1768,7 +1819,7 @@ async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestP
   })
   await recordDelivery(env, notificationId, 'in_app', 'sent')
 
-  const sent = await dispatchEmailChannel(env, user.id, emailAddress, notificationId, {
+  const delivery = await dispatchEmailChannel(env, user.id, emailAddress, notificationId, {
     userId: user.id,
     event: 'email_test',
     title: 'Touch Great Welfare 邮箱测试',
@@ -1780,14 +1831,17 @@ async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestP
     },
   }, EMAIL_NOTIFICATION_COST)
 
-  if (!sent)
-    throw new Error('测试邮件发送失败，请检查邮箱通知服务配置')
+  if (!delivery.sent || !delivery.provider)
+    throw new Error(emailTestFailureMessage(delivery.attempts))
 
   return {
     ok: true,
     notificationId,
     emailAddress,
     chargedPoints: EMAIL_NOTIFICATION_COST,
+    deliveryProvider: delivery.provider,
+    deliveryProviderLabel: EMAIL_DELIVERY_PROVIDER_LABELS[delivery.provider],
+    deliveryAttempts: delivery.attempts,
   }
 }
 

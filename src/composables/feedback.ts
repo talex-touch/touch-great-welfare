@@ -10,10 +10,11 @@ export function useWelfareFeedback() {
     if (toastTimer)
       clearTimeout(toastTimer)
 
+    const duration = Math.min(Math.max(message.length * 80, 2800), 9000)
     toastTimer = setTimeout(() => {
       if (toastMessage.value === message)
         toastMessage.value = ''
-    }, 2800)
+    }, duration)
   }
 
   async function runSafely(action: () => void | Promise<void>, success: string) {

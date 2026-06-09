@@ -35,11 +35,21 @@ export interface SendEmailTestPayload {
   emailAddress?: string
 }
 
+export interface EmailDeliveryAttempt {
+  provider: 'feishu_mail' | 'resend'
+  providerLabel: string
+  status: Extract<DeliveryStatus, 'sent' | 'failed' | 'skipped'>
+  message: string
+}
+
 export interface SendEmailTestResult {
   ok: true
   notificationId: string
   emailAddress: string
   chargedPoints: number
+  deliveryProvider: EmailDeliveryAttempt['provider']
+  deliveryProviderLabel: string
+  deliveryAttempts: EmailDeliveryAttempt[]
 }
 
 export interface PushSubscriptionPayload {

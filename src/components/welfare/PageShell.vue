@@ -37,7 +37,7 @@ const showFooter = computed(() => !isDashboardShell.value && !route.path.startsW
     </div>
 
     <Transition name="fade">
-      <div v-if="toastMessage" class="text-sm text-white px-3 py-2 rounded-full bg-slate-950 max-w-[calc(100vw-2rem)] shadow-2xl bottom-3 left-1/2 fixed z-50 dark:text-slate-950 dark:bg-white -translate-x-1/2">
+      <div v-if="toastMessage" class="text-sm text-white leading-5 px-4 py-3 text-left rounded-3xl bg-slate-950 max-w-[calc(100vw-2rem)] whitespace-pre-line shadow-2xl bottom-3 left-1/2 fixed z-50 dark:text-slate-950 dark:bg-white sm:max-w-[38rem] -translate-x-1/2">
         {{ toastMessage }}
       </div>
     </Transition>
