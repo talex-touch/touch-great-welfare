@@ -106,12 +106,12 @@ function preserveServerPointState(previousState: Partial<WelfareState>, nextStat
 }
 
 async function legacyFullStateSave(request: Request, env: WorkerEnv) {
-  const previousRecord = await readWelfareStateRecord(env, { syncPointBalances: 'all' })
-  const previousState = previousRecord.state as Partial<WelfareState>
-  const currentVersion = previousRecord.version
   const userId = await requestUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
+  const previousRecord = await readWelfareStateRecord(env, { syncPointBalances: 'all' })
+  const previousState = previousRecord.state as Partial<WelfareState>
+  const currentVersion = previousRecord.version
   if (!isAdminUser(previousState, userId))
     return forbidden('全量状态保存仅允许管理员使用')
 

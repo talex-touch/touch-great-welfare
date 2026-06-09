@@ -116,7 +116,12 @@ const ADMIN_LOGIN_MAX_FAILURES = 8
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000
 const PASSWORD_PBKDF2_ITERATIONS = 210000
-const POSTGRES_TIMEOUT_MS = 10000
+const POSTGRES_CONNECTION_TIMEOUT_MS = 15000
+const POSTGRES_QUERY_TIMEOUT_MS = 20000
+const POSTGRES_POOL_MAX = 20
+const POSTGRES_POOL_MIN = 2
+const POSTGRES_IDLE_TIMEOUT_MS = 30000
+const POSTGRES_PERF_LOG_THRESHOLD_MS = 500
 const POSTGRES_SNAPSHOT_BATCH_SIZE = 200
 
 type PointBalanceSyncMode = false | 'current-user' | 'all'
@@ -164,6 +169,13 @@ function getConnectionString(env: WorkerEnv) {
 
 function stateEncryptionSecret(env: WorkerEnv) {
   return env.WELFARE_STATE_SECRET_KEY?.trim() || env.NOTIFY_SECRET_KEY?.trim() || ''
+}
+
+function logWelfarePerf(label: string, startedAt: number, details = '') {
+  const duration = Date.now() - startedAt
+  if (duration >= POSTGRES_PERF_LOG_THRESHOLD_MS)
+    console.warn(`[welfare:perf] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
+  return duration
 }
 
 function isEncryptedWelfareStateEnvelope(value: unknown): value is EncryptedWelfareStateEnvelope {
@@ -1091,9 +1103,12 @@ export function getPool(env: WorkerEnv) {
     poolKey = connectionString
     pool = new Pool({
       connectionString,
-      connectionTimeoutMillis: POSTGRES_TIMEOUT_MS,
-      query_timeout: POSTGRES_TIMEOUT_MS,
-      statement_timeout: POSTGRES_TIMEOUT_MS,
+      max: POSTGRES_POOL_MAX,
+      min: POSTGRES_POOL_MIN,
+      idleTimeoutMillis: POSTGRES_IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: POSTGRES_CONNECTION_TIMEOUT_MS,
+      query_timeout: POSTGRES_QUERY_TIMEOUT_MS,
+      statement_timeout: POSTGRES_QUERY_TIMEOUT_MS,
     })
   }
 
@@ -1199,6 +1214,12 @@ async function ensureSnapshotSchema(env: WorkerEnv) {
       .prepare('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
       .run()
     await env.LOCAL_DB!
+      .prepare('create index if not exists idx_welfare_applications_status_created on welfare_applications (status, created_at asc, id asc)')
+      .run()
+    await env.LOCAL_DB!
+      .prepare('create index if not exists idx_welfare_applications_user_status_created on welfare_applications (user_id, status, created_at desc, id desc)')
+      .run()
+    await env.LOCAL_DB!
       .prepare(`
         create table if not exists user_coupons (
           id text primary key,
@@ -1238,6 +1259,8 @@ async function ensureSnapshotSchema(env: WorkerEnv) {
   `)
   await getPool(env).query('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
   await getPool(env).query('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
+  await getPool(env).query('create index if not exists idx_welfare_applications_status_created on welfare_applications (status, created_at asc, id asc)')
+  await getPool(env).query('create index if not exists idx_welfare_applications_user_status_created on welfare_applications (user_id, status, created_at desc, id desc)')
   await getPool(env).query(`
     create table if not exists user_coupons (
       id text primary key,
@@ -1263,8 +1286,12 @@ function normalizeStateVersion(value: unknown) {
 }
 
 export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfareStateOptions = {}): Promise<WelfareStateRecord> {
+  const totalStartedAt = Date.now()
+  const schemaStartedAt = Date.now()
   await ensureSchema(env)
+  logWelfarePerf('ensureSchema', schemaStartedAt)
 
+  const readStartedAt = Date.now()
   const record = shouldUseD1(env)
     ? await (async () => {
         const row = await env.LOCAL_DB!
@@ -1286,16 +1313,29 @@ export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfar
           version: normalizeStateVersion(row?.version),
         }
       })()
+  logWelfarePerf('read state record', readStartedAt, shouldUseD1(env) ? 'store=d1' : 'store=postgres')
 
+  const decodeStartedAt = Date.now()
   const state = await decodeStoredState(env, record.state)
+  logWelfarePerf('decode state', decodeStartedAt)
+
   if (options.syncPointBalances === 'all') {
+    const syncStartedAt = Date.now()
     await syncUserPointBalancesFromLedger(env, state)
+    logWelfarePerf('sync point balances', syncStartedAt, 'scope=all')
   }
   else if (options.syncPointBalances === 'current-user' && options.currentUserId) {
+    const syncStartedAt = Date.now()
     await syncUserPointBalancesFromLedger(env, state, [options.currentUserId])
+    logWelfarePerf('sync point balances', syncStartedAt, 'scope=current-user')
   }
+
+  const retentionStartedAt = Date.now()
+  const retainedState = applyWelfareRetentionPolicy(state).state
+  logWelfarePerf('apply retention policy', retentionStartedAt)
+  logWelfarePerf('readWelfareStateRecord total', totalStartedAt, `sync=${options.syncPointBalances || false}`)
   return {
-    state: applyWelfareRetentionPolicy(state).state,
+    state: retainedState,
     version: record.version,
   }
 }
@@ -3648,20 +3688,78 @@ export async function currentUserProfileResponse(request: Request, env: WorkerEn
   return json({ currentUser, currentUserId: current.userId, version: current.version })
 }
 
-async function readCurrentUserApplicationSnapshots(env: WorkerEnv, userId: string) {
+function parsePositiveIntegerParam(value: string | null, fallback: number, max: number) {
+  const parsed = Math.trunc(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0)
+    return fallback
+  return Math.min(parsed, max)
+}
+
+function parseOffsetParam(value: string | null) {
+  const parsed = Math.trunc(Number(value))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+function parseStatusParam(value: string | null) {
+  if (!value)
+    return []
+  return value
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+async function readCurrentUserApplicationSnapshots(env: WorkerEnv, userId: string, options: { status?: string[], limit?: number, offset?: number } = {}) {
   await ensureSchema(env)
+  const status = options.status?.filter(Boolean) ?? []
+  const limit = options.limit ?? 50
+  const offset = options.offset ?? 0
+
   if (shouldUseD1(env)) {
+    const statusClause = status.length ? ` and status in (${status.map(() => '?').join(', ')})` : ''
     const result = await env.LOCAL_DB!
-      .prepare('select payload from welfare_applications where user_id = ?1 order by created_at desc, id desc')
-      .bind(userId)
+      .prepare(`select payload from welfare_applications where user_id = ?${statusClause} order by created_at desc, id desc limit ? offset ?`)
+      .bind(userId, ...status, limit, offset)
       .all<{ payload: string }>()
     return (result.results ?? []).map(row => JSON.parse(row.payload) as WelfareApplication)
   }
 
-  const result = await getPool(env).query<{ payload: string }>(
-    'select payload from welfare_applications where user_id = $1 order by created_at desc, id desc',
-    [userId],
-  )
+  const result = status.length
+    ? await getPool(env).query<{ payload: string }>(
+        'select payload from welfare_applications where user_id = $1 and status = any($2) order by created_at desc, id desc limit $3 offset $4',
+        [userId, status, limit, offset],
+      )
+    : await getPool(env).query<{ payload: string }>(
+        'select payload from welfare_applications where user_id = $1 order by created_at desc, id desc limit $2 offset $3',
+        [userId, limit, offset],
+      )
+  return result.rows.map(row => JSON.parse(row.payload) as WelfareApplication)
+}
+
+async function readAdminApplicationSnapshots(env: WorkerEnv, options: { status?: string[], limit?: number, offset?: number } = {}) {
+  await ensureSchema(env)
+  const status = options.status?.filter(Boolean) ?? []
+  const limit = options.limit ?? 100
+  const offset = options.offset ?? 0
+
+  if (shouldUseD1(env)) {
+    const statusClause = status.length ? ` where status in (${status.map(() => '?').join(', ')})` : ''
+    const result = await env.LOCAL_DB!
+      .prepare(`select payload from welfare_applications${statusClause} order by created_at desc, id desc limit ? offset ?`)
+      .bind(...status, limit, offset)
+      .all<{ payload: string }>()
+    return (result.results ?? []).map(row => JSON.parse(row.payload) as WelfareApplication)
+  }
+
+  const result = status.length
+    ? await getPool(env).query<{ payload: string }>(
+        'select payload from welfare_applications where status = any($1) order by created_at desc, id desc limit $2 offset $3',
+        [status, limit, offset],
+      )
+    : await getPool(env).query<{ payload: string }>(
+        'select payload from welfare_applications order by created_at desc, id desc limit $1 offset $2',
+        [limit, offset],
+      )
   return result.rows.map(row => JSON.parse(row.payload) as WelfareApplication)
 }
 
@@ -3693,10 +3791,18 @@ export async function currentUserApplicationsResponse(request: Request, env: Wor
   if (!user)
     throw new Error('请先登录')
 
-  const snapshotApplications = await readCurrentUserApplicationSnapshots(env, userId)
-  const applications = snapshotApplications.length
+  const url = new URL(request.url)
+  const status = parseStatusParam(url.searchParams.get('status'))
+  const limit = parsePositiveIntegerParam(url.searchParams.get('limit'), 50, 100)
+  const offset = parseOffsetParam(url.searchParams.get('offset'))
+  const hasExplicitSnapshotQuery = status.length > 0 || offset > 0 || url.searchParams.has('limit')
+  const snapshotApplications = await readCurrentUserApplicationSnapshots(env, userId, { status, limit, offset })
+  const fallbackApplications = sanitizeOwnedApplications(stateApplications(sourceState), userId)
+    .filter(item => !status.length || status.includes(item.status))
+    .slice(offset, offset + limit)
+  const applications = snapshotApplications.length || hasExplicitSnapshotQuery
     ? snapshotApplications
-    : sanitizeOwnedApplications(stateApplications(sourceState), userId)
+    : fallbackApplications
   const visibleUserIds = new Set(applications.map(item => item.userId))
   visibleUserIds.add(userId)
 
@@ -3774,11 +3880,11 @@ export async function collaborationStateResponse(request: Request, env: WorkerEn
 }
 
 async function adminVisibleState(request: Request, env: WorkerEnv) {
-  const { state, version } = await readWelfareStateRecord(env)
+  const userId = await requestUserId(request, env)
+  const { state, version } = await readWelfareStateRecord(env, userId ? { syncPointBalances: 'current-user', currentUserId: userId } : undefined)
   const sourceState = state as Partial<WelfareState>
   const user = await authenticatedUser(request, env, sourceState)
   assertAdminUser(user)
-  await syncUserPointBalancesFromLedger(env, sourceState)
   return {
     user,
     version,
@@ -3800,10 +3906,25 @@ export async function adminConfigResponse(request: Request, env: WorkerEnv) {
 
 export async function adminApplicationsResponse(request: Request, env: WorkerEnv) {
   const current = await adminVisibleState(request, env)
+  const url = new URL(request.url)
+  const status = parseStatusParam(url.searchParams.get('status'))
+  const limit = parsePositiveIntegerParam(url.searchParams.get('limit'), 100, 200)
+  const offset = parseOffsetParam(url.searchParams.get('offset'))
+  const hasExplicitSnapshotQuery = status.length > 0 || offset > 0 || url.searchParams.has('limit')
+  const snapshotApplications = await readAdminApplicationSnapshots(env, { status, limit, offset })
+  const fallbackApplications = stateApplications(current.state)
+    .filter(item => !status.length || status.includes(item.status))
+    .slice(offset, offset + limit)
+  const applications = snapshotApplications.length || hasExplicitSnapshotQuery
+    ? snapshotApplications
+    : fallbackApplications
+  const visibleUserIds = new Set(applications.map(item => item.userId))
+  visibleUserIds.add(current.user.id)
+
   return json({
-    applications: current.state.applications ?? [],
+    applications,
     crowdReviews: current.state.crowdReviews ?? [],
-    users: current.state.users ?? [],
+    users: userVisibleFromIds(stateUsers(current.state), visibleUserIds, current.user.id),
     currentUserId: current.user.id,
     version: current.version,
   })
@@ -4705,9 +4826,9 @@ export async function currentUserStateResponse(request: Request, env: WorkerEnv)
 }
 
 export async function adminStateResponse(request: Request, env: WorkerEnv) {
-  const { state, version } = await readWelfareStateRecord(env)
+  const userId = await requestUserId(request, env)
+  const { state, version } = await readWelfareStateRecord(env, userId ? { syncPointBalances: 'current-user', currentUserId: userId } : undefined)
   const user = await authenticatedUser(request, env, state as Partial<WelfareState>)
   assertAdminUser(user)
-  await syncUserPointBalancesFromLedger(env, state)
   return json({ state: clientVisibleWelfareState(state, user.id), currentUserId: user.id, version })
 }

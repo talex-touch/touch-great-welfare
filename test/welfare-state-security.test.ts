@@ -605,7 +605,7 @@ describe('welfare state security', () => {
     expect(balanceQueries[0].values).toEqual(['user_1'])
   })
 
-  it('syncs admin state balances with one batched ledger query', async () => {
+  it('syncs only the current admin balance for admin state reads', async () => {
     const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
     const users = [
       admin,
@@ -644,11 +644,11 @@ describe('welfare state security', () => {
     expect(response.status).toBe(200)
     const payload = await response.json() as { state: WelfareState }
     expect(payload.state.users.find(item => item.id === 'admin_1')?.points).toBe(50)
-    expect(payload.state.users.find(item => item.id === 'user_42')?.points).toBe(1888)
+    expect(payload.state.users.find(item => item.id === 'user_42')?.points).toBe(1000)
 
     const balanceQueries = d1.queries.filter(item => item.method === 'all' && item.query.includes('from point_transactions'))
     expect(balanceQueries).toHaveLength(1)
-    expect(new Set(balanceQueries[0].values)).toEqual(new Set(users.map(item => item.id)))
+    expect(balanceQueries[0].values).toEqual(['admin_1'])
   })
 
   it('credits replayed recharge notifications only once', async () => {

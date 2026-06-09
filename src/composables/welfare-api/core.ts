@@ -4,7 +4,9 @@ const STATE_ENDPOINT = '/api/welfare-state'
 const BOOTSTRAP_ENDPOINT = '/api/bootstrap'
 const SESSION_ENDPOINT = '/api/session'
 const APPLICATION_SUBMIT_ENDPOINT = '/api/applications/submit'
-const STATE_REQUEST_TIMEOUT_MS = 10000
+const STATE_REQUEST_TIMEOUT_MS = 15000
+const ADMIN_SAVE_TIMEOUT_MS = 30000
+const APPLICATION_SUBMIT_TIMEOUT_MS = 20000
 let currentWelfareStateVersion = 0
 
 interface BootstrapPayload {
@@ -20,21 +22,26 @@ interface WelfareStatePayload {
   version?: number
 }
 
+interface WelfareRequestInit extends RequestInit {
+  timeoutMs?: number
+}
+
 export type SubmitApplicationCommand
   = | SubmitApplicationPayload
     | (SubmitResourceApplicationPayload & { type: 'resource', applicationId?: string })
 
-async function requestState<T>(path = STATE_ENDPOINT, init?: RequestInit): Promise<T> {
+async function requestState<T>(path = STATE_ENDPOINT, init?: WelfareRequestInit): Promise<T> {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), STATE_REQUEST_TIMEOUT_MS)
+  const { timeoutMs = STATE_REQUEST_TIMEOUT_MS, ...fetchInit } = init ?? {}
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(path, {
-      ...init,
+      ...fetchInit,
       credentials: 'same-origin',
       headers: {
         'content-type': 'application/json',
-        ...init?.headers,
+        ...fetchInit.headers,
       },
       signal: controller.signal,
     })
@@ -50,7 +57,7 @@ async function requestState<T>(path = STATE_ENDPOINT, init?: RequestInit): Promi
   }
   catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError')
-      throw new Error('请求处理超过 10 秒，操作可能已提交，请刷新页面查看最新结果')
+      throw new Error(`请求处理超过 ${Math.round(timeoutMs / 1000)} 秒，操作可能已提交，请刷新页面查看最新结果`)
 
     throw error
   }
@@ -143,6 +150,7 @@ export async function loadWelfareState(role?: UserRole) {
 export async function saveWelfareState(state: WelfareState, userId?: string) {
   const result = await requestState<{ ok: true, version?: number }>(STATE_ENDPOINT, {
     method: 'PUT',
+    timeoutMs: ADMIN_SAVE_TIMEOUT_MS,
     headers: userId ? { 'x-welfare-user-id': userId } : undefined,
     body: JSON.stringify({ state, version: currentWelfareStateVersion }),
   })
@@ -152,6 +160,7 @@ export async function saveWelfareState(state: WelfareState, userId?: string) {
 export async function submitApplicationCommand(payload: SubmitApplicationCommand) {
   const result = await requestState<{ ok: true, applicationId: string, version?: number }>(APPLICATION_SUBMIT_ENDPOINT, {
     method: 'POST',
+    timeoutMs: APPLICATION_SUBMIT_TIMEOUT_MS,
     body: JSON.stringify(payload),
   })
   currentWelfareStateVersion = Math.trunc(Number(result.version || currentWelfareStateVersion))
