@@ -59,6 +59,7 @@ import {
   sessionResponse,
   squareStateResponse,
   StateVersionConflictError,
+  submitAdminStudentVerificationAction,
   submitApplicationSupplementAction,
   submitCollaborationApplication,
   submitCrowdReviewAction,
@@ -109,7 +110,11 @@ async function legacyFullStateSave(request: Request, env: WorkerEnv) {
   const userId = await requestUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
-  const previousRecord = await readWelfareStateRecord(env, { syncPointBalances: 'all' })
+  // ✅ Phase 0 优化：只同步当前用户积分，避免全量同步导致超时
+  const previousRecord = await readWelfareStateRecord(env, {
+    syncPointBalances: 'current-user',
+    currentUserId: userId,
+  })
   const previousState = previousRecord.state as Partial<WelfareState>
   const currentVersion = previousRecord.version
   if (!isAdminUser(previousState, userId))
@@ -316,6 +321,8 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await requestAdminApplicationSupplementAction(request, env)
       if (url.pathname === '/api/admin/applications/messages')
         return await addAdminApplicationMessageAction(request, env)
+      if (url.pathname === '/api/admin/verifications/student')
+        return await submitAdminStudentVerificationAction(request, env)
       if (url.pathname === '/api/admin/verifications/student/review')
         return await reviewAdminStudentVerificationAction(request, env)
       if (url.pathname === '/api/admin/coupons/templates')

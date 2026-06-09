@@ -173,8 +173,21 @@ function stateEncryptionSecret(env: WorkerEnv) {
 
 function logWelfarePerf(label: string, startedAt: number, details = '') {
   const duration = Date.now() - startedAt
-  if (duration >= POSTGRES_PERF_LOG_THRESHOLD_MS)
-    console.warn(`[welfare:perf] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
+
+  // ✅ Phase 0: 记录所有操作以识别瓶颈
+  if (duration >= 1000) {
+    // 超过 1 秒：严重慢操作
+    console.error(`[welfare:perf:SLOW] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
+  }
+  else if (duration >= POSTGRES_PERF_LOG_THRESHOLD_MS) {
+    // 超过 500ms：警告级别
+    console.warn(`[welfare:perf:WARN] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
+  }
+  else if (duration >= 100) {
+    // 超过 100ms：信息级别（Phase 0 期间开启）
+    console.log(`[welfare:perf] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
+  }
+
   return duration
 }
 
@@ -3187,6 +3200,57 @@ export async function submitStudentVerificationAction(request: Request, env: Wor
         createdAt,
       }])
   return json({ ok: true, verificationId: verification.id, ...stateVersionPayload(result.version) })
+}
+
+export async function submitAdminStudentVerificationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const input = payload as unknown as SubmitStudentPayload & { userId?: string }
+    const targetUserId = typeof input.userId === 'string' ? input.userId.trim() : ''
+    const targetUser = stateUsers(state).find(item => item.id === targetUserId && item.accountStatus !== 'suspended')
+    if (!targetUser)
+      throw new Error('请选择有效用户')
+
+    const verificationType = normalizeVerificationType(input.verificationType)
+    const realName = input.realName.trim()
+    if (!realName)
+      throw new Error('请填写真实姓名')
+    if (!input.category.trim())
+      throw new Error('请填写认证类目')
+    const notes = sanitizeWorkerRichText(input.notes)
+    if (isRichTextEmpty(notes))
+      throw new Error('请填写认证材料说明')
+    const educationEmail = input.educationEmail?.trim() ? normalizeStudentEmail(input.educationEmail) : undefined
+    if (educationEmail)
+      assertEducationEmail(educationEmail)
+    const attachments = attachmentsFromPayload(input.attachments)
+    if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
+      throw new Error('材料附件总大小不能超过 200MB')
+
+    const createdAt = now()
+    const verification: StudentVerification = {
+      id: createId('stu'),
+      userId: targetUser.id,
+      verificationType,
+      realName,
+      category: input.category.trim(),
+      school: input.school?.trim(),
+      identity: input.identity?.trim(),
+      grade: input.grade?.trim(),
+      educationLevel: input.educationLevel?.trim(),
+      educationEmail,
+      educationEmailVerified: !!input.educationEmailVerified,
+      educationEmailVerifiedAt: input.educationEmailVerified ? createdAt : undefined,
+      educationEmailVerificationSource: input.educationEmailVerified ? 'admin_approved' : undefined,
+      notes: `${notes}<p><strong>管理员代提交：</strong>${admin.profile.displayName || admin.profile.email || admin.id}</p>`,
+      attachments,
+      status: 'pending',
+      reviewFee: 0,
+      feeReturned: true,
+      createdAt,
+    }
+    ensureStudentVerifications(state).unshift(verification)
+    return { verificationId: verification.id }
+  })
 }
 
 export async function supplementStudentVerificationAction(request: Request, env: WorkerEnv) {
