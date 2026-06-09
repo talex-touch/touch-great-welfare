@@ -1367,4 +1367,44 @@ describe('welfare state security', () => {
     const latest = await readWelfareState(env) as WelfareState
     expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(125)
   })
+
+  it('lets admins submit student verification materials for a user without charging review fees', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const normalUser = user({ id: 'user_1', points: 100 })
+    const d1 = createMemoryD1({ ...state(), users: [admin, normalUser] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/admin/verifications/student', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'user_1',
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '大学生',
+        school: '测试大学',
+        grade: '2026 级',
+        educationLevel: '本科',
+        notes: '<p>管理员代提交材料</p>',
+        attachments: [{ id: 'att_1', name: 'proof.png', size: 128, type: 'image/png', url: '/api/uploads/user_1/proof.png' }],
+      }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true, version: 2 })
+    expect(d1.pointTransactions).toHaveLength(0)
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(100)
+    expect(latest.studentVerifications).toHaveLength(1)
+    expect(latest.studentVerifications[0]).toMatchObject({
+      userId: 'user_1',
+      status: 'pending',
+      reviewFee: 0,
+      feeReturned: true,
+      realName: '测试用户',
+      school: '测试大学',
+    })
+  })
 })
