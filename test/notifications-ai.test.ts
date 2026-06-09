@@ -597,6 +597,56 @@ describe('notification dispatch', () => {
     expect(saved.feishuRefreshTokenMasked).toBe('')
   })
 
+  it('tests Feishu mail with the current unsaved provider config', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/auth/v3/tenant_access_token/internal'))
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }))
+      if (url.includes('/mail/v1/user_mailboxes/'))
+        return new Response(JSON.stringify({ code: 0, msg: 'success', data: { message_id: 'msg_test' } }))
+      return new Response(JSON.stringify({ id: 'unexpected' }))
+    }))
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/email-test', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        emailAddress: 'tagzxxia@gmail.com',
+        provider: 'feishu_mail',
+        providerConfig: {
+          feishuMailEnabled: true,
+          feishuAppId: 'cli_current',
+          feishuAppSecret: 'current_secret',
+          feishuUserMailboxId: 'welfare@example.com',
+          feishuSiteBaseUrl: 'https://welfare.example.com',
+          feishuDailyLimit: 400,
+        },
+      }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    await expect(response.json()).resolves.toMatchObject({
+      deliveryProvider: 'feishu_mail',
+      emailAddress: 'tagzxxia@gmail.com',
+    })
+    expect(d1.data.providerConfig?.feishu_app_id).toBe('cli_current')
+  })
+
   it('rejects unsafe Feishu webhook URLs in user settings', async () => {
     const stored = state()
     const d1 = createMemoryD1()

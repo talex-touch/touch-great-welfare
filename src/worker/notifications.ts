@@ -1458,13 +1458,26 @@ async function decryptProviderSecret(value: string | null | undefined, env: Work
   }
 }
 
+function missingFeishuMailConfigFields(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  const missing: string[] = []
+  if (!config.feishuMailEnabled)
+    missing.push('启用飞书邮件通知')
+  if (!config.feishuAppId)
+    missing.push('飞书 App ID')
+  if (!config.feishuAppSecret)
+    missing.push('飞书 App Secret')
+  if (!config.feishuUserMailboxId)
+    missing.push('飞书发信邮箱')
+  return missing
+}
+
+function feishuMailConfigErrorMessage(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  const missing = missingFeishuMailConfigFields(config)
+  return missing.length ? `飞书邮件通知未配置完整：缺少 ${missing.join('、')}` : ''
+}
+
 function isFeishuMailConfigured(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
-  return !!(
-    config.feishuMailEnabled
-    && config.feishuAppId
-    && config.feishuAppSecret
-    && config.feishuUserMailboxId
-  )
+  return missingFeishuMailConfigFields(config).length === 0
 }
 
 async function getEffectiveNotificationProviderConfig(env: WorkerEnv) {
@@ -1918,7 +1931,7 @@ async function sendFeishuMail(
   data?: Record<string, unknown>,
 ) {
   if (!isFeishuMailConfigured(config))
-    throw new Error('飞书邮件通知未配置')
+    throw new Error(feishuMailConfigErrorMessage(config) || '飞书邮件通知未配置')
 
   const accessToken = await feishuAccessTokenForSend(env, config)
   const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
@@ -1957,7 +1970,7 @@ async function dispatchEmailChannel(
 
   if (config.feishuMailEnabled) {
     if (!isFeishuMailConfigured(config)) {
-      const message = '飞书邮件通知未配置完整'
+      const message = feishuMailConfigErrorMessage(config) || '飞书邮件通知未配置完整'
       await recordDelivery(env, notificationId, 'email', 'skipped', message, 0, '', 'feishu_mail')
       attempts.push(emailDeliveryAttempt('feishu_mail', 'skipped', message))
     }
@@ -2847,6 +2860,8 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
     if (path === '/provider-config/email-test' && request.method === 'POST') {
       const { user } = await assertAdminRequest(request, env)
       const payload = await readJson<SendEmailTestPayload>(request)
+      if (payload.providerConfig)
+        await saveNotificationProviderConfig(env, payload.providerConfig)
       return json(await sendEmailTest(env, user, { ...payload, free: true, provider: payload.provider ?? 'feishu_mail' }))
     }
 

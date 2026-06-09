@@ -31,10 +31,25 @@ export interface SaveNotificationSettingsPayload {
   browserPushEnabled: boolean
 }
 
+export interface EmailProviderTestConfig {
+  resendApiKey?: string
+  resendFromEmail?: string
+  vapidPublicKey?: string
+  vapidPrivateKey?: string
+  vapidSubject?: string
+  feishuMailEnabled?: boolean
+  feishuAppId?: string
+  feishuAppSecret?: string
+  feishuUserMailboxId?: string
+  feishuSiteBaseUrl?: string
+  feishuDailyLimit?: number
+}
+
 export interface SendEmailTestPayload {
   emailAddress?: string
   provider?: 'auto' | 'feishu_mail' | 'resend'
   free?: boolean
+  providerConfig?: EmailProviderTestConfig
 }
 
 export interface EmailDeliveryAttempt {

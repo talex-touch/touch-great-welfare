@@ -2573,6 +2573,19 @@ export function useWelfareUiState() {
         emailAddress: notificationProviderConfigForm.testEmailAddress,
         provider: 'feishu_mail',
         free: true,
+        providerConfig: {
+          resendApiKey: notificationProviderConfigForm.resendApiKey,
+          resendFromEmail: notificationProviderConfigForm.resendFromEmail,
+          vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
+          vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
+          vapidSubject: notificationProviderConfigForm.vapidSubject,
+          feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
+          feishuAppId: notificationProviderConfigForm.feishuAppId,
+          feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
+          feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
+          feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
+          feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
+        },
       })
       notificationProviderConfigForm.testEmailAddress = result.emailAddress
       notificationProviderConfigForm.message = `飞书邮件测试已发送到 ${result.emailAddress}：${result.deliveryAttempts.map(formatEmailDeliveryAttempt).join('；')}`
