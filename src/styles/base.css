@@ -140,7 +140,20 @@ select {
 }
 
 .dashboard-layout--standalone {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   padding: 0.75rem 1rem 0;
+}
+
+.dashboard-layout--standalone .dashboard-content {
+  --dashboard-content-y-space: 1rem;
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
 }
 
 .dashboard-layout--with-sidebar .dashboard-content {

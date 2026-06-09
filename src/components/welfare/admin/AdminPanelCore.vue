@@ -36,6 +36,7 @@ const {
   systemConfigForm,
   adminAnnouncementForm,
   adminAnnouncements,
+  systemLogs,
   pointTransactions,
   pointTransactionSummary,
   activeAdminTab,
@@ -68,12 +69,14 @@ const {
   syncEducationMailVerifications,
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
+  sendProviderEmailTestMessage,
   generateNotificationVapidKeys,
   refreshSiteBannerConfig,
   persistSiteBannerConfig,
   refreshSystemConfigForm,
   persistSystemConfig,
   refreshAdminAnnouncements,
+  refreshSystemLogs,
   refreshPointTransactions,
   sendAdminAnnouncement,
 } = useWelfareUiState()
@@ -462,7 +465,7 @@ function statusPillClass(status: string) {
     return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
   if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning', 'provisioning', 'renewal_requested'].includes(status))
     return 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'
-  if (['rejected', 'revoked', 'danger', 'expired', 'reclaim_pending'].includes(status))
+  if (['rejected', 'revoked', 'danger', 'error', 'expired', 'reclaim_pending'].includes(status))
     return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'
   return 'text-slate-700 bg-slate-100 dark:text-slate-200 dark:bg-white/10'
 }
@@ -1862,6 +1865,14 @@ function saveNotificationProviderConfig() {
   }, '通知供应商配置已保存')
 }
 
+function sendFeishuProviderTest() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await sendProviderEmailTestMessage()
+  }, '飞书邮件测试已发送')
+}
+
 function openVapidRegenerateDialog() {
   isVapidRegenerateDialogOpen.value = true
 }
@@ -1907,7 +1918,28 @@ function publishAdminAnnouncement() {
 }
 
 function reloadAdminAnnouncements() {
-  runSafely(() => refreshAdminAnnouncements(), '通告统计已刷新')
+  runSafely(async () => {
+    await refreshAdminAnnouncements()
+    await refreshSystemLogs()
+  }, '通告统计已刷新')
+}
+
+function reloadSystemLogs() {
+  runSafely(() => refreshSystemLogs(), '系统日志已刷新')
+}
+
+function systemLogLevelText(level: string) {
+  if (level === 'error')
+    return '错误'
+  if (level === 'warning')
+    return '警告'
+  if (level === 'success')
+    return '成功'
+  return '信息'
+}
+
+function systemLogDetailsText(details: Record<string, unknown>) {
+  return JSON.stringify(details, null, 2)
 }
 
 function notificationChannelLabel(channel: string) {
@@ -1929,6 +1961,7 @@ onMounted(() => {
   refreshEducationMailConfig().catch(() => {})
   refreshNotificationProviderConfig().catch(() => {})
   refreshAdminAnnouncements().catch(() => {})
+  refreshSystemLogs().catch(() => {})
   refreshPointTransactions({ limit: 200, scope: 'admin' }).catch(() => {})
 })
 </script>
@@ -2906,6 +2939,15 @@ onMounted(() => {
                 <span class="field-label">飞书每日限额</span>
                 <TxNumberInput v-model="notificationProviderConfigForm.feishuDailyLimit" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="400" />
               </label>
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">飞书测试收件邮箱</span>
+                <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                  <TxInput v-model="notificationProviderConfigForm.testEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingEmail" placeholder="user@example.com" />
+                  <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingEmail || !notificationProviderConfigForm.testEmailAddress" @click="sendFeishuProviderTest">
+                    {{ notificationProviderConfigForm.testingEmail ? '发送中...' : '测试飞书邮件' }}
+                  </TxButton>
+                </div>
+              </label>
             </div>
             <div class="mt-5 flex flex-wrap gap-3 items-center">
               <TxButton variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.loading" @click="saveNotificationProviderConfig">
@@ -3043,6 +3085,57 @@ onMounted(() => {
                 <span>{{ announcement.channels.map(notificationChannelLabel).join(' / ') }}</span>
                 <span>{{ announcement.readCount }} / {{ announcement.totalCount }}</span>
                 <span>{{ formatDate(announcement.createdAt) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <div class="text-lg fw-900 flex gap-2 items-center">
+                  <span class="i-carbon-data-vis-4" />
+                  系统日志
+                </div>
+                <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
+                  展示通知发送、通道投递、错误原因和耗时，便于排查发送慢或失败。
+                </p>
+              </div>
+              <TxButton variant="secondary" :disabled="!isAdmin" @click="reloadSystemLogs">
+                刷新日志
+              </TxButton>
+            </div>
+
+            <div class="admin-table mt-5">
+              <div class="admin-table-row admin-table-head grid-cols-[110px_130px_minmax(0,1fr)_110px_160px]">
+                <span>级别</span>
+                <span>模块 / 动作</span>
+                <span>消息</span>
+                <span>耗时</span>
+                <span>时间</span>
+              </div>
+              <div v-if="!systemLogs.length" class="admin-empty">
+                暂无系统日志。
+              </div>
+              <div v-for="log in systemLogs" :key="log.id" class="admin-table-row grid-cols-[110px_130px_minmax(0,1fr)_110px_160px]">
+                <span class="admin-pill" :class="statusPillClass(log.level)">
+                  {{ systemLogLevelText(log.level) }}
+                </span>
+                <span class="text-xs text-slate-500 dark:text-slate-400">
+                  {{ log.module }}<br>{{ log.action }}
+                </span>
+                <div class="min-w-0">
+                  <div class="fw-800">
+                    {{ log.message }}
+                  </div>
+                  <details class="mt-2">
+                    <summary class="text-xs text-slate-500 cursor-pointer dark:text-slate-400">
+                      查看详情
+                    </summary>
+                    <pre class="text-xs mt-2 p-3 rounded-xl bg-slate-100 overflow-auto dark:bg-black/20">{{ systemLogDetailsText(log.details) }}</pre>
+                  </details>
+                </div>
+                <span>{{ log.durationMs === undefined ? '-' : `${log.durationMs} ms` }}</span>
+                <span>{{ formatDate(log.createdAt) }}</span>
               </div>
             </div>
           </div>

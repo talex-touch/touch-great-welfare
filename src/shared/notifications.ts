@@ -33,6 +33,8 @@ export interface SaveNotificationSettingsPayload {
 
 export interface SendEmailTestPayload {
   emailAddress?: string
+  provider?: 'auto' | 'feishu_mail' | 'resend'
+  free?: boolean
 }
 
 export interface EmailDeliveryAttempt {
@@ -90,6 +92,24 @@ export interface AdminAnnouncementSummary {
 
 export interface AdminAnnouncementListResult {
   announcements: AdminAnnouncementSummary[]
+}
+
+export type SystemLogLevel = 'info' | 'warning' | 'error' | 'success'
+
+export interface SystemLogItem {
+  id: string
+  level: SystemLogLevel
+  module: string
+  action: string
+  message: string
+  details: Record<string, unknown>
+  refId?: string
+  durationMs?: number
+  createdAt: string
+}
+
+export interface SystemLogListResult {
+  logs: SystemLogItem[]
 }
 
 export interface CreateAdminAnnouncementPayload {

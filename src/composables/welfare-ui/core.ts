@@ -5,7 +5,7 @@ import type { OAuthProviderConfigView, PublicOAuthProvider } from '../oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from '../recharge'
 import type { Sub2ApiKeyView } from '../sub2api'
 import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceLifecycleActionPayload, ResourceTermId, ResourceType, SquarePostType, StudentVerification, UserProfile, VerificationType, WelfareApplication } from '../welfare'
-import type { NotificationChannel } from '~/shared/notifications'
+import type { NotificationChannel, SystemLogItem } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from '../ai'
@@ -20,12 +20,14 @@ import {
   loadNotifications,
   loadNotificationSettings,
   loadPushPublicKey,
+  loadSystemLogs,
   markAllNotificationsRead,
   markNotificationRead,
   saveNotificationProviderConfig,
   saveNotificationSettings,
   savePushSubscription,
   sendEmailTest as sendEmailTestRequest,
+  sendProviderEmailTest,
   urlBase64ToUint8Array,
 } from '../notifications'
 import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from '../oauth'
@@ -116,6 +118,11 @@ import {
   updateSystemConfigAction,
   vouchInvitationAction,
 } from '../welfare-persistence'
+
+function formatEmailDeliveryAttempt(attempt: { providerLabel: string, status: string, message: string }) {
+  const statusText = attempt.status === 'sent' ? '成功' : attempt.status === 'skipped' ? '跳过' : '失败'
+  return `${attempt.providerLabel} ${statusText}（${attempt.message || '未返回详情'}）`
+}
 
 export interface UploadLikeFile {
   id: string
@@ -473,6 +480,8 @@ export const notificationProviderConfigForm = reactive({
   feishuUserMailboxId: 'me',
   feishuSiteBaseUrl: '',
   feishuDailyLimit: 400,
+  testEmailAddress: '',
+  testingEmail: false,
   emailConfigured: false,
   pushConfigured: false,
   feishuMailConfigured: false,
@@ -523,6 +532,7 @@ export const adminAnnouncementForm = reactive({
 })
 
 export const adminAnnouncements = ref<Awaited<ReturnType<typeof loadAdminAnnouncements>>['announcements']>([])
+export const systemLogs = ref<SystemLogItem[]>([])
 
 export const notificationList = ref<Awaited<ReturnType<typeof loadNotifications>>['notifications']>([])
 export const unreadNotificationCount = ref(0)
@@ -2554,6 +2564,28 @@ export function useWelfareUiState() {
     }
   }
 
+  async function sendProviderEmailTestMessage() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    notificationProviderConfigForm.testingEmail = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await sendProviderEmailTest(welfare.currentUser.value.id, {
+        emailAddress: notificationProviderConfigForm.testEmailAddress,
+        provider: 'feishu_mail',
+        free: true,
+      })
+      notificationProviderConfigForm.testEmailAddress = result.emailAddress
+      notificationProviderConfigForm.message = `飞书邮件测试已发送到 ${result.emailAddress}：${result.deliveryAttempts.map(formatEmailDeliveryAttempt).join('；')}`
+      await refreshSystemLogs()
+    }
+    finally {
+      notificationProviderConfigForm.testingEmail = false
+    }
+  }
+
   async function generateNotificationVapidKeys(regenerate = false) {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
@@ -2621,6 +2653,14 @@ export function useWelfareUiState() {
     }
   }
 
+  async function refreshSystemLogs(limit = 100) {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      return
+
+    systemLogs.value = (await loadSystemLogs(welfare.currentUser.value.id, limit)).logs
+  }
+
   async function sendAdminAnnouncement() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
@@ -2644,8 +2684,10 @@ export function useWelfareUiState() {
       adminAnnouncementForm.body = ''
       adminAnnouncementForm.message = '管理员通告已发送'
       await refreshNotifications()
+      await refreshSystemLogs()
     }
     finally {
+      await refreshSystemLogs().catch(() => {})
       adminAnnouncementForm.loading = false
     }
   }
@@ -3213,6 +3255,7 @@ export function useWelfareUiState() {
     rechargeFeatureEnabled,
     adminAnnouncementForm,
     adminAnnouncements,
+    systemLogs,
     temporaryAiKey,
     temporaryAiKeyExpiresAt,
     temporaryAiKeyForm,
@@ -3392,10 +3435,12 @@ export function useWelfareUiState() {
     revokeTemporaryAiKey,
     refreshNotificationProviderConfig,
     persistNotificationProviderConfig,
+    sendProviderEmailTestMessage,
     generateNotificationVapidKeys,
     refreshSiteBannerConfig,
     persistSiteBannerConfig,
     refreshAdminAnnouncements,
+    refreshSystemLogs,
     sendAdminAnnouncement,
     generateTemporaryAiKey,
     submitImageGenerationApplication,

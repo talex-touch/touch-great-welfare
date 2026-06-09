@@ -7,6 +7,7 @@ import type {
   SaveNotificationSettingsPayload,
   SendEmailTestPayload,
   SendEmailTestResult,
+  SystemLogListResult,
 } from '~/shared/notifications'
 
 export interface NotificationProviderConfigView {
@@ -125,6 +126,13 @@ export function sendEmailTest(userId: string, payload: SendEmailTestPayload) {
   })
 }
 
+export function sendProviderEmailTest(adminUserId: string, payload: SendEmailTestPayload) {
+  return requestNotifications<SendEmailTestResult>('/api/notifications/provider-config/email-test', adminUserId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function loadNotificationProviderConfig(adminUserId: string) {
   return requestNotifications<NotificationProviderConfigView>('/api/notifications/provider-config', adminUserId)
 }
@@ -152,6 +160,10 @@ export function createAdminAnnouncement(adminUserId: string, payload: CreateAdmi
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function loadSystemLogs(adminUserId: string, limit = 100) {
+  return requestNotifications<SystemLogListResult>(`/api/notifications/system-logs?limit=${encodeURIComponent(String(limit))}`, adminUserId)
 }
 
 export async function loadPushPublicKey() {

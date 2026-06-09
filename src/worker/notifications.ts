@@ -14,6 +14,9 @@ import type {
   SaveNotificationSettingsPayload,
   SendEmailTestPayload,
   SendEmailTestResult,
+  SystemLogItem,
+  SystemLogLevel,
+  SystemLogListResult,
 } from '~/shared/notifications'
 import { EMAIL_NOTIFICATION_COST } from '~/shared/notifications'
 import { richTextToPlainText } from '~/utils/rich-text'
@@ -35,6 +38,29 @@ import { appendPointTransaction, pointTransactionId } from './points'
 import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type NotificationStatus = 'processed' | 'failed'
+type NotificationDeliveryProvider = '' | EmailDeliveryProvider | 'feishu_webhook' | 'web_push'
+
+interface SystemLogInput {
+  level: SystemLogLevel
+  module: string
+  action: string
+  message: string
+  details?: Record<string, unknown>
+  refId?: string
+  durationMs?: number
+}
+
+interface SystemLogRow {
+  id: string
+  level: SystemLogLevel
+  module: string
+  action: string
+  message: string
+  details: string | Record<string, unknown>
+  ref_id?: string | null
+  duration_ms?: number | null
+  created_at?: string | Date | null
+}
 
 interface NotificationRow {
   id: string
@@ -137,7 +163,6 @@ const EMAIL_BODY_TEXT_LIMIT = 1800
 const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
 type EmailDeliveryProvider = EmailDeliveryAttempt['provider']
 type EmailDeliveryStatus = EmailDeliveryAttempt['status']
-type NotificationDeliveryProvider = '' | EmailDeliveryProvider | 'feishu_webhook' | 'web_push'
 const EMAIL_DELIVERY_PROVIDER_LABELS: Record<EmailDeliveryProvider, string> = {
   feishu_mail: '飞书邮件',
   resend: 'Resend 邮件',
@@ -400,6 +425,19 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
         )
       `,
       `
+        create table if not exists system_logs (
+          id text primary key,
+          level text not null,
+          module text not null,
+          action text not null,
+          message text not null,
+          details text not null default '{}',
+          ref_id text,
+          duration_ms integer,
+          created_at text not null default current_timestamp
+        )
+      `,
+      `
         create table if not exists notifications (
           id text primary key,
           user_id text not null,
@@ -576,6 +614,7 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           )
       `,
       'create unique index if not exists idx_database_resource_bindings_active_item on database_resource_bindings (application_id, item_id) where status = \'active\'',
+      'create index if not exists idx_system_logs_created on system_logs (created_at desc, id desc)',
     ]
     for (const statement of indexStatements)
       await env.LOCAL_DB!.prepare(statement).run()
@@ -783,6 +822,20 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
   `)
   await pool.query('create unique index if not exists idx_database_resource_bindings_active_item on database_resource_bindings (application_id, item_id) where status = \'active\'')
   await pool.query(`
+    create table if not exists system_logs (
+      id text primary key,
+      level text not null,
+      module text not null,
+      action text not null,
+      message text not null,
+      details jsonb not null default '{}'::jsonb,
+      ref_id text,
+      duration_ms integer,
+      created_at timestamptz not null default now()
+    )
+  `)
+  await pool.query('create index if not exists idx_system_logs_created on system_logs (created_at desc, id desc)')
+  await pool.query(`
     create table if not exists notifications (
       id text primary key,
       user_id text not null,
@@ -921,6 +974,76 @@ async function recordDelivery(
     insert into notification_deliveries (id, notification_id, channel, status, error, charged_points, provider_message_id, provider, created_at, updated_at)
     values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
   `, [id, notificationId, channel, status, error || null, chargedPoints, providerMessageId || null, provider])
+}
+
+async function writeSystemLog(env: WorkerEnv, input: SystemLogInput) {
+  await ensureNotificationSchema(env)
+  const id = createId('log')
+  const details = JSON.stringify(input.details ?? {})
+  const durationMs = input.durationMs === undefined ? null : Math.max(0, Math.trunc(input.durationMs))
+
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare(`
+        insert into system_logs (id, level, module, action, message, details, ref_id, duration_ms, created_at)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, current_timestamp)
+      `)
+      .bind(id, input.level, input.module, input.action, input.message, details, input.refId || null, durationMs)
+      .run()
+    return id
+  }
+
+  await getPool(env).query(`
+    insert into system_logs (id, level, module, action, message, details, ref_id, duration_ms, created_at)
+    values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, now())
+  `, [id, input.level, input.module, input.action, input.message, details, input.refId || null, durationMs])
+  return id
+}
+
+function parseLogDetails(value: SystemLogRow['details']) {
+  if (!value)
+    return {}
+  if (typeof value === 'object')
+    return value as Record<string, unknown>
+  try {
+    return JSON.parse(value) as Record<string, unknown>
+  }
+  catch {
+    return { raw: value }
+  }
+}
+
+function mapSystemLog(row: SystemLogRow): SystemLogItem {
+  return {
+    id: row.id,
+    level: row.level,
+    module: row.module,
+    action: row.action,
+    message: row.message,
+    details: parseLogDetails(row.details),
+    refId: row.ref_id || undefined,
+    durationMs: row.duration_ms === null || row.duration_ms === undefined ? undefined : Number(row.duration_ms),
+    createdAt: toIso(row.created_at) ?? now(),
+  }
+}
+
+async function listSystemLogs(env: WorkerEnv, limit = 100): Promise<SystemLogListResult> {
+  await ensureNotificationSchema(env)
+  const normalizedLimit = Math.max(1, Math.min(300, Math.trunc(limit)))
+  if (shouldUseD1(env)) {
+    const rows = (await env.LOCAL_DB!
+      .prepare('select * from system_logs order by created_at desc, id desc limit ?1')
+      .bind(normalizedLimit)
+      .all<SystemLogRow>()).results
+    return { logs: rows.map(mapSystemLog) }
+  }
+
+  const result = await getPool(env).query<SystemLogRow>('select * from system_logs order by created_at desc, id desc limit $1', [normalizedLimit])
+  return { logs: result.rows.map(mapSystemLog) }
+}
+
+function elapsedMs(startedAt: number) {
+  return Math.max(0, Math.round(performance.now() - startedAt))
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -1852,46 +1975,112 @@ async function sendPush(env: WorkerEnv, subscription: PushSubscriptionRow) {
     throw new Error(`Web Push 请求失败：${response.status}`)
 }
 
+async function dispatchSpecificEmailProvider(
+  env: WorkerEnv,
+  userId: string,
+  address: string,
+  notificationId: string,
+  input: CreateNotificationInput,
+  provider: EmailDeliveryProvider,
+  chargedPoints = 0,
+) {
+  const config = await getEffectiveNotificationProviderConfig(env)
+  const attempts: EmailDeliveryAttempt[] = []
+  try {
+    const providerId = provider === 'feishu_mail'
+      ? await sendFeishuMail(env, config, address, input.title, input.body, notificationId, input.data)
+      : await sendResendEmail(config, address, input.title, input.body, input.data)
+    if (chargedPoints)
+      await chargeEmailNotification(env, userId, notificationId)
+    await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, provider)
+    attempts.push(emailDeliveryAttempt(provider, 'sent', providerId ? `服务商消息 ID：${providerId}` : '服务商已受理'))
+    return { sent: true, provider, attempts }
+  }
+  catch (error) {
+    const message = errorMessage(error, '邮箱发送失败')
+    await recordDelivery(env, notificationId, 'email', 'failed', message, 0, '', provider)
+    attempts.push(emailDeliveryAttempt(provider, 'failed', message))
+    return { sent: false, provider: undefined, attempts }
+  }
+}
+
 async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestPayload): Promise<SendEmailTestResult> {
   const emailAddress = (payload.emailAddress?.trim() || user.profile.email).toLowerCase()
   assertEmail(emailAddress)
 
-  if (!await hasEnoughPoints(env, user.id, EMAIL_NOTIFICATION_COST))
+  const chargedPoints = payload.free ? 0 : EMAIL_NOTIFICATION_COST
+  if (chargedPoints && !await hasEnoughPoints(env, user.id, EMAIL_NOTIFICATION_COST))
     throw new Error('邮箱通知余额不足')
 
   const notificationId = await insertNotification(env, {
     userId: user.id,
     event: 'email_test',
     title: 'Touch Great Welfare 邮箱测试',
-    body: `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。`,
+    body: chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。` : '这是一封后台邮件通道测试邮件，不会扣除用户积分。',
     data: {
       kind: 'email_test',
       emailAddress,
-      chargedPoints: EMAIL_NOTIFICATION_COST,
+      chargedPoints,
+      provider: payload.provider ?? 'auto',
     },
   })
   await recordDelivery(env, notificationId, 'in_app', 'sent')
 
-  const delivery = await dispatchEmailChannel(env, user.id, emailAddress, notificationId, {
+  const input: CreateNotificationInput = {
     userId: user.id,
     event: 'email_test',
     title: 'Touch Great Welfare 邮箱测试',
-    body: `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。`,
+    body: chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。` : '这是一封后台邮件通道测试邮件，不会扣除用户积分。',
     data: {
       kind: 'email_test',
       emailAddress,
-      chargedPoints: EMAIL_NOTIFICATION_COST,
+      chargedPoints,
+      provider: payload.provider ?? 'auto',
     },
-  }, EMAIL_NOTIFICATION_COST)
+  }
+  const startedAt = performance.now()
+  const delivery = payload.provider && payload.provider !== 'auto'
+    ? await dispatchSpecificEmailProvider(env, user.id, emailAddress, notificationId, input, payload.provider, chargedPoints)
+    : await dispatchEmailChannel(env, user.id, emailAddress, notificationId, input, chargedPoints)
 
-  if (!delivery.sent || !delivery.provider)
+  if (!delivery.sent || !delivery.provider) {
+    await writeSystemLog(env, {
+      level: 'error',
+      module: 'notifications',
+      action: 'email_test',
+      message: '邮箱测试发送失败',
+      refId: notificationId,
+      durationMs: elapsedMs(startedAt),
+      details: {
+        emailAddress,
+        provider: payload.provider ?? 'auto',
+        chargedPoints,
+        attempts: delivery.attempts,
+      },
+    })
     throw new Error(emailTestFailureMessage(delivery.attempts))
+  }
+
+  await writeSystemLog(env, {
+    level: 'success',
+    module: 'notifications',
+    action: 'email_test',
+    message: '邮箱测试发送成功',
+    refId: notificationId,
+    durationMs: elapsedMs(startedAt),
+    details: {
+      emailAddress,
+      provider: delivery.provider,
+      chargedPoints,
+      attempts: delivery.attempts,
+    },
+  })
 
   return {
     ok: true,
     notificationId,
     emailAddress,
-    chargedPoints: EMAIL_NOTIFICATION_COST,
+    chargedPoints,
     deliveryProvider: delivery.provider,
     deliveryProviderLabel: EMAIL_DELIVERY_PROVIDER_LABELS[delivery.provider],
     deliveryAttempts: delivery.attempts,
@@ -1955,37 +2144,56 @@ async function dispatchAdminAnnouncementChannels(
   channels: NotificationChannel[],
   forcePush: boolean,
 ) {
+  const results: Array<{ channel: NotificationChannel, status: DeliveryStatus, message: string, durationMs: number }> = []
+  const recordResult = (channel: NotificationChannel, status: DeliveryStatus, message: string, startedAt: number) => {
+    results.push({ channel, status, message, durationMs: elapsedMs(startedAt) })
+  }
+
   if (channels.includes('email')) {
+    const startedAt = performance.now()
     const address = settings?.email_address || user.profile.email
-    await dispatchEmailChannel(env, user.id, address, notificationId, input)
+    const result = await dispatchEmailChannel(env, user.id, address, notificationId, input)
+    const failed = result.attempts.filter(item => item.status === 'failed')
+    recordResult('email', result.sent ? 'sent' : failed.length ? 'failed' : 'skipped', result.attempts.map(formatEmailDeliveryAttempt).join('；'), startedAt)
   }
 
   if (channels.includes('feishu')) {
+    const startedAt = performance.now()
     if (!settings?.feishu_webhook_encrypted) {
-      await recordDelivery(env, notificationId, 'feishu', 'skipped', '飞书 Webhook 未配置', 0, '', 'feishu_webhook')
+      const message = '飞书 Webhook 未配置'
+      await recordDelivery(env, notificationId, 'feishu', 'skipped', message, 0, '', 'feishu_webhook')
+      recordResult('feishu', 'skipped', message, startedAt)
     }
     else {
       try {
         await sendFeishu(env, settings.feishu_webhook_encrypted, input.title, input.body)
         await recordDelivery(env, notificationId, 'feishu', 'sent', '', 0, '', 'feishu_webhook')
+        recordResult('feishu', 'sent', '飞书 Webhook 已受理', startedAt)
       }
       catch (error) {
-        await recordDelivery(env, notificationId, 'feishu', 'failed', error instanceof Error ? error.message : '飞书通知发送失败', 0, '', 'feishu_webhook')
+        const message = errorMessage(error, '飞书通知发送失败')
+        await recordDelivery(env, notificationId, 'feishu', 'failed', message, 0, '', 'feishu_webhook')
+        recordResult('feishu', 'failed', message, startedAt)
       }
     }
   }
 
   if (channels.includes('browser_push')) {
+    const startedAt = performance.now()
     const canPush = forcePush || boolValue(settings?.browser_push_enabled)
     if (!canPush) {
-      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '用户未启用浏览器 Push', 0, '', 'web_push')
-      return
+      const message = '用户未启用浏览器 Push'
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', message, 0, '', 'web_push')
+      recordResult('browser_push', 'skipped', message, startedAt)
+      return results
     }
 
     const subscriptions = await getPushSubscriptions(env, user.id)
     if (!subscriptions.length) {
-      await recordDelivery(env, notificationId, 'browser_push', 'skipped', '未注册浏览器 Push 订阅', 0, '', 'web_push')
-      return
+      const message = '未注册浏览器 Push 订阅'
+      await recordDelivery(env, notificationId, 'browser_push', 'skipped', message, 0, '', 'web_push')
+      recordResult('browser_push', 'skipped', message, startedAt)
+      return results
     }
 
     let sent = 0
@@ -1996,11 +2204,16 @@ async function dispatchAdminAnnouncementChannels(
         sent += 1
       }
       catch (error) {
-        errors.push(error instanceof Error ? error.message : 'Push 发送失败')
+        errors.push(errorMessage(error, 'Push 发送失败'))
       }
     }
-    await recordDelivery(env, notificationId, 'browser_push', sent > 0 ? 'sent' : 'failed', errors.join('\n'), 0, '', 'web_push')
+    const status = sent > 0 ? 'sent' : 'failed'
+    const message = errors.join('\n') || `已发送 ${sent}/${subscriptions.length} 个订阅`
+    await recordDelivery(env, notificationId, 'browser_push', status, errors.join('\n'), 0, '', 'web_push')
+    recordResult('browser_push', status, message, startedAt)
   }
+
+  return results
 }
 
 async function listAdminAnnouncements(env: WorkerEnv): Promise<AdminAnnouncementListResult> {
@@ -2104,38 +2317,83 @@ async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: Cre
     throw new Error('没有可推送的用户')
 
   const announcementId = createId('ann')
-  for (const recipient of recipients) {
-    const notificationId = await insertNotification(env, {
-      userId: recipient.id,
-      event: 'admin_announcement',
-      title,
-      body,
-      data: {
-        announcementId,
-        channels,
-        forcePopup: !!payload.forcePopup,
-        forcePush,
-        createdBy: admin.id,
-      },
-    })
-    await recordDelivery(env, notificationId, 'in_app', 'sent')
-    await dispatchAdminAnnouncementChannels(
-      env,
-      recipient,
-      await getSettingsRow(env, recipient.id),
-      notificationId,
-      {
+  const startedAt = performance.now()
+  await writeSystemLog(env, {
+    level: 'info',
+    module: 'notifications',
+    action: 'admin_announcement.start',
+    message: `开始发送管理员通告：${title}`,
+    refId: announcementId,
+    details: { channels, forcePopup: !!payload.forcePopup, forcePush, recipientCount: recipients.length, adminId: admin.id },
+  })
+
+  try {
+    for (const recipient of recipients) {
+      const recipientStartedAt = performance.now()
+      const notificationId = await insertNotification(env, {
         userId: recipient.id,
         event: 'admin_announcement',
         title,
         body,
-      },
-      channels,
-      forcePush,
-    )
-  }
+        data: {
+          announcementId,
+          channels,
+          forcePopup: !!payload.forcePopup,
+          forcePush,
+          createdBy: admin.id,
+        },
+      })
+      await recordDelivery(env, notificationId, 'in_app', 'sent')
+      const channelResults = await dispatchAdminAnnouncementChannels(
+        env,
+        recipient,
+        await getSettingsRow(env, recipient.id),
+        notificationId,
+        {
+          userId: recipient.id,
+          event: 'admin_announcement',
+          title,
+          body,
+        },
+        channels,
+        forcePush,
+      )
+      const hasFailure = channelResults.some(item => item.status === 'failed')
+      const hasSkipped = channelResults.some(item => item.status === 'skipped')
+      await writeSystemLog(env, {
+        level: hasFailure ? 'error' : hasSkipped ? 'warning' : 'success',
+        module: 'notifications',
+        action: 'admin_announcement.recipient',
+        message: `${recipient.profile.displayName || recipient.profile.email || recipient.id} 通告发送${hasFailure ? '存在失败' : hasSkipped ? '存在跳过' : '完成'}`,
+        refId: announcementId,
+        durationMs: elapsedMs(recipientStartedAt),
+        details: { notificationId, userId: recipient.id, email: recipient.profile.email, channelResults },
+      })
+    }
 
-  return listAdminAnnouncements(env)
+    await writeSystemLog(env, {
+      level: 'success',
+      module: 'notifications',
+      action: 'admin_announcement.finish',
+      message: `管理员通告发送完成：${title}`,
+      refId: announcementId,
+      durationMs: elapsedMs(startedAt),
+      details: { recipientCount: recipients.length, channels },
+    })
+    return listAdminAnnouncements(env)
+  }
+  catch (error) {
+    await writeSystemLog(env, {
+      level: 'error',
+      module: 'notifications',
+      action: 'admin_announcement.error',
+      message: errorMessage(error, '管理员通告发送失败'),
+      refId: announcementId,
+      durationMs: elapsedMs(startedAt),
+      details: { recipientCount: recipients.length, channels },
+    })
+    throw error
+  }
 }
 
 export function isNotificationQueueJob(value: unknown): value is NotificationQueueJob {
@@ -2467,6 +2725,18 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
     if (path === '/admin-announcements' && request.method === 'GET') {
       await assertAdminRequest(request, env)
       return json(await listAdminAnnouncements(env))
+    }
+
+    if (path === '/system-logs' && request.method === 'GET') {
+      await assertAdminRequest(request, env)
+      const limit = Number(url.searchParams.get('limit') || 100)
+      return json(await listSystemLogs(env, limit))
+    }
+
+    if (path === '/provider-config/email-test' && request.method === 'POST') {
+      const { user } = await assertAdminRequest(request, env)
+      const payload = await readJson<SendEmailTestPayload>(request)
+      return json(await sendEmailTest(env, user, { ...payload, free: true, provider: payload.provider ?? 'feishu_mail' }))
     }
 
     if (path === '/admin-announcements' && request.method === 'POST') {
