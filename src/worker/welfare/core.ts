@@ -378,7 +378,7 @@ function sanitizeDeliveryApplications(applications: WelfareApplication[], curren
     .filter(item =>
       ['code', 'pro'].includes(item.type)
       && item.userId !== currentUserId
-      && item.status === 'answered'
+      && ['answered', 'pending_allocation', 'delivered'].includes(item.status)
       && !item.deliveryRewardedAt
       && (!item.deliveryAssigneeId || item.deliveryAssigneeId === currentUserId),
     )
@@ -1959,7 +1959,7 @@ function isWithinOpenWindow(policy: { openStart: string, openEnd: string }, curr
 }
 
 function isActiveApplicationStatus(status: string) {
-  return ['draft', 'reserved', 'pending_review', 'needs_supplement', 'processing', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(status)
+  return ['draft', 'reserved', 'pending_review', 'needs_supplement', 'processing', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved', 'pending_allocation'].includes(status)
 }
 
 function isActiveStudentStatus(status: string) {
@@ -3013,11 +3013,11 @@ export async function submitApplicationSupplementAction(request: Request, env: W
       throw new Error('申请不存在')
     if (application.userId !== user.id)
       throw new Error('只能补充自己的申请材料')
-    if (!['needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
+    if (!['needs_supplement', 'answered', 'pending_allocation', 'delivered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持补充材料')
     if (['submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status) && application.type !== 'resource')
       throw new Error('只有资源工单支持该阶段补充材料')
-    if (application.status === 'answered') {
+    if (['answered', 'pending_allocation', 'delivered'].includes(application.status)) {
       if (application.type !== 'pro')
         throw new Error('只有 Pro 申请通过后支持免费补充材料')
       const limit = application.postApprovalSupplementLimit ?? 0
@@ -3282,7 +3282,7 @@ function pushApplicationMessage(application: WelfareApplication, userId: string,
 
 function isDeliveryApplication(application: WelfareApplication) {
   return ['code', 'pro'].includes(application.type)
-    && application.status === 'answered'
+    && ['answered', 'pending_allocation', 'delivered'].includes(application.status)
     && !application.deliveryRewardedAt
 }
 
@@ -4028,26 +4028,72 @@ export async function reviewAdminApplicationItemAction(request: Request, env: Wo
     item.lifecycleStatus = status === 'rejected' ? 'rejected' : 'provisioning'
     item.expiresAt = typeof item.expiresAt === 'string' ? item.expiresAt : typeof item.approvedPayload?.expiresAt === 'string' ? item.approvedPayload.expiresAt : typeof item.payload?.expiresAt === 'string' ? item.payload.expiresAt : undefined
     item.updatedAt = now()
-    application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [])
-    if (['approved', 'partial_approved', 'rejected'].includes(application.status)) {
+    application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [], application.status)
+    if (['pending_allocation', 'delivered', 'approved', 'partial_approved', 'rejected'].includes(application.status)) {
       application.reviewedAt = item.updatedAt
-      application.completedAt = item.updatedAt
+      if (['delivered', 'rejected'].includes(application.status))
+        application.completedAt = item.updatedAt
     }
     application.answer = `<p>资源申请审批已更新：${resourceTypeLabel(item.resourceType)} / ${item.resourceSubtype} / ${resourceApprovalStatusText(item.approvalStatus)}。</p>`
     return { applicationId: application.id, item }
   })
 }
 
-function aggregateResourceApplicationStatusForWorker(items: Pick<ApplicationItem, 'approvalStatus'>[]) {
+function aggregateResourceApplicationStatusForWorker(items: Pick<ApplicationItem, 'approvalStatus' | 'provisionStatus'>[], currentStatus?: WelfareApplication['status']) {
   if (!items.length)
     return 'draft' as WelfareApplication['status']
-  if (items.every(item => item.approvalStatus === 'rejected'))
+  if (items.some(item => item.approvalStatus === 'pending'))
+    return 'in_review' as WelfareApplication['status']
+
+  const approvedItems = items.filter(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus))
+  const rejectedCount = items.filter(item => item.approvalStatus === 'rejected').length
+  if (!approvedItems.length && rejectedCount === items.length)
     return 'rejected' as WelfareApplication['status']
-  if (items.every(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus)))
-    return 'approved' as WelfareApplication['status']
-  if (items.some(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus)) && items.every(item => item.approvalStatus !== 'pending'))
-    return 'partial_approved' as WelfareApplication['status']
-  return 'in_review' as WelfareApplication['status']
+  if (approvedItems.length && approvedItems.every(item => item.provisionStatus === 'completed'))
+    return 'delivered' as WelfareApplication['status']
+  if (approvedItems.length)
+    return 'pending_allocation' as WelfareApplication['status']
+  return currentStatus === 'partial_approved' ? 'partial_approved' as WelfareApplication['status'] : 'rejected' as WelfareApplication['status']
+}
+
+function stringPayloadField(payload: Record<string, unknown>, key: string) {
+  const value = payload[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeManualProvisionPayload(payload: Record<string, unknown>) {
+  const resourceName = stringPayloadField(payload, 'resourceName')
+  const resourceType = stringPayloadField(payload, 'resourceType')
+  const accessUrl = stringPayloadField(payload, 'accessUrl')
+  const credential = stringPayloadField(payload, 'credential')
+  const expiresAt = stringPayloadField(payload, 'expiresAt')
+  const note = stringPayloadField(payload, 'note')
+  if (!resourceName)
+    throw new Error('请填写资源名称')
+  if (!resourceType)
+    throw new Error('请选择资源类型')
+  if (!accessUrl && !credential)
+    throw new Error('请至少填写访问地址或凭据')
+  return {
+    resourceName,
+    resourceType,
+    accessUrl,
+    credential,
+    expiresAt,
+    note,
+  }
+}
+
+function manualProvisionNote(provisionPayload: ReturnType<typeof normalizeManualProvisionPayload>) {
+  const parts = [
+    `资源：${provisionPayload.resourceName}`,
+    `类型：${provisionPayload.resourceType}`,
+    provisionPayload.accessUrl ? `访问地址：${provisionPayload.accessUrl}` : '',
+    provisionPayload.credential ? `凭据：${provisionPayload.credential}` : '',
+    provisionPayload.expiresAt ? `有效期：${provisionPayload.expiresAt}` : '',
+    provisionPayload.note ? `备注：${provisionPayload.note}` : '',
+  ].filter(Boolean)
+  return parts.join('\n')
 }
 
 export async function completeAdminResourceProvisionAction(request: Request, env: WorkerEnv) {
@@ -4060,13 +4106,35 @@ export async function completeAdminResourceProvisionAction(request: Request, env
       throw new Error('资源明细不存在')
     if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
       throw new Error('只有通过的资源明细需要开通')
+    const provisionPayload = normalizeManualProvisionPayload(payload)
     item.provisionStatus = 'completed'
     item.lifecycleStatus = resolveResourceLifecycleStatus({ ...item, provisionStatus: 'completed', lifecycleStatus: undefined })
-    item.provisionNote = typeof payload.note === 'string' ? payload.note.trim() : undefined
+    item.provisionPayload = provisionPayload
+    item.provisionNote = manualProvisionNote(provisionPayload)
     item.provisionCompletedAt = now()
     item.activatedAt = item.lifecycleStatus === 'active' ? item.provisionCompletedAt : item.activatedAt
     item.updatedAt = item.provisionCompletedAt
+    application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [], application.status)
+    if (application.status === 'delivered')
+      application.completedAt = item.provisionCompletedAt
     return { applicationId: application.id, item }
+  })
+}
+
+export async function completeAdminApplicationAllocationAction(request: Request, env: WorkerEnv) {
+  return commitAdminStateAction(request, env, (state, admin, payload) => {
+    const application = adminApplication(state, payload.applicationId)
+    if (application.status !== 'pending_allocation')
+      throw new Error('只有待分配资源的申请可以完成发放')
+    const allocationPayload = normalizeManualProvisionPayload(payload)
+    const completedAt = now()
+    application.status = 'delivered'
+    application.allocationPayload = allocationPayload
+    application.allocationNote = manualProvisionNote(allocationPayload)
+    application.allocationCompletedAt = completedAt
+    application.completedAt = completedAt
+    pushApplicationMessage(application, admin.id, 'system', `<p>管理员已完成资源发放。</p><pre>${escapeHtml(application.allocationNote)}</pre>`)
+    return { applicationId: application.id }
   })
 }
 
@@ -4134,7 +4202,7 @@ export async function answerAdminApplicationAction(request: Request, env: Worker
       application.costCharged = true
     }
     const reviewedAt = now()
-    application.status = 'answered'
+    application.status = 'pending_allocation'
     application.answer = answer
     application.reviewedAt = reviewedAt
     application.processingStartedAt ??= reviewedAt
@@ -4206,8 +4274,8 @@ export async function rejectAdminApplicationAction(request: Request, env: Worker
 export async function completeAdminApplicationAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (application.status !== 'answered')
-      throw new Error('只有已答复的申请可以标记完成')
+    if (!['answered', 'delivered'].includes(application.status))
+      throw new Error('只有已答复或已交付的申请可以标记完成')
     const completedAt = now()
     application.status = 'completed'
     application.completedAt = completedAt
@@ -4249,7 +4317,7 @@ export async function addCurrentUserApplicationMessageAction(request: Request, e
       throw new Error('申请不存在')
     if (application.userId !== user.id)
       throw new Error('只能回复自己的申请工单')
-    if (!['pending_review', 'processing', 'needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
+    if (!['pending_review', 'processing', 'needs_supplement', 'answered', 'pending_allocation', 'delivered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持追加消息')
     if (payload.type === 'result_submission' || payload.type === 'system')
       throw new Error('用户不能提交管理员结果消息')

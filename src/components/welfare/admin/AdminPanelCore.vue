@@ -150,8 +150,8 @@ const DASHBOARD_TREND_DAY_COUNT = 7
 const DASHBOARD_TREND_WIDTH = 320
 const DASHBOARD_TREND_HEIGHT = 128
 const DASHBOARD_TREND_PADDING = 14
-const DONE_APPLICATION_STATUSES = new Set(['answered', 'completed', 'closed', 'approved', 'partial_approved'])
-const WAITING_APPLICATION_STATUSES = new Set(['reserved', 'pending_review', 'needs_supplement', 'submitted'])
+const DONE_APPLICATION_STATUSES = new Set(['answered', 'delivered', 'completed', 'closed', 'approved', 'partial_approved'])
+const WAITING_APPLICATION_STATUSES = new Set(['reserved', 'pending_review', 'needs_supplement', 'submitted', 'pending_allocation'])
 const PROCESSING_APPLICATION_STATUSES = new Set(['processing', 'in_review'])
 const USER_DRAWER_TABS = {
   account: 'account',
@@ -216,6 +216,8 @@ const applicationStatusText: Record<string, string> = {
   needs_supplement: '待补充资料',
   processing: '处理中',
   answered: '已答复',
+  pending_allocation: '待分配资源',
+  delivered: '已交付',
   completed: '已完成',
   closed: '已关闭',
   rejected: '已退回',
@@ -305,6 +307,8 @@ const applicationStatusFilterOptions = [
   { value: 'pending_review', label: applicationStatusText.pending_review },
   { value: 'needs_supplement', label: applicationStatusText.needs_supplement },
   { value: 'answered', label: applicationStatusText.answered },
+  { value: 'pending_allocation', label: applicationStatusText.pending_allocation },
+  { value: 'delivered', label: applicationStatusText.delivered },
   { value: 'completed', label: applicationStatusText.completed },
   { value: 'rejected', label: applicationStatusText.rejected },
 ]
@@ -462,9 +466,9 @@ function llmBudgetText(application: WelfareApplication) {
 }
 
 function statusPillClass(status: string) {
-  if (['answered', 'approved', 'completed', 'closed', 'success', 'active', 'released', 'returned'].includes(status))
+  if (['answered', 'approved', 'delivered', 'completed', 'closed', 'success', 'active', 'released', 'returned'].includes(status))
     return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
-  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning', 'provisioning', 'renewal_requested'].includes(status))
+  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning', 'provisioning', 'renewal_requested', 'pending_allocation'].includes(status))
     return 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'
   if (['rejected', 'revoked', 'danger', 'error', 'expired', 'reclaim_pending'].includes(status))
     return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'

@@ -914,6 +914,19 @@ function reviewToAnswer(review: AiApplicationReview) {
   return `<p><strong>AI 初审：</strong>${escapeHtml(resultText)} · 风险 ${escapeHtml(review.risk)}</p><p>${escapeHtml(review.summary)}</p>${review.reason ? `<p>${escapeHtml(review.reason)}</p>` : ''}`
 }
 
+async function notifyProvisionResult(env: WorkerEnv, application: WelfareApplication, title: string, body?: string) {
+  await createAndDispatchNotification(env, {
+    userId: application.userId,
+    event: 'application_answered',
+    title,
+    body: body || application.answer || '你的申请资源发放状态已更新，请进入申请详情查看。',
+    data: {
+      applicationId: application.id,
+      type: application.type,
+    },
+  }).catch(() => undefined)
+}
+
 function appendProvisionMessage(application: WelfareApplication, adminUserId: string, content: string) {
   application.messages ??= []
   application.messages.push({
@@ -1015,7 +1028,7 @@ async function provisionCodeApplication(
   adminUserId: string,
   expectedVersion: number,
 ) {
-  if (!['answered', 'completed', 'closed'].includes(application.status))
+  if (!['answered', 'pending_allocation', 'completed', 'closed'].includes(application.status))
     throw new Error('LLMApi 申请尚未通过')
   if ((application.messages ?? []).some(item => item.type === 'system' && item.content.includes('NewAPI 自动发放')))
     return { status: 'skipped' as const, provider: 'newapi' as const, applicationId: application.id, reason: '该申请已自动发放' }
@@ -1024,9 +1037,19 @@ async function provisionCodeApplication(
     name: `TGW ${application.id}`,
     quota: application.llmApiBudgetUsd,
   })
-  const content = `<p><strong>NewAPI 自动发放：</strong>${escapeHtml(key.keyMasked)}，额度 ${key.quota}，有效期至 ${escapeHtml(key.expiresAt)}。明文 Key 已在本次发放响应中返回，请及时保存。</p>`
+  const content = `<p><strong>NewAPI 自动发放：</strong>额度 ${key.quota}，有效期至 ${escapeHtml(key.expiresAt)}。</p><pre>Key: ${escapeHtml(key.key)}</pre>`
+  application.status = 'delivered'
+  application.allocationPayload = {
+    resourceName: key.name,
+    resourceType: 'newapi',
+    credential: key.keyMasked,
+    expiresAt: key.expiresAt,
+  }
+  application.allocationCompletedAt = now()
+  application.completedAt = application.allocationCompletedAt
   appendProvisionMessage(application, adminUserId, content)
   await writeWelfareState(env, state, { expectedVersion })
+  await notifyProvisionResult(env, application, 'LLMApi 资源已自动发放')
   return {
     status: 'provisioned' as const,
     provider: 'newapi' as const,
@@ -1083,8 +1106,10 @@ async function provisionResourceApplication(
 
   if (!results.length) {
     const errorText = resourceProvisionFailureText(failures)
+    applyResourceApplicationProvisionStatus(application)
     appendResourceProvisionMessage(application, adminUserId, results, failures)
     await writeResourceProvisionState(env, state, application.id, adminUserId, expectedVersion, results, failures)
+    await notifyProvisionResult(env, application, '资源自动发放失败，待人工分配')
     return {
       status: 'pending_manual' as const,
       applicationId: application.id,
@@ -1092,8 +1117,10 @@ async function provisionResourceApplication(
     }
   }
 
+  applyResourceApplicationProvisionStatus(application)
   appendResourceProvisionMessage(application, adminUserId, results, failures)
   await writeResourceProvisionState(env, state, application.id, adminUserId, expectedVersion, results, failures)
+  await notifyProvisionResult(env, application, failures.length ? '部分资源已自动发放，仍有资源待人工分配' : '资源已自动发放')
   return {
     status: 'provisioned' as const,
     provider: 'resource' as const,
@@ -1101,6 +1128,18 @@ async function provisionResourceApplication(
     items: results,
     failures,
   }
+}
+
+function applyResourceApplicationProvisionStatus(application: WelfareApplication) {
+  const approvedItems = (application.resourceItems ?? []).filter(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus))
+  if (!approvedItems.length)
+    return
+  if (approvedItems.every(item => item.provisionStatus === 'completed')) {
+    application.status = 'delivered'
+    application.completedAt = now()
+    return
+  }
+  application.status = 'pending_allocation'
 }
 
 function resourceProvisionFailureText(failures: ResourceProvisionFailure[]) {
@@ -1121,7 +1160,15 @@ function appendResourceProvisionMessage(
   }
 
   const failureText = failures.length ? `，${failures.length} 个资源明细待人工处理` : ''
-  appendProvisionMessage(application, adminUserId, `<p><strong>资源自动发放：</strong>已完成 ${results.length} 个资源明细${failureText}。</p>`)
+  const details = results.map((result) => {
+    if (result.provider === 'sub2api') {
+      const rawKey = 'key' in result.key ? result.key.key : ''
+      const keyText = rawKey ? `Key: ${rawKey}` : `已复用绑定：${result.key.keyMasked}`
+      return `Sub2API 资源 ${result.itemId}\n${keyText}\n额度：$${result.key.quotaUsd}\n有效期：${result.key.expiresAt || '按默认配置'}`
+    }
+    return `数据库资源 ${result.itemId}\n连接串：${result.database.connectionUrl || result.database.connectionUrlMasked}\n用户名：${result.database.username}${result.database.password ? `\n密码：${result.database.password}` : ''}\n有效期：${result.database.expiresAt || '按默认配置'}`
+  }).join('\n\n')
+  appendProvisionMessage(application, adminUserId, `<p><strong>资源自动发放：</strong>已完成 ${results.length} 个资源明细${failureText}。</p><pre>${escapeHtml(details)}</pre>`)
 }
 
 function applyResourceProvisionResult(item: NonNullable<WelfareApplication['resourceItems']>[number], result: ResourceProvisionResultItem) {
@@ -1181,6 +1228,7 @@ async function writeResourceProvisionState(
       applyResourceProvisionFailure(item, failure)
   }
 
+  applyResourceApplicationProvisionStatus(latestApplication)
   appendResourceProvisionMessage(latestApplication, adminUserId, results, failures)
   await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
 }
@@ -1204,8 +1252,10 @@ async function markProvisionPending(
       }
     }
   }
+  application.status = 'pending_allocation'
   appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(message)}</p>`)
   await writeWelfareState(env, state, { expectedVersion })
+  await notifyProvisionResult(env, application, '资源自动发放失败，待人工分配')
 }
 
 async function enqueueResourceProvisionJob(env: WorkerEnv, payload: ResourceProvisionJobPayload) {

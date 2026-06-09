@@ -86,6 +86,7 @@ import {
   checkInTodayAction,
   claimDeliveryApplicationAction,
   completeApplicationAction,
+  completeApplicationAllocationAction,
   completeResourceProvisionAction,
   createCouponCodeAction,
   createCouponTemplateAction,
@@ -616,8 +617,18 @@ export const resourceReviewDrafts = reactive<Record<string, {
   approvedPayloadText: string
 }>>({})
 
-export const resourceProvisionDrafts = reactive<Record<string, string>>({})
+export const resourceProvisionDrafts = reactive<Record<string, ProvisionDraft>>({})
+export const applicationAllocationDrafts = reactive<Record<string, ProvisionDraft>>({})
 export const resourceAutoProvisionMessage = ref('')
+
+interface ProvisionDraft {
+  resourceName: string
+  resourceType: string
+  accessUrl: string
+  credential: string
+  expiresAt: string
+  note: string
+}
 
 export const applicationFiles = ref<UploadLikeFile[]>([])
 
@@ -1073,6 +1084,8 @@ export function useWelfareUiState() {
       needs_supplement: '待补充资料',
       processing: '处理中',
       answered: '已答复',
+      pending_allocation: '待分配资源',
+      delivered: '已交付',
       completed: '已结束',
       closed: '已关闭',
       rejected: '已退回',
@@ -1089,8 +1102,10 @@ export function useWelfareUiState() {
   }
 
   function statusTone(status: string) {
-    if (['completed', 'closed', 'approved'].includes(status))
+    if (['completed', 'closed', 'approved', 'delivered'].includes(status))
       return 'success'
+    if (status === 'pending_allocation')
+      return 'warning'
     if (status === 'answered')
       return 'info'
     if (status === 'partial_approved')
@@ -1421,6 +1436,12 @@ export function useWelfareUiState() {
     if (result.status === 'pending')
       return result.itemId ? `资源 ${result.itemId} 已进入后台自动发放队列，请稍后刷新查看结果。` : '自动发放已进入后台队列，请稍后刷新查看结果。'
 
+    if (result.status === 'pending_manual')
+      return `自动发放失败，已转入待人工分配：${result.error}`
+
+    if (result.status === 'skipped')
+      return result.reason ? `已进入待人工分配：${result.reason}` : '已进入待人工分配。'
+
     if (result.status === 'provisioned' && result.provider === 'newapi')
       return `NewAPI 自动发放：${result.key.name}\nKey: ${result.key.key}\n有效期：${result.key.expiresAt}`
 
@@ -1510,13 +1531,43 @@ export function useWelfareUiState() {
       await welfare.reloadWelfareState()
   }
 
+  function emptyProvisionDraft(): ProvisionDraft {
+    return {
+      resourceName: '',
+      resourceType: 'account',
+      accessUrl: '',
+      credential: '',
+      expiresAt: '',
+      note: '',
+    }
+  }
+
+  function provisionDraftFor(itemId: string) {
+    resourceProvisionDrafts[itemId] ??= emptyProvisionDraft()
+    return resourceProvisionDrafts[itemId]
+  }
+
+  function allocationDraftFor(applicationId: string) {
+    applicationAllocationDrafts[applicationId] ??= emptyProvisionDraft()
+    return applicationAllocationDrafts[applicationId]
+  }
+
   async function completeResourceProvision(applicationId: string, itemId: string) {
     await completeResourceProvisionAction({
       applicationId,
       itemId,
-      note: resourceProvisionDrafts[itemId],
+      ...provisionDraftFor(itemId),
     })
     delete resourceProvisionDrafts[itemId]
+    await welfare.reloadWelfareState()
+  }
+
+  async function completeApplicationAllocation(applicationId: string) {
+    await completeApplicationAllocationAction({
+      applicationId,
+      ...allocationDraftFor(applicationId),
+    })
+    delete applicationAllocationDrafts[applicationId]
     await welfare.reloadWelfareState()
   }
 
@@ -3311,6 +3362,7 @@ export function useWelfareUiState() {
     resourceApplicationItems,
     resourceReviewDrafts,
     resourceProvisionDrafts,
+    applicationAllocationDrafts,
     resourceAutoProvisionMessage,
     applicationFiles,
     studentForm,
@@ -3396,8 +3448,11 @@ export function useWelfareUiState() {
     submitResourceApplication,
     updateResourceDraft,
     resourceReviewDraftFor,
+    provisionDraftFor,
+    allocationDraftFor,
     approveResourceItem,
     completeResourceProvision,
+    completeApplicationAllocation,
     requestResourceLifecycle,
     updateResourceLifecycle,
     resetStudentFiles,

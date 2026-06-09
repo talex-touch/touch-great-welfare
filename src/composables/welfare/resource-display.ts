@@ -171,5 +171,5 @@ export function resourceTicketPrimaryText(application: Pick<WelfareApplication, 
 }
 
 export function resourceStatusAllowsDiscussion(status: RequestStatus) {
-  return ['submitted', 'in_review', 'approved', 'partial_approved', 'needs_supplement', 'processing', 'answered'].includes(status)
+  return ['submitted', 'in_review', 'approved', 'partial_approved', 'needs_supplement', 'processing', 'answered', 'pending_allocation', 'delivered'].includes(status)
 }

@@ -8,7 +8,7 @@ const welfare = useWelfareStore()
 const { currentUser } = useWelfareUiState()
 
 const handledApplications = computed(() => welfare.state.applications
-  .filter(item => ['answered', 'completed', 'approved', 'partial_approved', 'closed'].includes(item.status))
+  .filter(item => ['answered', 'delivered', 'completed', 'approved', 'partial_approved', 'closed'].includes(item.status))
   .length)
 const primaryActionPath = computed(() => currentUser.value ? '/dashboard/apply/create' : '/login')
 </script>

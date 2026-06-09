@@ -59,7 +59,7 @@ const typeText: Record<RequestKind, string> = {
   resource: 'RESOURCE',
 }
 
-const finishedStatuses = ['answered', 'completed', 'closed', 'approved', 'partial_approved']
+const finishedStatuses = ['answered', 'delivered', 'completed', 'closed', 'approved', 'partial_approved']
 const pendingStatuses = ['pending_review', 'needs_supplement', 'processing', 'pending', 'submitted', 'in_review', 'draft']
 const visibleReviewApplications = computed(() => {
   if (isAdmin.value)

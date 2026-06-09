@@ -289,6 +289,10 @@ export async function completeResourceProvisionAction(payload: CompleteProvision
   return postDomainAction<{ ok: true }>('/api/admin/applications/complete-provision', payload)
 }
 
+export async function completeApplicationAllocationAction(payload: CompleteProvisionPayload) {
+  return postDomainAction<{ ok: true }>('/api/admin/applications/complete-allocation', payload)
+}
+
 export async function requestResourceLifecycleAction(payload: ResourceLifecycleActionPayload) {
   return postDomainAction<{ ok: true }>('/api/applications/resource-lifecycle', payload)
 }

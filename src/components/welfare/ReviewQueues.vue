@@ -43,10 +43,12 @@ const {
   rejectStudentVerification,
   submitImageGenerationApplication,
   resourceReviewDraftFor,
-  resourceProvisionDrafts,
   resourceAutoProvisionMessage,
+  provisionDraftFor,
+  allocationDraftFor,
   approveResourceItem,
   completeResourceProvision,
+  completeApplicationAllocation,
 } = useWelfareUiState()
 
 const { runSafely } = useWelfareFeedback()
@@ -137,7 +139,11 @@ function onReviewResourceItem(applicationId: string, itemId: string) {
 }
 
 function onCompleteProvision(applicationId: string, itemId: string) {
-  runSafely(() => completeResourceProvision(applicationId, itemId), '人工开通结果已记录')
+  runSafely(() => completeResourceProvision(applicationId, itemId), '人工开通结果已记录并已通知用户')
+}
+
+function onCompleteApplicationAllocation(applicationId: string) {
+  runSafely(() => completeApplicationAllocation(applicationId), '资源分配结果已发送给用户')
 }
 
 function llmBudgetText(item: { llmApiModelKey?: string, llmApiBudgetUsd?: number }) {
@@ -400,11 +406,36 @@ onMounted(() => {
                       <b>{{ field.value }}</b>
                     </div>
                   </div>
-                  <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-2 grid md:grid-cols-[1fr_auto]">
-                    <RichTextEditor v-model="resourceProvisionDrafts[resourceItem.id]" :min-height="100" placeholder="记录开通结果、账号、备注或交付方式" />
-                    <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
-                      提交结果
-                    </TxButton>
+                  <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-3 grid md:grid-cols-2">
+                    <label class="gap-2 grid">
+                      <span class="field-label">资源名称</span>
+                      <input v-model="provisionDraftFor(resourceItem.id).resourceName" class="form-input" placeholder="如 Codex API Key / 数据库账号">
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">资源类型</span>
+                      <input v-model="provisionDraftFor(resourceItem.id).resourceType" class="form-input" placeholder="account / api_key / database / subscription">
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">访问地址</span>
+                      <input v-model="provisionDraftFor(resourceItem.id).accessUrl" class="form-input" placeholder="控制台、订阅或连接地址">
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">有效期</span>
+                      <input v-model="provisionDraftFor(resourceItem.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
+                    </label>
+                    <label class="gap-2 grid md:col-span-2">
+                      <span class="field-label">凭据 / 备注</span>
+                      <textarea v-model="provisionDraftFor(resourceItem.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或连接凭据；会发送给用户" />
+                    </label>
+                    <label class="gap-2 grid md:col-span-2">
+                      <span class="field-label">补充说明</span>
+                      <textarea v-model="provisionDraftFor(resourceItem.id).note" class="form-textarea" rows="2" placeholder="使用说明、限制或交付方式" />
+                    </label>
+                    <div class="md:col-span-2">
+                      <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
+                        提交并发送给用户
+                      </TxButton>
+                    </div>
                   </div>
                   <div v-else class="text-xs text-slate-500 mt-2 dark:text-slate-400">
                     {{ resourceItem.provisionNote || '已完成' }} · {{ formatDate(resourceItem.provisionCompletedAt) }}
@@ -449,15 +480,52 @@ onMounted(() => {
                 用户提交补充后会自动回到待审核队列，补充内容会进入申请详情的协作线程。
               </p>
             </div>
+            <div v-else-if="isAdmin && item.type !== 'resource' && item.status === 'pending_allocation'" class="mt-4 p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20">
+              <div class="text-sm fw-900">
+                待分配资源
+              </div>
+              <p class="text-xs text-slate-500 leading-5 mt-1 dark:text-slate-400">
+                自动发放不可用或未配置，请填写完整资源信息；提交后会通过现有消息渠道发送给用户。
+              </p>
+              <div class="mt-3 gap-3 grid md:grid-cols-2">
+                <label class="gap-2 grid">
+                  <span class="field-label">资源名称</span>
+                  <input v-model="allocationDraftFor(item.id).resourceName" class="form-input" placeholder="如 Codex 订阅 / API Key">
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">资源类型</span>
+                  <input v-model="allocationDraftFor(item.id).resourceType" class="form-input" placeholder="account / api_key / subscription">
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">访问地址</span>
+                  <input v-model="allocationDraftFor(item.id).accessUrl" class="form-input" placeholder="订阅链接、控制台或登录地址">
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">有效期</span>
+                  <input v-model="allocationDraftFor(item.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
+                </label>
+                <label class="gap-2 grid md:col-span-2">
+                  <span class="field-label">凭据</span>
+                  <textarea v-model="allocationDraftFor(item.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或其他交付凭据；会发送给用户" />
+                </label>
+                <label class="gap-2 grid md:col-span-2">
+                  <span class="field-label">使用说明</span>
+                  <textarea v-model="allocationDraftFor(item.id).note" class="form-textarea" rows="2" placeholder="限制、注意事项、后续续期方式等" />
+                </label>
+              </div>
+              <TxButton class="mt-4" size="sm" variant="primary" @click="onCompleteApplicationAllocation(item.id)">
+                完成分配并发送给用户
+              </TxButton>
+            </div>
             <RichTextEditor v-else-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : item.type === 'pro' ? '给用户的审核答复，或填写需要补充的具体材料' : '给用户的审核答复'" />
-            <label v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement'" class="option-check mt-4">
+            <label v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="option-check mt-4">
               <TxCheckbox v-model="rejectFraudulentDrafts[item.id]" variant="checkmark" aria-label="判定造假或不实包装" />
               <span>
                 <b>判定造假或不实包装</b>
                 <small>仅在确认存在虚构项目、冒用材料、AI 包装成本人经历、隐瞒关键事实等明显不实情况时勾选；退回后 7 天内不能提交同类申请。</small>
               </span>
             </label>
-            <div v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement'" class="mt-4 flex flex-wrap gap-3">
+            <div v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="mt-4 flex flex-wrap gap-3">
               <TxButton variant="primary" @click="onApproveApplication(item.id, item.type)">
                 {{ item.type === 'image' ? '通过并生成图片' : '通过并答复' }}
               </TxButton>

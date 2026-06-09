@@ -22,6 +22,7 @@ import {
   claimDeliveryApplication,
   collaborationStateResponse,
   completeAdminApplicationAction,
+  completeAdminApplicationAllocationAction,
   completeAdminResourceProvisionAction,
   createAdminCouponCodeAction,
   createAdminCouponTemplateAction,
@@ -301,6 +302,8 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
         return await reviewAdminApplicationItemAction(request, env)
       if (url.pathname === '/api/admin/applications/complete-provision')
         return await completeAdminResourceProvisionAction(request, env)
+      if (url.pathname === '/api/admin/applications/complete-allocation')
+        return await completeAdminApplicationAllocationAction(request, env)
       if (url.pathname === '/api/admin/applications/resource-lifecycle')
         return await updateAdminResourceLifecycleAction(request, env)
       if (url.pathname === '/api/admin/applications/answer')

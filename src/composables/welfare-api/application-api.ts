@@ -2,6 +2,7 @@ export {
   addApplicationMessageAction,
   answerApplicationAction,
   completeApplicationAction,
+  completeApplicationAllocationAction,
   completeResourceProvisionAction,
   rejectApplicationAction,
   requestApplicationSupplementAdminAction,

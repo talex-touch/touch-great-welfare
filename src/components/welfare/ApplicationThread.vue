@@ -30,7 +30,7 @@ const messageFiles = ref<UploadLikeFile[]>([])
 const sending = ref(false)
 
 const isActive = computed(() =>
-  ['pending_review', 'needs_supplement', 'processing', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(props.applicationStatus))
+  ['pending_review', 'needs_supplement', 'processing', 'answered', 'pending_allocation', 'delivered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(props.applicationStatus))
 
 const remainingFreeSupplements = computed(() =>
   Math.max(0, (props.postApprovalSupplementLimit ?? 0) - (props.postApprovalSupplementCount ?? 0)))
@@ -105,7 +105,7 @@ const pipelineSteps = computed(() => {
   return [
     { key: 'pending_review', label: '提交审核', done: ['pending_review', 'submitted', 'in_review', 'needs_supplement', 'processing', 'answered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'pending_review' || status === 'submitted' || status === 'in_review' },
     { key: 'needs_supplement', label: '补充材料', done: ['processing', 'answered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'needs_supplement' },
-    { key: 'answered', label: '通过答复', done: ['answered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'answered' || status === 'approved' || status === 'partial_approved' },
+    { key: 'answered', label: '通过答复', done: ['answered', 'pending_allocation', 'delivered', 'approved', 'partial_approved', 'completed'].includes(status), active: status === 'answered' || status === 'pending_allocation' || status === 'approved' || status === 'partial_approved' },
     { key: 'completed', label: '完成归档', done: status === 'completed', active: status === 'completed' },
   ]
 })

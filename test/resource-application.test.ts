@@ -179,9 +179,10 @@ describe('resource application platform rules', async () => {
   it('aggregates item-level approvals into application status', () => {
     expect(aggregateResourceApplicationStatus([])).toBe('draft')
     expect(aggregateResourceApplicationStatus([{ approvalStatus: 'pending' }])).toBe('in_review')
-    expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved' }, { approvalStatus: 'adjusted_approved' }])).toBe('approved')
+    expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved' }, { approvalStatus: 'adjusted_approved' }])).toBe('pending_allocation')
+    expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved', provisionStatus: 'completed' }, { approvalStatus: 'adjusted_approved', provisionStatus: 'completed' }])).toBe('delivered')
     expect(aggregateResourceApplicationStatus([{ approvalStatus: 'rejected' }, { approvalStatus: 'rejected' }])).toBe('rejected')
-    expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved' }, { approvalStatus: 'rejected' }])).toBe('partial_approved')
+    expect(aggregateResourceApplicationStatus([{ approvalStatus: 'approved' }, { approvalStatus: 'rejected' }])).toBe('pending_allocation')
   })
 
   it('keeps attachments on each normalized resource item', () => {

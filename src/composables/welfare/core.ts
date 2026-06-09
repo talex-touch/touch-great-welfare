@@ -21,7 +21,7 @@ export {
 
 export type UserRole = 'admin' | 'reviewer' | 'user'
 export type RequestKind = 'code' | 'image' | 'pro' | 'resource'
-export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'needs_supplement' | 'processing' | 'answered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
+export type RequestStatus = 'draft' | 'reserved' | 'pending_review' | 'needs_supplement' | 'processing' | 'answered' | 'pending_allocation' | 'delivered' | 'completed' | 'closed' | 'rejected' | 'submitted' | 'in_review' | 'approved' | 'partial_approved' | 'cancelled'
 export type ApplicationMessageType = 'comment' | 'supplement' | 'result_submission' | 'system'
 export type StudentStatus = 'pending' | 'needs_supplement' | 'approved' | 'rejected' | 'revoked'
 export type VerificationType = 'student' | 'frontline'
@@ -154,6 +154,7 @@ export interface ApplicationItem {
   rejectReason?: string
   provisionStatus?: ResourceProvisionStatus
   lifecycleStatus?: ResourceLifecycleStatus
+  provisionPayload?: Record<string, any>
   provisionNote?: string
   provisionCompletedAt?: string
   activatedAt?: string
@@ -302,6 +303,9 @@ export interface WelfareApplication {
   cooldownUntil?: string
   answer?: string
   messages?: ApplicationMessage[]
+  allocationPayload?: Record<string, any>
+  allocationNote?: string
+  allocationCompletedAt?: string
   deliveryAssigneeId?: string
   deliveryClaimedAt?: string
   deliverySubmittedAt?: string
@@ -777,8 +781,13 @@ export interface ReviewApplicationItemPayload {
 
 export interface CompleteProvisionPayload {
   applicationId: string
-  itemId: string
+  itemId?: string
   note?: string
+  resourceName?: string
+  resourceType?: string
+  accessUrl?: string
+  credential?: string
+  expiresAt?: string
 }
 
 export interface ResourceLifecycleActionPayload {
@@ -2308,7 +2317,7 @@ function userReviewStats(userId: string, source: Pick<WelfareState, 'application
       continue
 
     stats.submitted += 1
-    if (['answered', 'completed', 'closed', 'approved', 'partial_approved'].includes(application.status))
+    if (['answered', 'pending_allocation', 'delivered', 'completed', 'closed', 'approved', 'partial_approved'].includes(application.status))
       stats.approved += 1
     if (application.status === 'rejected')
       stats.rejected += 1
@@ -2360,7 +2369,7 @@ function tieredCountScore(count: number, tiers: readonly { count: number, points
 
 export function buildUserLevelCard(user: User, source: Pick<WelfareState, 'applications' | 'studentVerifications'>): UserLevelCard {
   const stats = userReviewStats(user.id, source)
-  const approvedApplications = source.applications.filter(item => item.userId === user.id && ['answered', 'completed', 'closed'].includes(item.status))
+  const approvedApplications = source.applications.filter(item => item.userId === user.id && ['answered', 'pending_allocation', 'delivered', 'completed', 'closed'].includes(item.status))
   const openSourceApprovals = approvedApplications.filter(item => item.hasOpenSourceBadge).length
   const submittedSignal = Math.min(18, Math.floor(Math.sqrt(stats.submitted) * 4))
   const approvalSignal = tieredCountScore(approvedApplications.length, USER_LEVEL_APPROVAL_TIERS, 2)
@@ -2669,23 +2678,25 @@ export function termsForResourceTypes(resourceTypes: ResourceType[]) {
   return RESOURCE_TERMS.filter(term => ids.has(term.id))
 }
 
-export function aggregateResourceApplicationStatus(items: Pick<ApplicationItem, 'approvalStatus'>[]) {
+export function aggregateResourceApplicationStatus(items: Pick<ApplicationItem, 'approvalStatus' | 'provisionStatus'>[], currentStatus?: RequestStatus) {
   if (!items.length)
     return 'draft' as RequestStatus
   if (items.some(item => item.approvalStatus === 'pending'))
     return 'in_review' as RequestStatus
 
-  const approvedCount = items.filter(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus)).length
+  const approvedItems = items.filter(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus))
   const rejectedCount = items.filter(item => item.approvalStatus === 'rejected').length
-  if (approvedCount === items.length)
-    return 'approved' as RequestStatus
-  if (rejectedCount === items.length)
+  if (!approvedItems.length && rejectedCount === items.length)
     return 'rejected' as RequestStatus
-  return 'partial_approved' as RequestStatus
+  if (approvedItems.length && approvedItems.every(item => item.provisionStatus === 'completed'))
+    return 'delivered' as RequestStatus
+  if (approvedItems.length)
+    return 'pending_allocation' as RequestStatus
+  return currentStatus === 'partial_approved' ? 'partial_approved' as RequestStatus : 'rejected' as RequestStatus
 }
 
 function isActiveApplication(status: RequestStatus) {
-  return ['reserved', 'pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review'].includes(status)
+  return ['reserved', 'pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review', 'pending_allocation'].includes(status)
 }
 
 function isActiveStudentVerification(status: StudentStatus) {
@@ -3038,7 +3049,7 @@ export function useWelfareStore() {
     .filter(item => item.type === 'pro' && ['pending_review', 'needs_supplement', 'processing'].includes(item.status))
     .sort(compareReviewPriority))
   const pendingApplications = computed(() => state.applications
-    .filter(item => ['pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review'].includes(item.status))
+    .filter(item => ['pending_review', 'needs_supplement', 'processing', 'submitted', 'in_review', 'pending_allocation'].includes(item.status))
     .sort(compareReviewPriority))
   const pendingStudentVerifications = computed(() => state.studentVerifications
     .filter(item => item.status === 'pending' || item.status === 'needs_supplement')
@@ -3656,7 +3667,7 @@ export function useWelfareStore() {
 
   function isSquarePostAfterApproval(postId: string) {
     const application = squarePostApplication(postId)
-    return !!application && ['answered', 'completed', 'closed', 'approved', 'partial_approved'].includes(application.status)
+    return !!application && ['answered', 'pending_allocation', 'delivered', 'completed', 'closed', 'approved', 'partial_approved'].includes(application.status)
   }
 
   function squareBoostCooldownUntil(userId: string, referenceTime = now()) {
@@ -4354,13 +4365,49 @@ export function useWelfareStore() {
     item.expiresAt = resourceItemExpiresAt(item)
     item.updatedAt = now()
 
-    application.status = aggregateResourceApplicationStatus(application.resourceItems ?? [])
-    if (['approved', 'partial_approved', 'rejected'].includes(application.status)) {
+    application.status = aggregateResourceApplicationStatus(application.resourceItems ?? [], application.status)
+    if (['pending_allocation', 'delivered', 'approved', 'partial_approved', 'rejected'].includes(application.status)) {
       application.reviewedAt = item.updatedAt
-      application.completedAt = item.updatedAt
+      if (['delivered', 'rejected'].includes(application.status))
+        application.completedAt = item.updatedAt
     }
     application.answer = `<p>资源申请审批已更新：${resourceTypeLabel(item.resourceType)} / ${item.resourceSubtype} / ${resourceApprovalStatusText(item.approvalStatus)}。</p>`
     return item
+  }
+
+  function normalizeManualProvisionPayload(payload: CompleteProvisionPayload) {
+    const resourceName = payload.resourceName?.trim()
+    const resourceType = payload.resourceType?.trim()
+    const accessUrl = payload.accessUrl?.trim()
+    const credential = payload.credential?.trim()
+    const expiresAt = payload.expiresAt?.trim()
+    const note = payload.note?.trim()
+    if (!resourceName)
+      throw new Error('请填写资源名称')
+    if (!resourceType)
+      throw new Error('请选择资源类型')
+    if (!accessUrl && !credential)
+      throw new Error('请至少填写访问地址或凭据')
+    return {
+      resourceName,
+      resourceType,
+      accessUrl,
+      credential,
+      expiresAt,
+      note,
+    }
+  }
+
+  function manualProvisionNote(payload: CompleteProvisionPayload, provisionPayload = normalizeManualProvisionPayload(payload)) {
+    const parts = [
+      `资源：${provisionPayload.resourceName}`,
+      `类型：${provisionPayload.resourceType}`,
+      provisionPayload.accessUrl ? `访问地址：${provisionPayload.accessUrl}` : '',
+      provisionPayload.credential ? `凭据：${provisionPayload.credential}` : '',
+      provisionPayload.expiresAt ? `有效期：${provisionPayload.expiresAt}` : '',
+      provisionPayload.note ? `备注：${provisionPayload.note}` : '',
+    ].filter(Boolean)
+    return parts.join('\n')
   }
 
   function completeResourceProvision(payload: CompleteProvisionPayload) {
@@ -4376,12 +4423,17 @@ export function useWelfareStore() {
     if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
       throw new Error('只有通过的资源明细需要开通')
 
+    const provisionPayload = normalizeManualProvisionPayload(payload)
     item.provisionStatus = 'completed'
     item.lifecycleStatus = resolveResourceLifecycleStatus({ ...item, provisionStatus: 'completed', lifecycleStatus: undefined })
-    item.provisionNote = payload.note?.trim()
+    item.provisionPayload = provisionPayload
+    item.provisionNote = manualProvisionNote(payload, provisionPayload)
     item.provisionCompletedAt = now()
     item.activatedAt = item.lifecycleStatus === 'active' ? item.provisionCompletedAt : item.activatedAt
     item.updatedAt = item.provisionCompletedAt
+    application.status = aggregateResourceApplicationStatus(application.resourceItems ?? [], application.status)
+    if (application.status === 'delivered')
+      application.completedAt = item.provisionCompletedAt
     return item
   }
 
@@ -4432,7 +4484,7 @@ export function useWelfareStore() {
     }
 
     const reviewedAt = now()
-    application.status = 'answered'
+    application.status = 'pending_allocation'
     application.answer = normalizedAnswer
     application.reviewedAt = reviewedAt
     application.processingStartedAt ??= reviewedAt
@@ -4510,8 +4562,8 @@ export function useWelfareStore() {
     const application = state.applications.find(item => item.id === applicationId)
     if (!application)
       throw new Error('申请不存在')
-    if (application.status !== 'answered')
-      throw new Error('只有已答复的申请可以标记完成')
+    if (!['answered', 'delivered'].includes(application.status))
+      throw new Error('只有已答复或已交付的申请可以标记完成')
 
     const completedAt = now()
     application.status = 'completed'
@@ -4573,11 +4625,11 @@ export function useWelfareStore() {
       throw new Error('申请不存在')
     if (application.userId !== currentUser.value.id)
       throw new Error('只能补充自己的申请材料')
-    if (!['needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
+    if (!['needs_supplement', 'answered', 'pending_allocation', 'delivered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持补充材料')
     if (['submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status) && application.type !== 'resource')
       throw new Error('只有资源工单支持该阶段补充材料')
-    if (application.status === 'answered') {
+    if (['answered', 'pending_allocation', 'delivered'].includes(application.status)) {
       if (application.type !== 'pro')
         throw new Error('只有 Pro 申请通过后支持免费补充材料')
       const limit = proPostApprovalSupplementLimit(application) ?? 0
@@ -4605,7 +4657,7 @@ export function useWelfareStore() {
     const application = state.applications.find(item => item.id === applicationId)
     if (!application)
       throw new Error('申请不存在')
-    if (!['pending_review', 'processing', 'needs_supplement', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
+    if (!['pending_review', 'processing', 'needs_supplement', 'answered', 'pending_allocation', 'delivered', 'submitted', 'in_review', 'approved', 'partial_approved'].includes(application.status))
       throw new Error('该申请状态不支持追加消息')
     if (application.userId !== currentUser.value.id && currentUser.value.role !== 'admin')
       throw new Error('只能回复自己的申请工单')
@@ -4636,7 +4688,7 @@ export function useWelfareStore() {
     const source = state.applications.find(item => item.id === payload.applicationId)
     if (!source || source.userId !== currentUser.value.id || source.type !== 'pro')
       throw new Error('Pro 申请不存在')
-    if (!['answered', 'completed', 'closed'].includes(source.status))
+    if (!['answered', 'pending_allocation', 'delivered', 'completed', 'closed'].includes(source.status))
       throw new Error('该 Pro 申请尚未结束，暂不支持追加上下文')
 
     const currentTime = Date.now()
@@ -5019,7 +5071,7 @@ export function useWelfareStore() {
 
   function isDeliveryApplication(application: WelfareApplication) {
     return ['code', 'pro'].includes(application.type)
-      && application.status === 'answered'
+      && ['answered', 'pending_allocation', 'delivered'].includes(application.status)
       && !application.deliveryRewardedAt
   }
 

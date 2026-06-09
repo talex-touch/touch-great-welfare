@@ -2684,9 +2684,11 @@ function applicationNotification(application: WelfareApplication, event: Notific
   const isRejected = event === 'application_rejected'
   const typeName = application.type.toUpperCase()
   const message = latestApplicationMessage(application, 'result_submission')
+  const isPendingAllocation = application.status === 'pending_allocation'
+  const isDelivered = application.status === 'delivered'
   return {
-    title: isRejected ? `${typeName} 申请已退回` : `${typeName} 申请已答复`,
-    body: application.answer || (isRejected ? `你的 ${typeName} 申请已退回，已按退回规则处理积分。` : `你的 ${typeName} 申请已通过并完成答复。`),
+    title: isRejected ? `${typeName} 申请已退回` : isDelivered ? `${typeName} 资源已发放` : isPendingAllocation ? `${typeName} 申请待分配资源` : `${typeName} 申请已答复`,
+    body: application.answer || (isRejected ? `你的 ${typeName} 申请已退回，已按退回规则处理积分。` : isDelivered ? `你的 ${typeName} 申请资源已发放，请进入申请详情查看。` : isPendingAllocation ? `你的 ${typeName} 申请已通过，等待管理员分配资源。` : `你的 ${typeName} 申请已通过并完成答复。`),
     data: {
       applicationId: application.id,
       type: application.type,
@@ -2819,7 +2821,7 @@ export async function dispatchWelfareStateChangeNotifications(env: WorkerEnv, pr
     if (!before || before.status === application.status)
       continue
 
-    if (['pending_review', 'processing'].includes(before.status) && ['answered', 'completed', 'closed'].includes(application.status)) {
+    if (['pending_review', 'processing', 'submitted', 'in_review', 'pending_allocation'].includes(before.status) && ['answered', 'pending_allocation', 'delivered', 'completed', 'closed'].includes(application.status)) {
       const message = applicationNotification(application, 'application_answered')
       await notify({
         userId: application.userId,

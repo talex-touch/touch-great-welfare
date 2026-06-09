@@ -8,7 +8,7 @@ vi.stubGlobal('fetch', vi.fn(async () =>
 const { handleAiRequest } = await import('../src/worker/ai')
 const { handleSub2ApiRequest } = await import('../src/worker/sub2api')
 const { createSessionCookie } = await import('../src/worker/session')
-const { readWelfareState } = await import('../src/worker/welfare-state')
+const { handleWelfareStateRequest, readWelfareState } = await import('../src/worker/welfare-state')
 
 function createMemoryD1(state: WelfareState) {
   let appState = state
@@ -385,6 +385,8 @@ describe('sub2api resource provisioning', () => {
       application_id: 'app_1',
       item_id: 'item_1',
     })
+    expect(updatedState.applications[0].status).toBe('delivered')
+    expect(updatedState.applications[0].answer).toContain('sk-test-created')
     expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('completed')
   })
 
@@ -509,7 +511,44 @@ describe('sub2api resource provisioning', () => {
       error: 'Sub2API Admin API 不支持创建 API Key，且数据库连接未配置',
     })
     const updatedState = await readWelfareState(env) as WelfareState
+    expect(updatedState.applications[0].status).toBe('pending_allocation')
     expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('pending')
     expect(updatedState.applications[0].resourceItems?.[0].provisionNote).toContain('Sub2API Admin API 不支持创建 API Key')
+  })
+
+  it('lets admins complete pending manual allocation with a structured resource form', async () => {
+    const currentState = createState()
+    currentState.applications[0].status = 'pending_allocation'
+    const d1 = createMemoryD1(currentState)
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-sub2api',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://welfare.example.com/api/admin/applications/complete-allocation', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        applicationId: 'app_1',
+        resourceName: 'Codex 订阅',
+        resourceType: 'subscription',
+        accessUrl: 'https://sub.example.com/token',
+        credential: 'sub-token-1',
+        expiresAt: '2026-07-01',
+        note: '仅限本人使用',
+      }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    const updatedState = await readWelfareState(env) as WelfareState
+    expect(updatedState.applications[0].status).toBe('delivered')
+    expect(updatedState.applications[0].allocationPayload).toMatchObject({
+      resourceName: 'Codex 订阅',
+      resourceType: 'subscription',
+      credential: 'sub-token-1',
+    })
+    expect(updatedState.applications[0].messages?.at(-1)?.content).toContain('管理员已完成资源发放')
   })
 })
