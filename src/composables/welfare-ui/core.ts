@@ -9,6 +9,7 @@ import type { NotificationChannel, SystemLogItem } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from '../ai'
+import { subscribeBrowserPush } from '../browser-push'
 import { loadDatabaseProvisionConfig, loadOnePanelStatus, saveDatabaseProvisionConfig, testDatabaseProvisionConfig } from '../database-provisioning'
 import { loadEducationMailConfig, saveEducationMailConfig, syncEducationMailChallenges, testEducationMailConfig, verifyEducationMailChallenge } from '../education-mail'
 import { createGitHubAuthorization, loadGitHubAppConfig, saveGitHubAppConfig } from '../github-app'
@@ -28,7 +29,6 @@ import {
   savePushSubscription,
   sendEmailTest as sendEmailTestRequest,
   sendProviderEmailTest,
-  urlBase64ToUint8Array,
 } from '../notifications'
 import { createOAuthAuthorization, loadOAuthProviderConfigs, loadOAuthProviders, saveOAuthProviderConfigs } from '../oauth'
 import { loadPointTransactions } from '../points'
@@ -2548,10 +2548,6 @@ export function useWelfareUiState() {
         feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
         feishuAppId: notificationProviderConfigForm.feishuAppId,
         feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
-        feishuUserAccessToken: notificationProviderConfigForm.feishuUserAccessToken,
-        feishuRefreshToken: notificationProviderConfigForm.feishuRefreshToken,
-        feishuAccessTokenExpiresAt: notificationProviderConfigForm.feishuAccessTokenExpiresAt,
-        feishuRefreshTokenExpiresAt: notificationProviderConfigForm.feishuRefreshTokenExpiresAt,
         feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
         feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
         feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
@@ -2871,30 +2867,15 @@ export function useWelfareUiState() {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
-    if (!('serviceWorker' in navigator) || !('PushManager' in window))
-      throw new Error('当前浏览器不支持 Push 通知')
-
     const pushConfig = await loadPushPublicKey()
     if (!pushConfig.configured || !pushConfig.publicKey)
       throw new Error('服务端尚未配置 VAPID Key')
 
-    const permission = await Notification.requestPermission()
-    notificationSettingsForm.permission = permission
-    if (permission !== 'granted')
-      throw new Error('浏览器通知权限未授权')
-
-    const registration = await navigator.serviceWorker.register('/notification-sw.js')
-    const existing = await registration.pushManager.getSubscription()
-    const subscription = existing ?? await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(pushConfig.publicKey),
-    })
+    const result = await subscribeBrowserPush(pushConfig.publicKey)
+    notificationSettingsForm.permission = result.permission
     applyNotificationSettings(await savePushSubscription(
       welfare.currentUser.value.id,
-      subscription.toJSON() as {
-        endpoint: string
-        keys: { p256dh: string, auth: string }
-      },
+      result.subscription,
     ))
   }
 

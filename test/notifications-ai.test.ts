@@ -77,6 +77,7 @@ function createMemoryD1() {
   const notifications: Record<string, unknown>[] = []
   const deliveries: Record<string, unknown>[] = []
   const settings: Record<string, unknown>[] = []
+  const pushSubscriptions: Record<string, unknown>[] = []
   const pointTransactions: Record<string, unknown>[] = []
   const queries: Array<{ method: 'all' | 'first' | 'run', query: string, values: unknown[] }> = []
   let providerConfig: Record<string, unknown> | null = null
@@ -88,6 +89,7 @@ function createMemoryD1() {
       notifications,
       deliveries,
       settings,
+      pushSubscriptions,
       pointTransactions,
       queries,
       get providerConfig() {
@@ -140,6 +142,51 @@ function createMemoryD1() {
               provider: this.values[7] ?? '',
               created_at: '2026-06-01T00:00:00.000Z',
             })
+          }
+          if (query.includes('insert into notification_settings')) {
+            const existing = settings.find(item => item.user_id === this.values[0])
+            const next = {
+              user_id: this.values[0],
+              email_enabled: this.values[1] ?? existing?.email_enabled ?? 0,
+              email_address: this.values[2] ?? existing?.email_address ?? '',
+              feishu_enabled: this.values[3] ?? existing?.feishu_enabled ?? 0,
+              feishu_webhook_encrypted: this.values[4] ?? existing?.feishu_webhook_encrypted ?? null,
+              browser_push_enabled: this.values[5] ?? existing?.browser_push_enabled ?? 0,
+            }
+            if (existing)
+              Object.assign(existing, next)
+            else
+              settings.push(next)
+          }
+          if (query.includes('update notification_settings set browser_push_enabled')) {
+            for (const setting of settings) {
+              if (this.values.length < 2 || setting.user_id === this.values[1])
+                setting.browser_push_enabled = this.values[0]
+            }
+          }
+          if (query.includes('insert into push_subscriptions')) {
+            const existing = pushSubscriptions.find(item => item.endpoint === this.values[2])
+            const next = {
+              id: this.values[0],
+              user_id: this.values[1],
+              endpoint: this.values[2],
+              p256dh: this.values[3],
+              auth: this.values[4],
+              user_agent: this.values[5],
+              enabled: 1,
+            }
+            if (existing)
+              Object.assign(existing, next)
+            else
+              pushSubscriptions.push(next)
+          }
+          if (query.includes('update push_subscriptions set enabled = 0')) {
+            for (const subscription of pushSubscriptions) {
+              if (!this.values.length || subscription.id === this.values[0]) {
+                subscription.enabled = 0
+                subscription.disabled_at = '2026-06-01T00:00:00.000Z'
+              }
+            }
           }
           if (query.includes('insert into notification_provider_config')) {
             providerConfig = {
@@ -208,6 +255,11 @@ function createMemoryD1() {
               count: deliveries.filter(item => item.provider === this.values[0] && item.status === 'sent').length,
             }
           }
+          if (query.includes('select count(*) as count') && query.includes('push_subscriptions')) {
+            return {
+              count: pushSubscriptions.filter(item => item.user_id === this.values[0] && (item.enabled === 1 || item.enabled === true)).length,
+            }
+          }
           if (query.includes('from point_transactions where id'))
             return pointTransactions.find(item => item.id === this.values[0]) ?? null
           return null
@@ -216,6 +268,11 @@ function createMemoryD1() {
           queries.push({ method: 'all', query, values: [...this.values] })
           if (query.includes('pragma table_info'))
             return { results: [] }
+          if (query.includes('from push_subscriptions')) {
+            return {
+              results: pushSubscriptions.filter(item => item.user_id === this.values[0] && (item.enabled === 1 || item.enabled === true)),
+            }
+          }
           if (query.includes('from point_transactions'))
             return { results: [] }
           return { results: [] }
@@ -501,6 +558,28 @@ describe('notification dispatch', () => {
     expect(cleared.configured.feishuMail).toBe(false)
     expect(cleared.feishuAppSecretMasked).toBe('')
     expect(cleared.feishuRefreshTokenMasked).toBe('')
+  })
+
+  it('saves Feishu mail config without manual user tokens', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+
+    const saved = await saveNotificationProvider(d1, 'admin_1', {
+      feishuUserAccessToken: '',
+      feishuRefreshToken: '',
+      feishuAccessTokenExpiresAt: '',
+      feishuRefreshTokenExpiresAt: '',
+    })
+
+    expect(saved.configured.feishuMail).toBe(true)
+    expect(saved.feishuAppId).toBe('cli_test')
+    expect(saved.feishuAppSecretMasked).toBeTruthy()
+    expect(saved.feishuRefreshTokenMasked).toBe('')
   })
 
   it('uses Feishu mail before Resend and charges email points once', async () => {

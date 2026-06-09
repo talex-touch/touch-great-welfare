@@ -293,7 +293,7 @@ function codeApplication(overrides: Partial<WelfareApplication> = {}): WelfareAp
     rejectionFraudulent: false,
     storageExtended: false,
     storageExtensionCost: 0,
-    retentionExpiresAt: '2026-06-09T00:00:00.000Z',
+    retentionExpiresAt: `${dateKeyOffset(30)}T00:00:00.000Z`,
     createdAt: '2026-06-02T00:00:00.000Z',
     ...overrides,
   }

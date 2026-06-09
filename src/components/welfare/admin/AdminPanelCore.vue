@@ -2911,22 +2911,9 @@ onMounted(() => {
                 <span class="field-label">飞书 App Secret</span>
                 <TxInput v-model="notificationProviderConfigForm.feishuAppSecret" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuAppSecretMasked || '保存到服务端加密配置'" />
               </label>
-              <label class="gap-2 grid">
-                <span class="field-label">飞书 user_access_token</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuUserAccessToken" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuUserAccessTokenMasked || '可留空，由 refresh token 自动刷新'" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">飞书 refresh_token</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuRefreshToken" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuRefreshTokenMasked || '需要 offline_access 权限'" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">access token 过期时间</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuAccessTokenExpiresAt" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="2026-06-08T10:00:00.000Z" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">refresh token 过期时间</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuRefreshTokenExpiresAt" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="2026-06-15T10:00:00.000Z" />
-              </label>
+              <div class="text-xs text-slate-500 leading-5 p-3 rounded-2xl bg-slate-50 dark:text-slate-300 dark:bg-white/8 lg:col-span-2">
+                飞书邮件测试和投递会优先使用服务端 App ID / Secret 获取访问凭证；历史授权 token 若已存在会自动兼容，无需在后台手动填写。
+              </div>
               <label class="gap-2 grid">
                 <span class="field-label">飞书发信邮箱</span>
                 <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />

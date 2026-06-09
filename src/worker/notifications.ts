@@ -22,6 +22,7 @@ import { EMAIL_NOTIFICATION_COST } from '~/shared/notifications'
 import { richTextToPlainText } from '~/utils/rich-text'
 import {
   assertAdminRequest,
+  assertSafeExternalUrl,
   assertWelfareState,
   boolValue,
   createId,
@@ -225,6 +226,27 @@ function normalizeNotificationChannels(channels: NotificationChannel[] | undefin
 function assertEmail(value: string) {
   if (!/^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/.test(value))
     throw new Error('请填写有效邮箱')
+}
+
+function normalizeExternalHttpsUrl(value: string, label: string) {
+  try {
+    return assertSafeExternalUrl(value).toString()
+  }
+  catch (error) {
+    throw new Error(`${label}${error instanceof Error ? `：${error.message}` : '格式无效'}`)
+  }
+}
+
+function normalizePushEndpoint(value: string) {
+  const endpoint = normalizeExternalHttpsUrl(value, 'Push endpoint 无效')
+  if (endpoint.length > 2048)
+    throw new Error('Push endpoint 过长')
+  return endpoint
+}
+
+function assertPushKey(value: string, label: string) {
+  if (!/^[\w-]+=*$/.test(value) || value.length < 16 || value.length > 512)
+    throw new Error(`${label} 参数无效`)
 }
 
 function escapeHtml(value: string) {
@@ -1139,13 +1161,13 @@ async function saveSettings(env: WorkerEnv, user: User, payload: SaveNotificatio
   if (payload.clearFeishuWebhook)
     feishuWebhookEncrypted = null
   if (payload.feishuWebhookUrl?.trim()) {
-    const url = payload.feishuWebhookUrl.trim()
-    if (!url.startsWith('https://'))
-      throw new Error('飞书 Webhook 必须使用 HTTPS')
+    const url = normalizeExternalHttpsUrl(payload.feishuWebhookUrl, '飞书 Webhook 无效')
     feishuWebhookEncrypted = await encryptSecret(url, encryptionSecret(env))
   }
   if (payload.feishuEnabled && !feishuWebhookEncrypted)
     throw new Error('启用飞书通知前请先填写 Webhook')
+  if (payload.browserPushEnabled && await countPushSubscriptions(env, user.id) === 0)
+    throw new Error('启用浏览器 Push 前请先完成注册')
 
   if (shouldUseD1(env)) {
     await env.LOCAL_DB!
@@ -1264,6 +1286,9 @@ async function savePushSubscription(env: WorkerEnv, userId: string, payload: Pus
   await ensureNotificationSchema(env)
   if (!payload.endpoint || !payload.keys?.p256dh || !payload.keys?.auth)
     throw new Error('Push 订阅参数无效')
+  const endpoint = normalizePushEndpoint(payload.endpoint)
+  assertPushKey(payload.keys.p256dh, 'Push p256dh')
+  assertPushKey(payload.keys.auth, 'Push auth')
 
   const id = createId('psh')
   if (shouldUseD1(env)) {
@@ -1274,7 +1299,7 @@ async function savePushSubscription(env: WorkerEnv, userId: string, payload: Pus
         on conflict (endpoint)
         do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent, enabled = 1, disabled_at = null, updated_at = current_timestamp
       `)
-      .bind(id, userId, payload.endpoint, payload.keys.p256dh, payload.keys.auth, userAgent)
+      .bind(id, userId, endpoint, payload.keys.p256dh, payload.keys.auth, userAgent)
       .run()
     await setBrowserPushEnabled(env, userId, true)
     return
@@ -1285,7 +1310,7 @@ async function savePushSubscription(env: WorkerEnv, userId: string, payload: Pus
     values ($1, $2, $3, $4, $5, $6, true, now())
     on conflict (endpoint)
     do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent, enabled = true, disabled_at = null, updated_at = now()
-  `, [id, userId, payload.endpoint, payload.keys.p256dh, payload.keys.auth, userAgent])
+  `, [id, userId, endpoint, payload.keys.p256dh, payload.keys.auth, userAgent])
   await setBrowserPushEnabled(env, userId, true)
 }
 
@@ -1325,6 +1350,22 @@ async function disablePushSubscription(env: WorkerEnv, id: string) {
   }
 
   await getPool(env).query('update push_subscriptions set enabled = false, disabled_at = now(), updated_at = now() where id = $1', [id])
+}
+
+async function disableAllPushSubscriptions(env: WorkerEnv) {
+  await ensureNotificationSchema(env)
+  if (shouldUseD1(env)) {
+    await env.LOCAL_DB!
+      .prepare('update push_subscriptions set enabled = 0, disabled_at = current_timestamp, updated_at = current_timestamp where enabled = 1')
+      .run()
+    await env.LOCAL_DB!
+      .prepare('update notification_settings set browser_push_enabled = 0, updated_at = current_timestamp where browser_push_enabled = 1')
+      .run()
+    return
+  }
+
+  await getPool(env).query('update push_subscriptions set enabled = false, disabled_at = now(), updated_at = now() where enabled = true')
+  await getPool(env).query('update notification_settings set browser_push_enabled = false, updated_at = now() where browser_push_enabled = true')
 }
 
 async function deletePushSubscription(env: WorkerEnv, userId: string, id: string) {
@@ -1400,7 +1441,6 @@ function isFeishuMailConfigured(config: Awaited<ReturnType<typeof getEffectiveNo
     config.feishuMailEnabled
     && config.feishuAppId
     && config.feishuAppSecret
-    && config.feishuRefreshToken
     && config.feishuUserMailboxId
   )
 }
@@ -1498,8 +1538,6 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
       throw new Error('启用飞书邮件前请填写 App ID')
     if (!feishuAppSecretEncrypted)
       throw new Error('启用飞书邮件前请填写 App Secret')
-    if (!feishuRefreshTokenEncrypted)
-      throw new Error('启用飞书邮件前请填写 refresh token')
     if (!feishuUserMailboxId)
       throw new Error('启用飞书邮件前请填写发信邮箱')
   }
@@ -1647,6 +1685,7 @@ async function generateVapidKeys(env: WorkerEnv, payload: GenerateVapidKeysPaylo
   if (current.vapidPublicKey && current.vapidPrivateKey && !payload.regenerate)
     throw new Error('VAPID 已配置，如需替换请确认重新生成')
 
+  const shouldDisableExistingSubscriptions = !!(current.vapidPublicKey && current.vapidPrivateKey && payload.regenerate)
   const keys = await createVapidKeyPair()
   const next = await saveNotificationProviderConfig(env, {
     resendFromEmail: current.resendFromEmail,
@@ -1663,6 +1702,16 @@ async function generateVapidKeys(env: WorkerEnv, payload: GenerateVapidKeysPaylo
     feishuSiteBaseUrl: current.feishuSiteBaseUrl,
     feishuDailyLimit: current.feishuDailyLimit,
   })
+
+  if (shouldDisableExistingSubscriptions) {
+    await disableAllPushSubscriptions(env)
+    await writeSystemLog(env, {
+      level: 'warning',
+      module: 'notifications',
+      action: 'push.vapid_regenerated',
+      message: 'VAPID 密钥已重新生成，旧浏览器 Push 订阅已禁用',
+    })
+  }
 
   return {
     ...serializeNotificationProviderConfig(next),
@@ -1735,7 +1784,7 @@ async function updateFeishuTokens(
 
 async function refreshFeishuUserAccessToken(env: WorkerEnv, config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
   if (!config.feishuAppId || !config.feishuAppSecret || !config.feishuRefreshToken)
-    throw new Error('飞书邮件刷新凭证未配置')
+    throw new Error('飞书用户授权凭证未配置')
 
   const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
     method: 'POST',
@@ -1772,7 +1821,34 @@ async function refreshFeishuUserAccessToken(env: WorkerEnv, config: Awaited<Retu
   return result.access_token
 }
 
+async function getFeishuTenantAccessToken(config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  if (!config.feishuAppId || !config.feishuAppSecret)
+    throw new Error('飞书 App ID 或 App Secret 未配置')
+
+  const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      app_id: config.feishuAppId,
+      app_secret: config.feishuAppSecret,
+    }),
+  })
+  const text = await response.text()
+  const result = text
+    ? JSON.parse(text) as { code?: number, tenant_access_token?: string, msg?: string, error?: string, error_description?: string }
+    : {}
+  if (!response.ok || result.code !== 0)
+    throw new Error(result.error_description || result.error || result.msg || `飞书 tenant_access_token 获取失败：${response.status}`)
+  if (!result.tenant_access_token)
+    throw new Error('飞书 tenant_access_token 响应为空')
+  return result.tenant_access_token
+}
+
 async function feishuAccessTokenForSend(env: WorkerEnv, config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>) {
+  if (!config.feishuUserAccessToken && !config.feishuRefreshToken)
+    return getFeishuTenantAccessToken(config)
   if (shouldRefreshFeishuAccessToken(config.feishuUserAccessToken, config.feishuAccessTokenExpiresAt))
     return refreshFeishuUserAccessToken(env, config)
   return config.feishuUserAccessToken
@@ -1902,7 +1978,7 @@ async function dispatchEmailChannel(
 }
 
 async function sendFeishu(env: WorkerEnv, encryptedWebhook: string, title: string, body: string) {
-  const webhook = await decryptSecret(encryptedWebhook, encryptionSecret(env))
+  const webhook = normalizeExternalHttpsUrl(await decryptSecret(encryptedWebhook, encryptionSecret(env)), '飞书 Webhook 无效')
   const response = await fetchWithTimeout(webhook, {
     method: 'POST',
     headers: {
@@ -1957,9 +2033,10 @@ async function createVapidJwt(env: WorkerEnv, endpoint: string) {
 }
 
 async function sendPush(env: WorkerEnv, subscription: PushSubscriptionRow) {
+  const endpoint = normalizePushEndpoint(subscription.endpoint)
   const config = await getEffectiveNotificationProviderConfig(env)
-  const jwt = await createVapidJwt(env, subscription.endpoint)
-  const response = await fetchWithTimeout(subscription.endpoint, {
+  const jwt = await createVapidJwt(env, endpoint)
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: {
       authorization: `vapid t=${jwt}, k=${config.vapidPublicKey}`,
@@ -2419,8 +2496,20 @@ async function enqueueNotification(env: WorkerEnv, input: CreateNotificationInpu
 async function createAndDispatchNotificationForUser(env: WorkerEnv, user: User, input: CreateNotificationInput) {
   const notificationId = await insertNotification(env, input)
   await recordDelivery(env, notificationId, 'in_app', 'sent')
-  const settings = await getSettingsRow(env, user.id)
-  await dispatchOptionalChannels(env, user, settings, notificationId, input)
+  try {
+    const settings = await getSettingsRow(env, user.id)
+    await dispatchOptionalChannels(env, user, settings, notificationId, input)
+  }
+  catch (error) {
+    await writeSystemLog(env, {
+      level: 'error',
+      module: 'notifications',
+      action: 'dispatch.optional_channels_failed',
+      message: errorMessage(error, '外部通知渠道发送失败'),
+      refId: notificationId,
+      details: { userId: user.id, event: input.event },
+    }).catch(() => {})
+  }
   return notificationId
 }
 
