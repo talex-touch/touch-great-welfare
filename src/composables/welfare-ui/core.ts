@@ -1546,8 +1546,7 @@ export function useWelfareUiState() {
       provisionResult = await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId)
       applyAutoProvisionMessage(provisionResult)
     }
-    if (provisionResult?.status !== 'pending')
-      await welfare.reloadWelfareState()
+    await welfare.reloadWelfareState()
   }
 
   function emptyProvisionDraft(): ProvisionDraft {

@@ -600,6 +600,53 @@
   background: rgba(248, 250, 252, 0.9);
 }
 
+.admin-history-row--button {
+  width: 100%;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: inherit;
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.admin-history-row--button:hover,
+.admin-history-row--button:focus-visible {
+  background: rgba(239, 246, 255, 0.95);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.admin-verification-flip-dialog .TxFlipOverlay-Body {
+  padding: clamp(1.25rem, 2.4vw, 2rem);
+}
+
+.admin-verification-dialog {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.admin-verification-dialog__header {
+  padding: 0.25rem 0.35rem 0.5rem;
+}
+
+.admin-verification-dialog .application-detail-stat,
+.admin-verification-dialog .verification-detail-section {
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.admin-verification-dialog .verification-detail-section {
+  padding: clamp(1.25rem, 2vw, 1.65rem);
+}
+
+.admin-verification-dialog .rich-text-preview {
+  margin-top: 0.75rem;
+}
+
 .audit-row {
   display: flex;
   gap: 0.9rem;
@@ -715,6 +762,17 @@
 
 .dark .admin-history-row {
   background: rgba(255, 255, 255, 0.05);
+}
+
+.dark .admin-history-row--button:hover,
+.dark .admin-history-row--button:focus-visible {
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.dark .admin-verification-dialog .application-detail-stat,
+.dark .admin-verification-dialog .verification-detail-section {
+  background: rgba(255, 255, 255, 0.055);
 }
 
 @media (max-width: 767px) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
-import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
+import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxFlipOverlay, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -10,6 +10,7 @@ import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/w
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from '../RichTextEditor.vue'
 import RichTextView from '../RichTextView.vue'
+import VerificationAttachmentGrid from '../VerificationAttachmentGrid.vue'
 
 const {
   state,
@@ -148,6 +149,7 @@ interface AuditEvent {
 const ALL_FILTER = 'all'
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 const USER_DETAIL_LIMIT = 6
+const USER_DRAWER_Z_INDEX = 120
 const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
 const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -426,6 +428,9 @@ const userDrawerMode = ref<'detail' | 'points'>('detail')
 const activeUserDrawerTab = ref<UserDrawerTab>(USER_DRAWER_TABS.account)
 const pendingAdminUserAction = ref('')
 const revokeStudentReason = ref('')
+const selectedStudentVerificationId = ref('')
+const isStudentVerificationDialogOpen = ref(false)
+const studentVerificationDialogSource = ref<HTMLElement | null>(null)
 const adminTransactions = computed(() => pointTransactions.value)
 
 function userDisplayName(userId: string) {
@@ -732,6 +737,22 @@ function closeUserDrawer() {
   isUserDrawerOpen.value = false
   pendingAdminUserAction.value = ''
   revokeStudentReason.value = ''
+  closeStudentVerificationDialog()
+}
+
+function openStudentVerificationDialog(id: string, event: MouseEvent) {
+  selectedStudentVerificationId.value = id
+  studentVerificationDialogSource.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  isStudentVerificationDialogOpen.value = true
+}
+
+function closeStudentVerificationDialog() {
+  isStudentVerificationDialogOpen.value = false
+}
+
+function handleStudentVerificationDialogClosed() {
+  selectedStudentVerificationId.value = ''
+  studentVerificationDialogSource.value = null
 }
 
 function openUserAudit(userId: string) {
@@ -956,6 +977,7 @@ const selectedUserDetail = computed(() => {
 
 const selectedUserRecentApplications = computed<WelfareApplication[]>(() => selectedUserDetail.value?.applications.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserRecentStudents = computed<StudentVerification[]>(() => selectedUserDetail.value?.studentVerifications.slice(0, USER_DETAIL_LIMIT) ?? [])
+const selectedStudentVerification = computed<StudentVerification | undefined>(() => selectedUserDetail.value?.studentVerifications.find(item => item.id === selectedStudentVerificationId.value))
 const selectedUserRecentTransactions = computed<CreditTransaction[]>(() => selectedUserDetail.value?.transactions.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserRecentCoupons = computed<UserCoupon[]>(() => selectedUserDetail.value?.coupons.slice(0, USER_DETAIL_LIMIT) ?? [])
 const selectedUserApprovedStudentVerification = computed<StudentVerification | undefined>(() => selectedUserDetail.value?.studentVerifications
@@ -3510,6 +3532,7 @@ onMounted(() => {
               direction="right"
               size="min(1120px, 92vw)"
               title="编辑用户"
+              :z-index="USER_DRAWER_Z_INDEX"
               mask-effect="blur"
               @close="closeUserDrawer"
             >
@@ -3724,9 +3747,15 @@ onMounted(() => {
                             <div v-if="!selectedUserRecentStudents.length" class="admin-empty">
                               暂无认证历史
                             </div>
-                            <div v-for="item in selectedUserRecentStudents" :key="item.id" class="admin-history-row">
+                            <button
+                              v-for="item in selectedUserRecentStudents"
+                              :key="item.id"
+                              type="button"
+                              class="admin-history-row admin-history-row--button"
+                              @click="openStudentVerificationDialog(item.id, $event)"
+                            >
                               <span class="admin-pill" :class="statusPillClass(item.status)">{{ studentStatusLabel(item.status) }}</span>
-                              <div class="flex-1 min-w-0">
+                              <div class="text-left flex-1 min-w-0">
                                 <div class="fw-900 truncate">
                                   {{ verificationTypeLabel(item.verificationType) }} · {{ item.category }}
                                 </div>
@@ -3734,8 +3763,8 @@ onMounted(() => {
                                   {{ [item.school, item.grade, item.educationLevel].filter(Boolean).join(' · ') || '未填写学校信息' }}
                                 </div>
                               </div>
-                              <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>
-                            </div>
+                              <span class="text-xs text-slate-500 whitespace-nowrap dark:text-slate-400">{{ formatDate(item.createdAt) }}</span>
+                            </button>
                           </div>
                         </section>
                       </div>
@@ -3959,6 +3988,116 @@ onMounted(() => {
                 </div>
               </template>
             </TxDrawer>
+
+            <Teleport to="body">
+              <TxFlipOverlay
+                v-if="selectedStudentVerification"
+                v-model="isStudentVerificationDialogOpen"
+                :source="studentVerificationDialogSource"
+                :header="false"
+                :mask-closable="true"
+                :scrollable="true"
+                mask-class="admin-verification-flip-mask"
+                card-class="application-detail-flip-dialog admin-verification-flip-dialog"
+                close-aria-label="关闭认证详情"
+                surface="pure"
+                @closed="handleStudentVerificationDialogClosed"
+              >
+                <section class="admin-verification-dialog">
+                  <div class="admin-verification-dialog__header flex flex-wrap gap-4 items-start justify-between">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap gap-2 items-center">
+                        <span class="verification-card__icon" :class="selectedStudentVerification.verificationType === 'frontline' ? 'i-carbon-campsite' : 'i-carbon-education'" />
+                        <div class="min-w-0">
+                          <h3 class="text-2xl fw-900 truncate">
+                            {{ selectedStudentVerification.realName }} · {{ verificationTypeLabel(selectedStudentVerification.verificationType) }}
+                          </h3>
+                          <p class="text-sm text-slate-500 mt-1 dark:text-slate-400">
+                            {{ selectedStudentVerification.category }} · {{ verificationOrganizationLabel(selectedStudentVerification.verificationType) }}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2 items-center justify-end">
+                      <span class="admin-pill" :class="statusPillClass(selectedStudentVerification.status)">
+                        {{ studentStatusLabel(selectedStudentVerification.status) }}
+                      </span>
+                      <span class="admin-pill" :class="selectedStudentVerification.feeReturned ? statusPillClass('success') : statusPillClass('warning')">
+                        {{ selectedStudentVerification.feeReturned ? '审核费已返还' : `审核费 ${formatPoints(selectedStudentVerification.reviewFee)}` }}
+                      </span>
+                      <TxButton size="sm" variant="ghost" @click="closeStudentVerificationDialog">
+                        关闭
+                      </TxButton>
+                    </div>
+                  </div>
+
+                  <div class="gap-3 grid md:grid-cols-4">
+                    <div class="application-detail-stat">
+                      <span>提交时间</span>
+                      <b>{{ formatDate(selectedStudentVerification.createdAt) }}</b>
+                    </div>
+                    <div class="application-detail-stat">
+                      <span>审核时间</span>
+                      <b>{{ formatOptionalDate(selectedStudentVerification.reviewedAt) }}</b>
+                    </div>
+                    <div class="application-detail-stat">
+                      <span>附件</span>
+                      <b>{{ selectedStudentVerification.attachments.length }} 个材料</b>
+                    </div>
+                    <div class="application-detail-stat">
+                      <span>认证编号</span>
+                      <b>{{ selectedStudentVerification.id }}</b>
+                    </div>
+                  </div>
+
+                  <div class="gap-4 grid lg:grid-cols-[1fr_1fr]">
+                    <section class="verification-detail-section">
+                      <h3>认证信息</h3>
+                      <dl class="verification-detail-list">
+                        <div>
+                          <dt>真实姓名</dt>
+                          <dd>{{ selectedStudentVerification.realName || '-' }}</dd>
+                        </div>
+                        <div>
+                          <dt>{{ verificationOrganizationLabel(selectedStudentVerification.verificationType) }}</dt>
+                          <dd>{{ selectedStudentVerification.school || '-' }}</dd>
+                        </div>
+                        <div>
+                          <dt>{{ selectedStudentVerification.verificationType === 'frontline' ? '服务周期' : '年级' }}</dt>
+                          <dd>{{ selectedStudentVerification.grade || '-' }}</dd>
+                        </div>
+                        <div v-if="selectedStudentVerification.identity || selectedStudentVerification.educationLevel">
+                          <dt>身份信息</dt>
+                          <dd>{{ [selectedStudentVerification.identity, selectedStudentVerification.educationLevel].filter(Boolean).join(' · ') }}</dd>
+                        </div>
+                        <div v-if="selectedStudentVerification.educationEmail">
+                          <dt>邮箱证明</dt>
+                          <dd>{{ selectedStudentVerification.educationEmail }}{{ selectedStudentVerification.educationEmailVerified ? ' · 已验证' : '' }}</dd>
+                        </div>
+                      </dl>
+                    </section>
+
+                    <section class="verification-detail-section">
+                      <h3>审核回复</h3>
+                      <RichTextView :content="selectedStudentVerification.reply || '暂无审核回复。'" class="rich-text-preview" />
+                    </section>
+                  </div>
+
+                  <section class="verification-detail-section">
+                    <h3>材料说明</h3>
+                    <RichTextView :content="selectedStudentVerification.notes || '暂无材料说明。'" class="rich-text-preview" />
+                  </section>
+
+                  <section class="verification-detail-section">
+                    <h3>附件材料</h3>
+                    <div v-if="!selectedStudentVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
+                      暂无附件。
+                    </div>
+                    <VerificationAttachmentGrid v-else :files="selectedStudentVerification.attachments" />
+                  </section>
+                </section>
+              </TxFlipOverlay>
+            </Teleport>
           </div>
         </TxTabItem>
 

@@ -52,5 +52,6 @@ export async function readWelfareStateFromTables(env: WorkerEnv) {
       createdAt: row.created_at,
     })) || [],
     pointTransactions: [],
+    transactions: [],  // 兼容旧字段名
   }
 }

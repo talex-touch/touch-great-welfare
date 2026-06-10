@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import type { RequestKind, WelfareApplication } from '~/composables/welfare'
+import type { ApplicationItem, RequestKind, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxFlipOverlay, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { formatDate, formatPoints } from '~/composables/welfare'
+import { useWelfareFeedback } from '~/composables/feedback'
+import { formatDate, formatPoints, resourceTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
+import { resourceItemSummaryFields } from '~/composables/welfare/resource-display'
 import { richTextToPlainText } from '~/utils/rich-text'
 import ApplicationDetailPanel from './ApplicationDetailPanel.vue'
 import ReviewQueues from './ReviewQueues.vue'
 
 const {
+  state,
   currentUser,
   currentUserApplications,
   pendingApplications,
@@ -18,11 +21,14 @@ const {
   statusText,
   statusTone,
   typeIcon,
+  userName,
   userEmail,
   userLevelCard,
+  reloadWelfareState,
 } = useWelfareUiState()
 
 const router = useRouter()
+const { runSafely } = useWelfareFeedback()
 const activeSection = ref<'mine' | 'review'>('mine')
 const mineSearch = ref('')
 const mineStatus = ref('all')
@@ -43,9 +49,27 @@ interface ApplicationRow {
   item: WelfareApplication
   description: string
   type: string
+  resourceItems: ResourceRowItem[]
+  applicant: ApplicantRowInfo
   email: string
   date: string
   tags: Array<{ label: string, tone: string }>
+}
+
+interface ResourceRowItem {
+  title: string
+  fields: Array<{ label: string, value: string }>
+}
+
+interface ApplicantRowInfo {
+  name: string
+  email: string
+  avatar?: string
+  initial: string
+  role: string
+  level: string
+  points: string
+  bio: string
 }
 
 interface ReviewQueuesExpose {
@@ -155,6 +179,10 @@ function openReviewApplicationDialog(id: string, event: MouseEvent) {
   reviewQueues.value?.openReviewApplication(id, event.currentTarget instanceof HTMLElement ? event.currentTarget : null)
 }
 
+function refreshReviewQueue() {
+  runSafely(() => reloadWelfareState(), '待审核队列已刷新')
+}
+
 function closeApplicationDialog() {
   isApplicationDialogOpen.value = false
 }
@@ -201,6 +229,37 @@ function typeLabel(type: RequestKind) {
   return typeText[type] ?? type.toUpperCase()
 }
 
+function resourceRowItems(item: WelfareApplication): ResourceRowItem[] {
+  return (item.resourceItems ?? []).map(resourceItem => ({
+    title: `${resourceTypeLabel(resourceItem.resourceType)} · ${resourceItem.resourceSubtype}`,
+    fields: resourceItemSummaryFields(resourceItem).slice(2, 7),
+  }))
+}
+
+function resourceFallbackText(items: ApplicationItem[]) {
+  if (!items.length)
+    return '暂无资源明细'
+  return items.map(item => `${resourceTypeLabel(item.resourceType)} · ${item.resourceSubtype}`).join('；')
+}
+
+function applicantRowInfo(userId: string): ApplicantRowInfo {
+  const user = state.users.find(item => item.id === userId)
+  const level = userLevelCard(userId)
+  const name = user?.profile.displayName || userName(userId)
+  const email = user?.profile.email || userEmail(userId)
+
+  return {
+    name,
+    email,
+    avatar: user?.profile.avatar,
+    initial: name.trim().slice(0, 1).toUpperCase() || '用',
+    role: user?.role === 'admin' ? '管理员' : user?.role === 'reviewer' ? '协作处理员' : '用户',
+    level: level.name,
+    points: formatPoints(user?.points ?? 0),
+    bio: user?.profile.bio?.trim() || '暂无简介',
+  }
+}
+
 function priorityLabel(item: WelfareApplication) {
   const priority = userLevelCard(item.userId).priority
   if (priority >= 4)
@@ -220,10 +279,14 @@ function priorityClass(item: WelfareApplication) {
 }
 
 function toApplicationRow(item: WelfareApplication): ApplicationRow {
+  const resourceItems = item.type === 'resource' ? resourceRowItems(item) : []
+
   return {
     item,
-    description: plainDescription(item.description),
+    description: item.type === 'resource' ? resourceFallbackText(item.resourceItems ?? []) : plainDescription(item.description),
     type: typeLabel(item.type),
+    resourceItems,
+    applicant: applicantRowInfo(item.userId),
     email: userEmail(item.userId),
     date: formatDate(item.createdAt),
     tags: applicationRowTags(item),
@@ -455,6 +518,10 @@ function applicationRowTags(item: WelfareApplication) {
               <input v-model="reviewOnlyUnhandled" type="checkbox">
               <span>仅看未处理</span>
             </label>
+            <TxButton class="application-refresh-button" variant="secondary" @click="refreshReviewQueue">
+              <span class="i-carbon-renew" aria-hidden="true" />
+              刷新
+            </TxButton>
           </div>
         </div>
 
@@ -485,7 +552,17 @@ function applicationRowTags(item: WelfareApplication) {
                 <em v-for="tag in row.tags" :key="tag.label" :class="`application-row-tag application-row-tag--${tag.tone}`">{{ tag.label }}</em>
               </span>
             </span>
-            <span>
+            <span v-if="row.item.type === 'resource'" class="application-resource-cell">
+              <i :class="typeIcon(row.item.type)" aria-hidden="true" />
+              <span class="application-resource-cell__content">
+                <strong class="application-type-tag">{{ row.type }}</strong>
+                <span v-for="resourceItem in row.resourceItems" :key="resourceItem.title" class="application-resource-summary">
+                  <b>{{ resourceItem.title }}</b>
+                  <small>{{ resourceItem.fields.map(field => `${field.label} ${field.value}`).join(' · ') }}</small>
+                </span>
+              </span>
+            </span>
+            <span v-else>
               <i :class="typeIcon(row.item.type)" aria-hidden="true" />
               <strong class="application-type-tag">{{ row.type }}</strong>
             </span>
@@ -493,7 +570,19 @@ function applicationRowTags(item: WelfareApplication) {
               <TxStatusBadge :text="statusText(row.item.status)" :status="statusTone(row.item.status)" size="sm" />
             </span>
             <span :class="priorityClass(row.item)">{{ priorityLabel(row.item) }}</span>
-            <span class="application-table__truncate" :title="row.email">{{ row.email }}</span>
+            <span class="application-applicant">
+              <span class="application-applicant__avatar">
+                <img v-if="row.applicant.avatar" :src="row.applicant.avatar" :alt="row.applicant.name">
+                <span v-else>{{ row.applicant.initial }}</span>
+              </span>
+              <span class="application-applicant__name">{{ row.applicant.name }}</span>
+              <span class="application-applicant__popover">
+                <strong>{{ row.applicant.name }}</strong>
+                <small>{{ row.applicant.email }}</small>
+                <em>{{ row.applicant.role }} · {{ row.applicant.level }} · {{ row.applicant.points }} 积分</em>
+                <span>{{ row.applicant.bio }}</span>
+              </span>
+            </span>
             <span class="application-table__truncate" :title="row.date">{{ row.date }}</span>
             <span class="application-row-arrow i-carbon-chevron-right" aria-hidden="true" />
           </button>

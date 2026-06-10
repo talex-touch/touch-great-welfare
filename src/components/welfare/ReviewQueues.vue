@@ -228,7 +228,7 @@ onMounted(() => {
 
 <template>
   <div v-if="canShowReviewQueues" class="gap-6 grid" :class="[props.mode === 'dialog-only' ? 'review-queues--dialog-only' : '', showPro && showStudent && isAdmin ? 'xl:grid-cols-2' : '']">
-    <TxCard v-if="showPro && (isAdmin || canCrowdReview)" class="solid-panel" background="pure" :padding="22" :radius="28">
+    <TxCard v-if="props.mode !== 'dialog-only' && showPro && (isAdmin || canCrowdReview)" class="solid-panel" background="pure" :padding="22" :radius="28">
       <h3 class="text-2xl fw-900">
         {{ isAdmin ? '申请审核队列' : '协作建议' }}
       </h3>
@@ -569,7 +569,7 @@ onMounted(() => {
       </TxFlipOverlay>
     </Teleport>
 
-    <TxCard v-if="isAdmin && showStudent" class="solid-panel" background="pure" :padding="22" :radius="28">
+    <TxCard v-if="props.mode !== 'dialog-only' && isAdmin && showStudent" class="solid-panel" background="pure" :padding="22" :radius="28">
       <h3 class="text-2xl fw-900">
         认证申请审核
       </h3>
