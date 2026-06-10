@@ -8,7 +8,7 @@
  */
 
 import type { Pool } from 'pg'
-import type { WorkerEnv } from '~/composables/welfare'
+import type { WorkerEnv } from '../../core'
 
 // 迁移配置
 export interface MigrationConfig {
@@ -17,21 +17,21 @@ export interface MigrationConfig {
   }
   readMode: {
     source: 'state' | 'table' | 'canary'
-    canaryPercentage?: number  // 0-100，灰度读取比例
+    canaryPercentage?: number // 0-100，灰度读取比例
   }
   validation: {
-    enabled: boolean  // 是否启用一致性验证
-    logMismatches: boolean  // 是否记录不一致
+    enabled: boolean // 是否启用一致性验证
+    logMismatches: boolean // 是否记录不一致
   }
 }
 
 // 默认配置：Phase 2 初期状态
 export const DEFAULT_MIGRATION_CONFIG: MigrationConfig = {
   writeMode: {
-    target: 'dual-write',  // 同时写 state 和 table
+    target: 'dual-write', // 同时写 state 和 table
   },
   readMode: {
-    source: 'state',  // 仍从 state 读取
+    source: 'state', // 仍从 state 读取
   },
   validation: {
     enabled: true,
@@ -56,6 +56,15 @@ export function getMigrationConfig(): MigrationConfig {
   return currentConfig
 }
 
+function stableHashBucket(value: string) {
+  let hash = 0x811C9DC5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0) % 100
+}
+
 // 灰度决策：根据 userId 决定是否从表读取
 export function shouldReadFromTable(userId: string): boolean {
   const config = currentConfig.readMode
@@ -72,9 +81,7 @@ export function shouldReadFromTable(userId: string): boolean {
   if (percentage >= 100)
     return true
 
-  // 简单哈希：userId 的字符码之和 % 100
-  const hash = userId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) % 100
-  return hash < percentage
+  return stableHashBucket(userId) < percentage
 }
 
 // Repository 基类
