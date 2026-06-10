@@ -497,7 +497,11 @@ export const notificationProviderConfigForm = reactive({
   smtpFromEmail: '',
   smtpFromName: '',
   testEmailAddress: '',
+  testResendEmailAddress: '',
+  testSmtpEmailAddress: '',
   testingEmail: false,
+  testingResendEmail: false,
+  testingSmtpEmail: false,
   authorizingFeishu: false,
   emailConfigured: false,
   pushConfigured: false,
@@ -2754,6 +2758,50 @@ export function useWelfareUiState() {
     }
   }
 
+  async function sendResendProviderEmailTest() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+    notificationProviderConfigForm.testingResendEmail = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await sendProviderEmailTest(welfare.currentUser.value.id, {
+        emailAddress: notificationProviderConfigForm.testResendEmailAddress,
+        provider: 'resend',
+        free: true,
+        providerConfig: notificationProviderConfigPayload(),
+      })
+      notificationProviderConfigForm.testResendEmailAddress = result.emailAddress
+      notificationProviderConfigForm.message = `Resend 邮件测试已发送到 ${result.emailAddress}：${result.deliveryAttempts.map(formatEmailDeliveryAttempt).join('；')}`
+      await refreshSystemLogs()
+    }
+    finally {
+      notificationProviderConfigForm.testingResendEmail = false
+    }
+  }
+
+  async function sendSmtpProviderEmailTest() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+    notificationProviderConfigForm.testingSmtpEmail = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await sendProviderEmailTest(welfare.currentUser.value.id, {
+        emailAddress: notificationProviderConfigForm.testSmtpEmailAddress,
+        provider: 'smtp',
+        free: true,
+        providerConfig: notificationProviderConfigPayload(),
+      })
+      notificationProviderConfigForm.testSmtpEmailAddress = result.emailAddress
+      notificationProviderConfigForm.message = `SMTP 邮件测试已发送到 ${result.emailAddress}：${result.deliveryAttempts.map(formatEmailDeliveryAttempt).join('；')}`
+      await refreshSystemLogs()
+    }
+    finally {
+      notificationProviderConfigForm.testingSmtpEmail = false
+    }
+  }
+
   async function generateNotificationVapidKeys(regenerate = false) {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
@@ -3654,6 +3702,8 @@ export function useWelfareUiState() {
     authorizeFeishuMailProvider,
     refreshFeishuMailboxOptions,
     sendProviderEmailTestMessage,
+    sendResendProviderEmailTest,
+    sendSmtpProviderEmailTest,
     generateNotificationVapidKeys,
     refreshSiteBannerConfig,
     persistSiteBannerConfig,

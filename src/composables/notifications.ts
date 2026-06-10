@@ -31,6 +31,13 @@ export interface NotificationProviderConfigView {
   feishuUserMailboxId: string
   feishuSiteBaseUrl: string
   feishuDailyLimit: number
+  smtpEnabled: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpUsername: string
+  smtpPasswordMasked: string
+  smtpFromEmail: string
+  smtpFromName: string
   source: 'env' | 'admin' | 'empty'
 }
 
@@ -70,11 +77,19 @@ export interface SaveNotificationProviderConfigPayload {
   feishuUserMailboxId: string
   feishuSiteBaseUrl: string
   feishuDailyLimit: number
+  smtpEnabled: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpUsername: string
+  smtpPassword?: string
+  smtpFromEmail: string
+  smtpFromName: string
   clearResendApiKey?: boolean
   clearVapidPrivateKey?: boolean
   clearFeishuAppSecret?: boolean
   clearFeishuUserAccessToken?: boolean
   clearFeishuRefreshToken?: boolean
+  clearSmtpPassword?: boolean
 }
 
 async function readErrorMessage(response: Response) {

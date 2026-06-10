@@ -43,3 +43,19 @@ interface R2Bucket {
   ) => Promise<unknown>
   get: (key: string) => Promise<R2ObjectBody | null>
 }
+
+declare module 'cloudflare:sockets' {
+  interface Socket {
+    readable: ReadableStream<Uint8Array>
+    writable: WritableStream<Uint8Array>
+    opened: Promise<unknown>
+    closed: Promise<unknown>
+    close: () => void | Promise<void>
+    startTls?: () => Socket
+  }
+
+  export function connect(
+    address: { hostname: string, port: number },
+    options?: { secureTransport?: 'off' | 'on' | 'starttls' },
+  ): Socket
+}

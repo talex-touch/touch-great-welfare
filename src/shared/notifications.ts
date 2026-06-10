@@ -54,7 +54,7 @@ export interface EmailProviderTestConfig {
 
 export interface SendEmailTestPayload {
   emailAddress?: string
-  provider?: 'auto' | 'feishu_mail' | 'resend'
+  provider?: 'auto' | 'feishu_mail' | 'resend' | 'smtp'
   free?: boolean
   providerConfig?: EmailProviderTestConfig
 }

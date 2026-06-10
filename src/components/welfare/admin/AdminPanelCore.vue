@@ -77,6 +77,8 @@ const {
   authorizeFeishuMailProvider,
   refreshFeishuMailboxOptions,
   sendProviderEmailTestMessage,
+  sendResendProviderEmailTest,
+  sendSmtpProviderEmailTest,
   generateNotificationVapidKeys,
   refreshSiteBannerConfig,
   persistSiteBannerConfig,
@@ -1939,6 +1941,22 @@ function sendFeishuProviderTest() {
   }, '飞书邮件测试已发送')
 }
 
+function sendResendProviderTest() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await sendResendProviderEmailTest()
+  }, 'Resend 邮件测试已发送')
+}
+
+function sendSmtpProviderTest() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await sendSmtpProviderEmailTest()
+  }, 'SMTP 邮件测试已发送')
+}
+
 function openVapidRegenerateDialog() {
   isVapidRegenerateDialogOpen.value = true
 }
@@ -2939,6 +2957,15 @@ onMounted(() => {
                 <span class="field-label">Resend 发件人</span>
                 <TxInput v-model="notificationProviderConfigForm.resendFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="Touch Great Welfare <notice@example.com>" />
               </label>
+              <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">Resend 测试收件邮箱</span>
+                <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                  <TxInput v-model="notificationProviderConfigForm.testResendEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingResendEmail" placeholder="user@example.com" />
+                  <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingResendEmail || !notificationProviderConfigForm.testResendEmailAddress" @click="sendResendProviderTest">
+                    {{ notificationProviderConfigForm.testingResendEmail ? '发送中...' : '测试 Resend 邮件' }}
+                  </TxButton>
+                </div>
+              </label>
               <div class="p-4 border border-emerald-200 rounded-3xl bg-emerald-50/70 dark:border-emerald-400/20 dark:bg-emerald-950/10 lg:col-span-2">
                 <div class="flex flex-wrap gap-3 items-start justify-between">
                   <div>
@@ -3058,6 +3085,15 @@ onMounted(() => {
                 <label class="gap-2 grid">
                   <span class="field-label">发件人名称</span>
                   <TxInput v-model="notificationProviderConfigForm.smtpFromName" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="通知中心" />
+                </label>
+                <label class="gap-2 grid lg:col-span-2">
+                  <span class="field-label">SMTP 测试收件邮箱</span>
+                  <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                    <TxInput v-model="notificationProviderConfigForm.testSmtpEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingSmtpEmail" placeholder="user@example.com" />
+                    <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingSmtpEmail || !notificationProviderConfigForm.testSmtpEmailAddress" @click="sendSmtpProviderTest">
+                      {{ notificationProviderConfigForm.testingSmtpEmail ? '发送中...' : '测试 SMTP 邮件' }}
+                    </TxButton>
+                  </div>
                 </label>
               </div>
             </div>

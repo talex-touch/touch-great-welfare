@@ -72,5 +72,8 @@ export default defineConfig({
   // https://github.com/vitest-dev/vitest
   test: {
     environment: 'jsdom',
+    alias: {
+      'cloudflare:sockets': path.resolve(__dirname, 'test/mocks/cloudflare-sockets.ts'),
+    },
   },
 })

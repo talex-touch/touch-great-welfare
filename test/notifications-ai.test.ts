@@ -221,6 +221,13 @@ function createMemoryD1() {
               feishu_user_mailbox_id: this.values[13],
               feishu_site_base_url: this.values[14],
               feishu_daily_limit: this.values[15],
+              smtp_enabled: this.values[16],
+              smtp_host: this.values[17],
+              smtp_port: this.values[18],
+              smtp_username: this.values[19],
+              smtp_password_encrypted: this.values[20],
+              smtp_from_email: this.values[21],
+              smtp_from_name: this.values[22],
             }
           }
           if (query.includes('update notification_provider_config') && providerConfig) {
@@ -653,6 +660,60 @@ describe('notification dispatch', () => {
       emailAddress: 'tagzxxia@gmail.com',
     })
     expect(d1.data.providerConfig?.feishu_app_id).toBe('cli_current')
+  })
+
+  it('tests SMTP mail with SMTP config instead of Resend', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'resend_should_not_run' })))
+    vi.stubGlobal('fetch', fetchMock)
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+    await saveNotificationProvider(d1, 'admin_1', {
+      smtpEnabled: true,
+      smtpHost: 'smtp.example.com',
+      smtpPort: 465,
+      smtpUsername: 'welfare@example.com',
+      smtpPassword: 'smtp_secret',
+      smtpFromEmail: 'welfare@example.com',
+      smtpFromName: '通知中心',
+    })
+
+    const response = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/provider-config/email-test', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        emailAddress: 'tagzxxia@gmail.com',
+        provider: 'smtp',
+        providerConfig: {
+          smtpEnabled: true,
+          smtpHost: 'smtp.example.com',
+          smtpPort: 465,
+          smtpUsername: 'welfare@example.com',
+          smtpPassword: 'smtp_secret',
+          smtpFromEmail: 'welfare@example.com',
+          smtpFromName: '通知中心',
+        },
+      }),
+    }), env)
+
+    expect(response.ok).toBe(true)
+    await expect(response.json()).resolves.toMatchObject({
+      deliveryProvider: 'smtp',
+      emailAddress: 'tagzxxia@gmail.com',
+    })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('api.resend.com'))).toBe(false)
   })
 
   it('rejects Feishu mail tests before user authorization', async () => {
