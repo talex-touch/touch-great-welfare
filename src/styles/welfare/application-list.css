@@ -649,18 +649,20 @@
   font-weight: 800;
 }
 
-.application-detail-flip-mask {
-  z-index: 120 !important;
+.application-detail-drawer-host .tx-drawer__panel,
+.review-application-drawer-host .tx-drawer__panel {
+  border-left: 1px solid rgba(15, 23, 42, 0.08);
+  background: #f8fafc;
 }
 
-.application-detail-flip-dialog {
-  width: min(1120px, 100%);
-  max-height: min(88vh, 920px);
+.application-detail-drawer-host .tx-drawer__header,
+.review-application-drawer-host .tx-drawer__header {
+  padding: 1.1rem 1.25rem;
 }
 
-.review-application-flip-dialog {
-  width: min(1120px, 100%);
-  max-height: min(88vh, 920px);
+.application-detail-drawer-host .tx-drawer__body,
+.review-application-drawer-host .tx-drawer__body {
+  padding: 1.25rem;
 }
 
 .review-application-dialog {

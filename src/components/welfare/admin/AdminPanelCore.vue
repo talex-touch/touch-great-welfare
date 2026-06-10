@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
-import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxFlipOverlay, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
+import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -14,7 +14,6 @@ import VerificationAttachmentGrid from '../VerificationAttachmentGrid.vue'
 
 const {
   state,
-  currentUser,
   isAdmin,
   reloadWelfareState,
   pointDrafts,
@@ -76,6 +75,7 @@ const {
   refreshNotificationProviderConfig,
   persistNotificationProviderConfig,
   authorizeFeishuMailProvider,
+  refreshFeishuMailboxOptions,
   sendProviderEmailTestMessage,
   generateNotificationVapidKeys,
   refreshSiteBannerConfig,
@@ -357,8 +357,6 @@ const announcementChannelOptions = [
   { value: 'browser_push', label: '浏览器推送' },
 ] as const
 
-const EMAIL_ADDRESS_PATTERN = /[\w.%+-]+@[\w.-]+\.[a-z]{2,}/i
-
 const auditAreaFilterOptions = [
   { value: ALL_FILTER, label: '全部模块' },
   { value: '用户', label: '用户' },
@@ -431,24 +429,9 @@ const activeUserDrawerTab = ref<UserDrawerTab>(USER_DRAWER_TABS.account)
 const pendingAdminUserAction = ref('')
 const revokeStudentReason = ref('')
 const selectedStudentVerificationId = ref('')
-const isStudentVerificationDialogOpen = ref(false)
-const studentVerificationDialogSource = ref<HTMLElement | null>(null)
+const isStudentVerificationDrawerOpen = ref(false)
 const isUserStudentVerificationCreateOpen = ref(false)
 const adminTransactions = computed(() => pointTransactions.value)
-const feishuSenderMailboxOptions = computed(() => {
-  const options = [
-    {
-      label: '用户邮箱',
-      value: currentUser.value?.profile.email,
-    },
-    {
-      label: '公告邮箱',
-      value: notificationProviderConfigForm.resendFromEmail.match(EMAIL_ADDRESS_PATTERN)?.[0],
-    },
-  ].filter((item): item is { label: string, value: string } => !!item.value?.trim())
-
-  return options.filter((item, index) => options.findIndex(option => option.value === item.value) === index)
-})
 
 function userDisplayName(userId: string) {
   return state.users.find(user => user.id === userId)?.profile.displayName ?? '未知用户'
@@ -756,22 +739,16 @@ function closeUserDrawer() {
   pendingAdminUserAction.value = ''
   revokeStudentReason.value = ''
   isUserStudentVerificationCreateOpen.value = false
-  closeStudentVerificationDialog()
+  closeStudentVerificationDrawer()
 }
 
-function openStudentVerificationDialog(id: string, event: MouseEvent) {
+function openStudentVerificationDrawer(id: string) {
   selectedStudentVerificationId.value = id
-  studentVerificationDialogSource.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  isStudentVerificationDialogOpen.value = true
+  isStudentVerificationDrawerOpen.value = true
 }
 
-function closeStudentVerificationDialog() {
-  isStudentVerificationDialogOpen.value = false
-}
-
-function handleStudentVerificationDialogClosed() {
-  selectedStudentVerificationId.value = ''
-  studentVerificationDialogSource.value = null
+function closeStudentVerificationDrawer() {
+  isStudentVerificationDrawerOpen.value = false
 }
 
 function openUserAudit(userId: string) {
@@ -1937,6 +1914,23 @@ function authorizeFeishuProvider() {
   }, '正在跳转飞书授权')
 }
 
+function loadFeishuSenderMailboxes() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await refreshFeishuMailboxOptions()
+  }, '飞书发信邮箱已读取')
+}
+
+function feishuMailboxTypeLabel(type: string) {
+  const normalizedType = type.toLowerCase()
+  if (normalizedType.includes('public') || normalizedType.includes('shared') || normalizedType.includes('announcement'))
+    return '公告邮箱'
+  if (normalizedType.includes('user') || normalizedType.includes('personal'))
+    return '用户邮箱'
+  return type
+}
+
 function sendFeishuProviderTest() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -2998,17 +2992,22 @@ onMounted(() => {
               </div>
               <label class="gap-2 grid">
                 <span class="field-label">飞书发信邮箱</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />
-                <div v-if="feishuSenderMailboxOptions.length" class="flex flex-wrap gap-2">
+                <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                  <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />
+                  <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.feishuMailboxesLoading || !notificationProviderConfigForm.feishuRefreshTokenMasked" @click="loadFeishuSenderMailboxes">
+                    {{ notificationProviderConfigForm.feishuMailboxesLoading ? '读取中...' : '读取飞书邮箱' }}
+                  </TxButton>
+                </div>
+                <div v-if="notificationProviderConfigForm.feishuMailboxOptions.length" class="flex flex-wrap gap-2">
                   <TxButton
-                    v-for="option in feishuSenderMailboxOptions"
-                    :key="option.value"
+                    v-for="mailbox in notificationProviderConfigForm.feishuMailboxOptions"
+                    :key="mailbox.id"
                     size="sm"
                     variant="secondary"
                     :disabled="!isAdmin || notificationProviderConfigForm.loading"
-                    @click="notificationProviderConfigForm.feishuUserMailboxId = option.value"
+                    @click="notificationProviderConfigForm.feishuUserMailboxId = mailbox.id"
                   >
-                    {{ option.label }}：{{ option.value }}
+                    {{ mailbox.type ? `${feishuMailboxTypeLabel(mailbox.type)}：` : '' }}{{ mailbox.label }}{{ mailbox.email && mailbox.email !== mailbox.label ? `（${mailbox.email}）` : '' }}
                   </TxButton>
                 </div>
               </label>
@@ -3835,7 +3834,7 @@ onMounted(() => {
                               :key="item.id"
                               type="button"
                               class="admin-history-row admin-history-row--button"
-                              @click="openStudentVerificationDialog(item.id, $event)"
+                              @click="openStudentVerificationDrawer(item.id)"
                             >
                               <span class="admin-pill" :class="statusPillClass(item.status)">{{ studentStatusLabel(item.status) }}</span>
                               <div class="text-left flex-1 min-w-0">
@@ -4072,49 +4071,48 @@ onMounted(() => {
               </template>
             </TxDrawer>
 
-            <Teleport to="body">
-              <TxFlipOverlay
-                v-if="selectedStudentVerification"
-                v-model="isStudentVerificationDialogOpen"
-                :source="studentVerificationDialogSource"
-                :header="false"
-                :mask-closable="true"
-                :scrollable="true"
-                mask-class="admin-verification-flip-mask"
-                card-class="application-detail-flip-dialog admin-verification-flip-dialog"
-                close-aria-label="关闭认证详情"
-                surface="pure"
-                @closed="handleStudentVerificationDialogClosed"
-              >
-                <section class="admin-verification-dialog">
-                  <div class="admin-verification-dialog__header flex flex-wrap gap-4 items-start justify-between">
-                    <div class="min-w-0">
-                      <div class="flex flex-wrap gap-2 items-center">
-                        <span class="verification-card__icon" :class="selectedStudentVerification.verificationType === 'frontline' ? 'i-carbon-campsite' : 'i-carbon-education'" />
-                        <div class="min-w-0">
-                          <h3 class="text-2xl fw-900 truncate">
-                            {{ selectedStudentVerification.realName }} · {{ verificationTypeLabel(selectedStudentVerification.verificationType) }}
-                          </h3>
-                          <p class="text-sm text-slate-500 mt-1 dark:text-slate-400">
-                            {{ selectedStudentVerification.category }} · {{ verificationOrganizationLabel(selectedStudentVerification.verificationType) }}
-                          </p>
-                        </div>
+            <TxDrawer
+              v-if="selectedStudentVerification"
+              v-model:visible="isStudentVerificationDrawerOpen"
+              class="admin-verification-drawer-host"
+              direction="right"
+              size="min(1040px, 94vw)"
+              title="认证详情"
+              :z-index="USER_DRAWER_Z_INDEX + 1"
+              mask-effect="blur"
+              @close="closeStudentVerificationDrawer"
+            >
+              <template #header>
+                <div class="admin-drawer-header">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap gap-2 items-center">
+                      <span class="verification-card__icon" :class="selectedStudentVerification.verificationType === 'frontline' ? 'i-carbon-campsite' : 'i-carbon-education'" />
+                      <div class="min-w-0">
+                        <h3 class="text-lg fw-900 truncate">
+                          {{ selectedStudentVerification.realName }} · {{ verificationTypeLabel(selectedStudentVerification.verificationType) }}
+                        </h3>
+                        <p class="text-sm text-slate-500 mt-1 dark:text-slate-400">
+                          {{ selectedStudentVerification.category }} · {{ verificationOrganizationLabel(selectedStudentVerification.verificationType) }}
+                        </p>
                       </div>
                     </div>
-                    <div class="flex flex-wrap gap-2 items-center justify-end">
-                      <span class="admin-pill" :class="statusPillClass(selectedStudentVerification.status)">
-                        {{ studentStatusLabel(selectedStudentVerification.status) }}
-                      </span>
-                      <span class="admin-pill" :class="selectedStudentVerification.feeReturned ? statusPillClass('success') : statusPillClass('warning')">
-                        {{ selectedStudentVerification.feeReturned ? '审核费已返还' : `审核费 ${formatPoints(selectedStudentVerification.reviewFee)}` }}
-                      </span>
-                      <TxButton size="sm" variant="ghost" @click="closeStudentVerificationDialog">
-                        关闭
-                      </TxButton>
-                    </div>
                   </div>
+                  <div class="flex flex-wrap gap-2 items-center justify-end">
+                    <span class="admin-pill" :class="statusPillClass(selectedStudentVerification.status)">
+                      {{ studentStatusLabel(selectedStudentVerification.status) }}
+                    </span>
+                    <span class="admin-pill" :class="selectedStudentVerification.feeReturned ? statusPillClass('success') : statusPillClass('warning')">
+                      {{ selectedStudentVerification.feeReturned ? '审核费已返还' : `审核费 ${formatPoints(selectedStudentVerification.reviewFee)}` }}
+                    </span>
+                    <TxButton size="sm" variant="secondary" aria-label="关闭认证详情" @click="closeStudentVerificationDrawer">
+                      关闭
+                    </TxButton>
+                  </div>
+                </div>
+              </template>
 
-                  <div class="gap-3 grid md:grid-cols-4">
+              <section class="admin-verification-drawer">
+                <div class="gap-3 grid md:grid-cols-4">
                     <div class="application-detail-stat">
                       <span>提交时间</span>
                       <b>{{ formatDate(selectedStudentVerification.createdAt) }}</b>
@@ -4171,16 +4169,15 @@ onMounted(() => {
                     <RichTextView :content="selectedStudentVerification.notes || '暂无材料说明。'" class="rich-text-preview" />
                   </section>
 
-                  <section class="verification-detail-section">
-                    <h3>附件材料</h3>
-                    <div v-if="!selectedStudentVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
-                      暂无附件。
-                    </div>
-                    <VerificationAttachmentGrid v-else :files="selectedStudentVerification.attachments" />
-                  </section>
+                <section class="verification-detail-section">
+                  <h3>附件材料</h3>
+                  <div v-if="!selectedStudentVerification.attachments.length" class="text-sm text-slate-500 mt-3 dark:text-slate-400">
+                    暂无附件。
+                  </div>
+                  <VerificationAttachmentGrid v-else :files="selectedStudentVerification.attachments" />
                 </section>
-              </TxFlipOverlay>
-            </Teleport>
+              </section>
+            </TxDrawer>
           </div>
         </TxTabItem>
 

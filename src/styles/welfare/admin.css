@@ -369,19 +369,27 @@
 }
 
 .admin-user-drawer-host .tx-drawer__panel,
+.admin-verification-drawer-host .tx-drawer__panel,
 .notification-drawer-host .tx-drawer__panel {
   border-left: 1px solid rgba(15, 23, 42, 0.08);
   background: #f8fafc;
 }
 
 .admin-user-drawer-host .tx-drawer__header,
+.admin-verification-drawer-host .tx-drawer__header,
 .notification-drawer-host .tx-drawer__header {
   padding: 1.1rem 1.25rem;
 }
 
 .admin-user-drawer-host .tx-drawer__body,
+.admin-verification-drawer-host .tx-drawer__body,
 .notification-drawer-host .tx-drawer__body {
   padding: 1.25rem;
+}
+
+.admin-verification-drawer {
+  display: grid;
+  gap: 1rem;
 }
 
 .admin-user-drawer-content {
@@ -621,29 +629,16 @@
   transform: translateY(-1px);
 }
 
-.admin-verification-flip-dialog .TxFlipOverlay-Body {
-  padding: clamp(1.25rem, 2.4vw, 2rem);
-}
-
-.admin-verification-dialog {
-  display: grid;
-  gap: 1.25rem;
-}
-
-.admin-verification-dialog__header {
-  padding: 0.25rem 0.35rem 0.5rem;
-}
-
-.admin-verification-dialog .application-detail-stat,
-.admin-verification-dialog .verification-detail-section {
+.admin-verification-drawer .application-detail-stat,
+.admin-verification-drawer .verification-detail-section {
   background: rgba(248, 250, 252, 0.72);
 }
 
-.admin-verification-dialog .verification-detail-section {
+.admin-verification-drawer .verification-detail-section {
   padding: clamp(1.25rem, 2vw, 1.65rem);
 }
 
-.admin-verification-dialog .rich-text-preview {
+.admin-verification-drawer .rich-text-preview {
   margin-top: 0.75rem;
 }
 
@@ -713,6 +708,7 @@
 }
 
 .dark .admin-user-drawer-host .tx-drawer__panel,
+.dark .admin-verification-drawer-host .tx-drawer__panel,
 .dark .notification-drawer-host .tx-drawer__panel {
   border-left-color: rgba(255, 255, 255, 0.1);
   background: #0f172a;
@@ -770,8 +766,8 @@
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
 }
 
-.dark .admin-verification-dialog .application-detail-stat,
-.dark .admin-verification-dialog .verification-detail-section {
+.dark .admin-verification-drawer .application-detail-stat,
+.dark .admin-verification-drawer .verification-detail-section {
   background: rgba(255, 255, 255, 0.055);
 }
 
@@ -844,6 +840,8 @@
 
   .admin-user-drawer-host .tx-drawer__header,
   .admin-user-drawer-host .tx-drawer__body,
+  .admin-verification-drawer-host .tx-drawer__header,
+  .admin-verification-drawer-host .tx-drawer__body,
   .notification-drawer-host .tx-drawer__header,
   .notification-drawer-host .tx-drawer__body {
     padding: 1rem;

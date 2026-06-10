@@ -43,6 +43,13 @@ export interface EmailProviderTestConfig {
   feishuUserMailboxId?: string
   feishuSiteBaseUrl?: string
   feishuDailyLimit?: number
+  smtpEnabled?: boolean
+  smtpHost?: string
+  smtpPort?: number
+  smtpUsername?: string
+  smtpPassword?: string
+  smtpFromEmail?: string
+  smtpFromName?: string
 }
 
 export interface SendEmailTestPayload {
@@ -53,7 +60,7 @@ export interface SendEmailTestPayload {
 }
 
 export interface EmailDeliveryAttempt {
-  provider: 'feishu_mail' | 'resend'
+  provider: 'feishu_mail' | 'resend' | 'smtp'
   providerLabel: string
   status: Extract<DeliveryStatus, 'sent' | 'failed' | 'skipped'>
   message: string

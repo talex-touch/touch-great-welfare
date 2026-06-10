@@ -239,7 +239,7 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
     defaultRateLimit5h: normalizeRateLimit(stored?.default_rate_limit_5h),
     defaultRateLimit1d: normalizeRateLimit(stored?.default_rate_limit_1d),
     defaultRateLimit7d: normalizeRateLimit(stored?.default_rate_limit_7d),
-    configured: !!(stored?.base_url && adminApiKey),
+    configured: !!(stored?.base_url && (adminApiKey || databaseUrl)),
     source: stored ? 'admin' as const : 'empty' as const,
   }
 }
@@ -632,16 +632,59 @@ async function createSub2ApiKeyByDatabase(
   } satisfies UpstreamApiKey
 }
 
+function normalizeUpstreamApiKey(value: unknown): UpstreamApiKey {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    const nested = record.key || record.api_key || record.apiKey
+    if (nested && typeof nested === 'object' && !Array.isArray(nested))
+      return normalizeUpstreamApiKey(nested)
+    return record as UpstreamApiKey
+  }
+  return {}
+}
+
 async function createSub2ApiKeyByAdminApi(
   config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
   sub2apiUserId: string,
   payload: CreateSub2ApiKeyPayload,
 ) {
   const request = buildSub2ApiKeyPayload(config, payload)
-  return await callSub2Api<UpstreamApiKey>(config, `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}/api-keys`, {
-    method: 'POST',
-    body: JSON.stringify(request),
-  })
+  const userId = optionalInt(sub2apiUserId) ?? sub2apiUserId
+  const attempts = [
+    {
+      path: `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}/api-keys`,
+      body: request,
+    },
+    {
+      path: '/api/v1/admin/api-keys',
+      body: { ...request, user_id: userId },
+    },
+    {
+      path: `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}/keys`,
+      body: request,
+    },
+    {
+      path: '/api/v1/admin/keys',
+      body: { ...request, user_id: userId },
+    },
+  ]
+
+  let unsupportedError: unknown
+  for (const attempt of attempts) {
+    try {
+      const result = await callSub2Api<unknown>(config, attempt.path, {
+        method: 'POST',
+        body: JSON.stringify(attempt.body),
+      })
+      return normalizeUpstreamApiKey(result)
+    }
+    catch (error) {
+      if (!isUnsupportedAdminKeyEndpoint(error))
+        throw error
+      unsupportedError = error
+    }
+  }
+  throw unsupportedError instanceof Error ? unsupportedError : new Error('Sub2API Admin API 不支持创建 API Key')
 }
 
 async function insertBinding(

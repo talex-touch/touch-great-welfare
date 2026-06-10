@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApplicationItem, RequestKind, WelfareApplication } from '~/composables/welfare'
-import { TxButton, TxCard, TxFlipOverlay, TxStatusBadge } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxDrawer, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -41,8 +41,7 @@ const reviewOnlyUnhandled = ref(false)
 const mineExpanded = ref(false)
 const reviewExpanded = ref(false)
 const selectedApplicationId = ref<string | undefined>()
-const isApplicationDialogOpen = ref(false)
-const applicationDialogSource = ref<HTMLElement | null>(null)
+const isApplicationDrawerOpen = ref(false)
 const reviewQueues = ref<ReviewQueuesExpose | null>(null)
 
 interface ApplicationRow {
@@ -169,10 +168,9 @@ function editApplicationDraft(id: string) {
   router.push(`/dashboard/apply/create?draft=${encodeURIComponent(id)}`)
 }
 
-function openApplicationDialog(id: string, event: MouseEvent) {
+function openApplicationDrawer(id: string) {
   selectedApplicationId.value = id
-  applicationDialogSource.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  isApplicationDialogOpen.value = true
+  isApplicationDrawerOpen.value = true
 }
 
 function openReviewApplicationDialog(id: string, event: MouseEvent) {
@@ -183,13 +181,8 @@ function refreshReviewQueue() {
   runSafely(() => reloadWelfareState(), '待审核队列已刷新')
 }
 
-function closeApplicationDialog() {
-  isApplicationDialogOpen.value = false
-}
-
-function handleApplicationDialogClosed() {
-  selectedApplicationId.value = undefined
-  applicationDialogSource.value = null
+function closeApplicationDrawer() {
+  isApplicationDrawerOpen.value = false
 }
 
 function setActiveSection(section: 'mine' | 'review') {
@@ -424,7 +417,7 @@ function applicationRowTags(item: WelfareApplication) {
             :key="row.item.id"
             type="button"
             class="application-table__row application-table__row--mine"
-            @click="openApplicationDialog(row.item.id, $event)"
+            @click="openApplicationDrawer(row.item.id)"
           >
             <span class="application-cell-title">
               <b>
@@ -601,22 +594,18 @@ function applicationRowTags(item: WelfareApplication) {
       <ReviewQueues v-if="showReviewSection && activeSection === 'review'" ref="reviewQueues" kind="pro" mode="dialog-only" />
     </template>
 
-    <Teleport to="body">
-      <TxFlipOverlay
-        v-if="selectedApplicationId"
-        v-model="isApplicationDialogOpen"
-        :source="applicationDialogSource"
-        :header="false"
-        :mask-closable="true"
-        :scrollable="true"
-        mask-class="application-detail-flip-mask"
-        card-class="application-detail-flip-dialog"
-        close-aria-label="关闭申请详情"
-        surface="pure"
-        @closed="handleApplicationDialogClosed"
-      >
-        <ApplicationDetailPanel :application-id="selectedApplicationId" drawer @close="closeApplicationDialog" />
-      </TxFlipOverlay>
-    </Teleport>
+    <TxDrawer
+      v-if="selectedApplicationId"
+      v-model:visible="isApplicationDrawerOpen"
+      class="application-detail-drawer-host"
+      direction="right"
+      size="min(1120px, 96vw)"
+      title="申请详情"
+      :z-index="130"
+      mask-effect="blur"
+      @close="closeApplicationDrawer"
+    >
+      <ApplicationDetailPanel :application-id="selectedApplicationId" drawer @close="closeApplicationDrawer" />
+    </TxDrawer>
   </section>
 </template>

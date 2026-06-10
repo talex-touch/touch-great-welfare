@@ -110,6 +110,13 @@ interface NotificationProviderConfigRow {
   feishu_user_mailbox_id?: string | null
   feishu_site_base_url?: string | null
   feishu_daily_limit?: number | null
+  smtp_enabled?: number | boolean | null
+  smtp_host?: string | null
+  smtp_port?: number | null
+  smtp_username?: string | null
+  smtp_password_encrypted?: string | null
+  smtp_from_email?: string | null
+  smtp_from_name?: string | null
 }
 
 interface NotificationProviderConfigPayload {
@@ -128,11 +135,19 @@ interface NotificationProviderConfigPayload {
   feishuUserMailboxId?: string
   feishuSiteBaseUrl?: string
   feishuDailyLimit?: number
+  smtpEnabled?: boolean
+  smtpHost?: string
+  smtpPort?: number
+  smtpUsername?: string
+  smtpPassword?: string
+  smtpFromEmail?: string
+  smtpFromName?: string
   clearResendApiKey?: boolean
   clearVapidPrivateKey?: boolean
   clearFeishuAppSecret?: boolean
   clearFeishuUserAccessToken?: boolean
   clearFeishuRefreshToken?: boolean
+  clearSmtpPassword?: boolean
 }
 
 interface GenerateVapidKeysPayload {
@@ -1540,6 +1555,7 @@ async function getEffectiveNotificationProviderConfig(env: WorkerEnv) {
   const feishuAppSecret = await decryptProviderSecret(stored?.feishu_app_secret_encrypted, env)
   const feishuUserAccessToken = await decryptProviderSecret(stored?.feishu_user_access_token_encrypted, env)
   const feishuRefreshToken = await decryptProviderSecret(stored?.feishu_refresh_token_encrypted, env)
+  const smtpPassword = await decryptProviderSecret(stored?.smtp_password_encrypted, env)
   return {
     resendApiKey,
     resendFromEmail: stored?.resend_from_email || '',
@@ -1556,6 +1572,13 @@ async function getEffectiveNotificationProviderConfig(env: WorkerEnv) {
     feishuUserMailboxId: stored?.feishu_user_mailbox_id || DEFAULT_FEISHU_USER_MAILBOX_ID,
     feishuSiteBaseUrl: stored?.feishu_site_base_url || '',
     feishuDailyLimit: normalizeFeishuDailyLimit(stored?.feishu_daily_limit),
+    smtpEnabled: boolValue(stored?.smtp_enabled),
+    smtpHost: stored?.smtp_host || '',
+    smtpPort: stored?.smtp_port || 465,
+    smtpUsername: stored?.smtp_username || '',
+    smtpPassword,
+    smtpFromEmail: stored?.smtp_from_email || '',
+    smtpFromName: stored?.smtp_from_name || '',
     source: stored ? 'admin' as const : 'empty' as const,
   }
 }
@@ -2072,12 +2095,43 @@ function extractFeishuMailboxItems(data: unknown) {
     return []
 
   const record = data as Record<string, unknown>
-  for (const key of ['items', 'user_mailboxes', 'mailboxes', 'list']) {
+  for (const key of ['items', 'aliases', 'public_mailboxes', 'user_mailboxes', 'mailboxes', 'list']) {
     const value = record[key]
     if (Array.isArray(value))
       return value
   }
   return []
+}
+
+function parseFeishuJsonResponse(text: string, fallbackMessage: string) {
+  if (!text)
+    return {}
+
+  try {
+    return JSON.parse(text) as { code?: number, msg?: string, data?: unknown }
+  }
+  catch {
+    throw new Error(`${fallbackMessage}：飞书接口返回非 JSON 内容（${text.slice(0, 120)}）`)
+  }
+}
+
+async function fetchFeishuMailboxOptions(accessToken: string, url: string, type: string) {
+  const response = await fetchWithTimeout(url, {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json; charset=utf-8',
+    },
+  })
+  const text = await response.text()
+  const result = parseFeishuJsonResponse(text, '飞书邮箱列表请求失败')
+  if (!response.ok || result.code !== 0)
+    throw new Error(result.msg || `飞书邮箱列表请求失败：${response.status}`)
+
+  return extractFeishuMailboxItems(result.data)
+    .map(normalizeFeishuMailboxOption)
+    .filter((item): item is FeishuMailboxOption => !!item)
+    .map(item => ({ ...item, type: item.type || type }))
 }
 
 async function listFeishuMailboxes(env: WorkerEnv, payload: FeishuMailboxesPayload = {}) {
@@ -2086,24 +2140,21 @@ async function listFeishuMailboxes(env: WorkerEnv, payload: FeishuMailboxesPaylo
 
   const config = await getEffectiveNotificationProviderConfig(env)
   const accessToken = await feishuAccessTokenForSend(env, config)
-  const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/mail/v1/user_mailboxes', {
-    method: 'GET',
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      'content-type': 'application/json; charset=utf-8',
-    },
-  })
-  const text = await response.text()
-  const result = text
-    ? JSON.parse(text) as { code?: number, msg?: string, data?: unknown }
-    : {}
-  if (!response.ok || result.code !== 0)
-    throw new Error(result.msg || `飞书邮箱列表请求失败：${response.status}`)
-
-  const mailboxes = extractFeishuMailboxItems(result.data)
-    .map(normalizeFeishuMailboxOption)
-    .filter((item): item is FeishuMailboxOption => !!item)
+  const settledResults = await Promise.allSettled([
+    fetchFeishuMailboxOptions(accessToken, 'https://open.feishu.cn/open-apis/mail/v1/user_mailboxes/me/aliases', 'user'),
+    fetchFeishuMailboxOptions(accessToken, 'https://open.feishu.cn/open-apis/mail/v1/public_mailboxes?page_size=50', 'public'),
+  ])
+  const mailboxes = settledResults
+    .flatMap(result => result.status === 'fulfilled' ? result.value : [])
     .filter((item, index, items) => items.findIndex(candidate => candidate.id === item.id) === index)
+
+  if (!mailboxes.length) {
+    const errors = settledResults
+      .flatMap(result => result.status === 'rejected' ? [errorMessage(result.reason, '读取失败')] : [])
+      .filter(Boolean)
+    if (errors.length)
+      throw new Error(`未读取到飞书发信邮箱：${errors.join('；')}`)
+  }
 
   return { mailboxes }
 }
@@ -2140,6 +2191,42 @@ async function sendResendEmail(
   return result.id ?? ''
 }
 
+async function sendSmtpMail(
+  config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>,
+  to: string,
+  title: string,
+  body: string,
+  data?: Record<string, unknown>,
+) {
+  if (!config.smtpEnabled || !config.smtpHost || !config.smtpPassword || !config.smtpFromEmail)
+    throw new Error('SMTP 邮箱通知未配置')
+
+  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
+
+  // 使用 Resend API（SMTP 密码作为 API key）
+  const response = await fetchWithTimeout('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${config.smtpPassword}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: config.smtpFromName
+        ? `${config.smtpFromName} <${config.smtpFromEmail}>`
+        : config.smtpFromEmail,
+      to: [to],
+      subject: title,
+      text: content.text,
+      html: content.html,
+    }),
+  })
+  const result = await response.json().catch(() => ({})) as { id?: string, message?: string }
+  if (!response.ok)
+    throw new Error(result.message || `SMTP 邮件发送失败：${response.status}`)
+
+  return result.id ?? ''
+}
+
 async function sendFeishuMail(
   env: WorkerEnv,
   config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>,
@@ -2170,8 +2257,10 @@ async function sendFeishuMail(
   })
   const text = await response.text()
   const result = text ? JSON.parse(text) as { code?: number, msg?: string, data?: { message_id?: string } } : {}
-  if (!response.ok || result.code !== 0)
-    throw new Error(result.msg || `飞书邮件请求失败：${response.status}`)
+  if (!response.ok || result.code !== 0) {
+    const errorDetail = result.msg || `HTTP ${response.status}`
+    throw new Error(`飞书邮件发送失败: ${errorDetail}，响应: ${text.slice(0, 200)}`)
+  }
 
   return result.data?.message_id ?? ''
 }
@@ -2187,6 +2276,48 @@ async function dispatchEmailChannel(
   const config = await getEffectiveNotificationProviderConfig(env)
   const attempts: EmailDeliveryAttempt[] = []
 
+  // 优先尝试 SMTP
+  if (config.smtpEnabled) {
+    if (!config.smtpHost || !config.smtpPassword || !config.smtpFromEmail) {
+      const message = 'SMTP 邮件通知未配置完整'
+      await recordDelivery(env, notificationId, 'email', 'skipped', message, 0, '', 'smtp')
+      attempts.push(emailDeliveryAttempt('smtp', 'skipped', message))
+    }
+    else {
+      try {
+        const providerId = await sendSmtpMail(config, address, input.title, input.body, input.data)
+        if (chargedPoints)
+          await chargeEmailNotification(env, userId, notificationId)
+        await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'smtp')
+        attempts.push(emailDeliveryAttempt('smtp', 'sent', providerId ? `服务商消息 ID：${providerId}` : '服务商已受理'))
+        return { sent: true, provider: 'smtp' as const, attempts }
+      }
+      catch (error) {
+        const message = errorMessage(error, 'SMTP 邮件发送失败')
+        await recordDelivery(env, notificationId, 'email', 'failed', message, 0, '', 'smtp')
+        attempts.push(emailDeliveryAttempt('smtp', 'failed', message))
+      }
+    }
+  }
+
+  // 降级到 Resend
+  if (config.resendApiKey && config.resendFromEmail) {
+    try {
+      const providerId = await sendResendEmail(config, address, input.title, input.body, input.data)
+      if (chargedPoints)
+        await chargeEmailNotification(env, userId, notificationId)
+      await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'resend')
+      attempts.push(emailDeliveryAttempt('resend', 'sent', providerId ? `服务商消息 ID：${providerId}` : '服务商已受理'))
+      return { sent: true, provider: 'resend' as const, attempts }
+    }
+    catch (error) {
+      const message = errorMessage(error, 'Resend 邮件发送失败')
+      await recordDelivery(env, notificationId, 'email', 'failed', message, 0, '', 'resend')
+      attempts.push(emailDeliveryAttempt('resend', 'failed', message))
+    }
+  }
+
+  // 最后尝试飞书
   if (config.feishuMailEnabled) {
     if (!isFeishuMailConfigured(config)) {
       const message = feishuMailConfigErrorMessage(config) || '飞书邮件通知未配置完整'
@@ -2215,20 +2346,8 @@ async function dispatchEmailChannel(
     }
   }
 
-  try {
-    const providerId = await sendResendEmail(config, address, input.title, input.body, input.data)
-    if (chargedPoints)
-      await chargeEmailNotification(env, userId, notificationId)
-    await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'resend')
-    attempts.push(emailDeliveryAttempt('resend', 'sent', providerId ? `服务商消息 ID：${providerId}` : '服务商已受理'))
-    return { sent: true, provider: 'resend' as const, attempts }
-  }
-  catch (error) {
-    const message = errorMessage(error, '邮箱发送失败')
-    await recordDelivery(env, notificationId, 'email', 'failed', message, 0, '', 'resend')
-    attempts.push(emailDeliveryAttempt('resend', 'failed', message))
-    return { sent: false, provider: undefined, attempts }
-  }
+  // 所有方式都失败
+  return { sent: false, provider: undefined, attempts }
 }
 
 async function sendFeishu(env: WorkerEnv, encryptedWebhook: string, title: string, body: string) {

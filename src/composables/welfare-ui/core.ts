@@ -19,6 +19,7 @@ import {
   deletePushSubscription,
   generateVapidKeys,
   loadAdminAnnouncements,
+  loadFeishuMailboxes,
   loadNotificationProviderConfig,
   loadNotifications,
   loadNotificationSettings,
@@ -485,6 +486,8 @@ export const notificationProviderConfigForm = reactive({
   feishuUserMailboxId: 'me',
   feishuSiteBaseUrl: '',
   feishuDailyLimit: 400,
+  feishuMailboxOptions: [] as Awaited<ReturnType<typeof loadFeishuMailboxes>>['mailboxes'],
+  feishuMailboxesLoading: false,
   testEmailAddress: '',
   testingEmail: false,
   authorizingFeishu: false,
@@ -2252,7 +2255,6 @@ export function useWelfareUiState() {
         enabled: sub2ApiConfigForm.enabled,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
-        clearDatabaseUrl: true,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
         defaultQuotaUsd: Number(sub2ApiConfigForm.defaultQuotaUsd),
         defaultExpiresInDays: Number(sub2ApiConfigForm.defaultExpiresInDays),
@@ -2280,7 +2282,6 @@ export function useWelfareUiState() {
         enabled: sub2ApiConfigForm.enabled,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
-        clearDatabaseUrl: true,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
         defaultQuotaUsd: Number(sub2ApiConfigForm.defaultQuotaUsd),
         defaultExpiresInDays: Number(sub2ApiConfigForm.defaultExpiresInDays),
@@ -2683,6 +2684,27 @@ export function useWelfareUiState() {
     }
     finally {
       notificationProviderConfigForm.authorizingFeishu = false
+    }
+  }
+
+  async function refreshFeishuMailboxOptions() {
+    welfare.assertPersistenceReady()
+    if (!welfare.currentUser.value || welfare.currentUser.value.role !== 'admin')
+      throw new Error('需要管理员权限')
+
+    notificationProviderConfigForm.feishuMailboxesLoading = true
+    notificationProviderConfigForm.message = ''
+    try {
+      const result = await loadFeishuMailboxes(welfare.currentUser.value.id, {
+        providerConfig: notificationProviderConfigPayload(),
+      })
+      notificationProviderConfigForm.feishuMailboxOptions = result.mailboxes
+      notificationProviderConfigForm.message = result.mailboxes.length
+        ? `已读取 ${result.mailboxes.length} 个飞书发信邮箱`
+        : '未从飞书读取到可用发信邮箱'
+    }
+    finally {
+      notificationProviderConfigForm.feishuMailboxesLoading = false
     }
   }
 
@@ -3607,6 +3629,7 @@ export function useWelfareUiState() {
     refreshNotificationProviderConfig,
     persistNotificationProviderConfig,
     authorizeFeishuMailProvider,
+    refreshFeishuMailboxOptions,
     sendProviderEmailTestMessage,
     generateNotificationVapidKeys,
     refreshSiteBannerConfig,
