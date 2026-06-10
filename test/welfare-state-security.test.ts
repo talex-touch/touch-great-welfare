@@ -231,6 +231,68 @@ function createMemoryD1(initialState: WelfareState) {
         },
         async all() {
           queries.push({ method: 'all', query, values: [...this.values] })
+          const normalizedQuery = query.toLowerCase()
+          if (normalizedQuery.includes('select * from users')) {
+            const users = recordLike(storedState) && Array.isArray(storedState.users) ? storedState.users : []
+            return {
+              results: users.filter(recordLike).map(item => ({
+                id: item.id,
+                email: recordLike(item.profile) ? item.profile.email : '',
+                password_hash: item.passwordHash,
+                role: item.role,
+                account_status: item.accountStatus,
+                points: item.points,
+                display_name: recordLike(item.profile) ? item.profile.displayName : '',
+                avatar: recordLike(item.profile) ? item.profile.avatar : undefined,
+                bio: recordLike(item.profile) ? item.profile.bio : undefined,
+                github_username: recordLike(item.profile) ? item.profile.githubUsername : undefined,
+                github_authorized: recordLike(item.profile) && item.profile.githubAuthorized ? 1 : 0,
+                selected_repo: recordLike(item.profile) ? item.profile.selectedRepo : undefined,
+                student_verified: recordLike(item.profile) && item.profile.studentVerified ? 1 : 0,
+                student_verified_at: recordLike(item.profile) ? item.profile.studentVerifiedAt : undefined,
+                invitation_code: item.invitationCode,
+                invited_by_user_id: item.invitedByUserId,
+                created_at: item.createdAt,
+                last_login_at: item.lastLoginAt,
+              })),
+            }
+          }
+          if (normalizedQuery.includes('select * from applications')) {
+            const applications = recordLike(storedState) && Array.isArray(storedState.applications) ? storedState.applications : []
+            return {
+              results: applications.filter(recordLike).map(item => ({
+                id: item.id,
+                user_id: item.userId,
+                type: item.type,
+                status: item.status,
+                title: item.title,
+                description: item.description,
+                base_cost: item.baseCost,
+                cost: item.cost,
+                cost_charged: item.costCharged ? 1 : 0,
+                cost_charged_at: item.costChargedAt,
+                created_at: item.createdAt,
+                updated_at: item.updatedAt,
+                submitted_at: item.submittedAt,
+                reviewed_at: item.reviewedAt,
+                completed_at: item.completedAt,
+              })),
+            }
+          }
+          if (normalizedQuery.includes('select * from student_verifications')) {
+            const verifications = recordLike(storedState) && Array.isArray(storedState.studentVerifications) ? storedState.studentVerifications : []
+            return {
+              results: verifications.filter(recordLike).map(item => ({
+                id: item.id,
+                user_id: item.userId,
+                education_email: item.educationEmail,
+                verification_status: item.status,
+                verification_source: item.educationEmailVerificationSource,
+                verified_at: item.educationEmailVerifiedAt,
+                created_at: item.createdAt,
+              })),
+            }
+          }
           if (query.includes('select payload from welfare_applications')) {
             const applications = recordLike(storedState) && Array.isArray(storedState.applications) ? storedState.applications : []
             return {
@@ -338,6 +400,54 @@ describe('welfare state security', () => {
 
     expect(response.status).toBe(403)
     await expect(response.json()).resolves.toMatchObject({ error: '无权读取该图片' })
+  })
+
+  it('reads upload metadata from the full state when normalized reads omit attachments', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ id: 'user_a' })],
+      studentVerifications: [{
+        id: 'stu_1',
+        userId: 'user_a',
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '高校学生',
+        school: '测试大学',
+        notes: '<p>学生认证材料说明。</p>',
+        attachments: [{
+          id: 'att_normalized_gap',
+          name: 'proof.png',
+          size: 4,
+          type: 'image/png',
+          r2Key: 'user-uploads/user_a/att_normalized_gap.png',
+          url: '/api/uploads/att_normalized_gap/file',
+        }],
+        status: 'pending',
+        reviewFee: STUDENT_REVIEW_FEE,
+        feeReturned: false,
+        createdAt: '2026-06-08T00:00:00.000Z',
+      }],
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      USE_NORMALIZED_TABLES: 'true',
+      AI_ASSETS: {
+        async get(key: string) {
+          return key === 'user-uploads/user_a/att_normalized_gap.png'
+            ? new Response('real', { headers: { 'content-type': 'image/png' } })
+            : null
+        },
+      } as unknown as R2Bucket,
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_a')
+
+    const response = await handleUploadRequest(new Request('https://example.com/api/uploads/att_normalized_gap/file', {
+      headers: { cookie },
+    }), env)
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe('real')
   })
 
   it('returns an unauthorized response when reading uploads without a session', async () => {

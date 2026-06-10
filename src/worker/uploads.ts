@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { AttachmentMeta, WelfareState } from '~/composables/welfare'
 import { assertWelfareState, createId, errorResponse, getAuthenticatedRequest, json } from './auth'
-import { readWelfareState } from './welfare-state'
+import { readWelfareStateRecord } from './welfare-state'
 
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 const UPLOAD_PREFIX = 'user-uploads'
@@ -48,8 +48,12 @@ function attachmentBelongsToOwner(file: AttachmentMeta, ownerId: string) {
   return !file.r2Key || r2KeyOwnerId(file.r2Key) === ownerId
 }
 
-function attachmentVisibleToUser(file: AttachmentMeta, userId: string, state: WelfareState) {
-  const canRead = (itemUserId: string) => itemUserId === userId || state.users.find(item => item.id === userId)?.role === 'admin'
+function attachmentItems(value: { attachments?: AttachmentMeta[] }) {
+  return Array.isArray(value.attachments) ? value.attachments : []
+}
+
+function attachmentVisibleToUser(file: AttachmentMeta, userId: string, state: WelfareState, isAdmin: boolean) {
+  const canRead = (itemUserId: string) => itemUserId === userId || isAdmin
   const matches = (item: AttachmentMeta) => item.id === file.id && item.r2Key === file.r2Key
 
   for (const application of state.applications) {
@@ -57,30 +61,30 @@ function attachmentVisibleToUser(file: AttachmentMeta, userId: string, state: We
       continue
     if (!canRead(application.userId))
       continue
-    if (application.attachments.some(matches))
+    if (attachmentItems(application).some(matches))
       return true
-    if (application.messages?.some(message => message.attachments.some(matches)))
+    if (application.messages?.some(message => attachmentItems(message).some(matches)))
       return true
   }
 
-  return state.studentVerifications.some(verification => attachmentBelongsToOwner(file, verification.userId) && canRead(verification.userId) && verification.attachments.some(matches))
+  return state.studentVerifications.some(verification => attachmentBelongsToOwner(file, verification.userId) && canRead(verification.userId) && attachmentItems(verification).some(matches))
 }
 
 function findAttachment(state: WelfareState, fileId: string) {
   for (const application of state.applications) {
-    const applicationFile = application.attachments.find(item => item.id === fileId)
+    const applicationFile = attachmentItems(application).find(item => item.id === fileId)
     if (applicationFile)
       return applicationFile
 
     for (const message of application.messages ?? []) {
-      const messageFile = message.attachments.find(item => item.id === fileId)
+      const messageFile = attachmentItems(message).find(item => item.id === fileId)
       if (messageFile)
         return messageFile
     }
   }
 
   for (const verification of state.studentVerifications) {
-    const verificationFile = verification.attachments.find(item => item.id === fileId)
+    const verificationFile = attachmentItems(verification).find(item => item.id === fileId)
     if (verificationFile)
       return verificationFile
   }
@@ -128,13 +132,13 @@ async function uploadImage(request: Request, env: WorkerEnv): Promise<UploadResp
 
 async function readUploadedFile(request: Request, env: WorkerEnv, fileId: string) {
   const auth = await getAuthenticatedRequest(request, env)
-  const state = await readWelfareState(env) as Partial<WelfareState>
+  const state = (await readWelfareStateRecord(env)).state as Partial<WelfareState>
   assertWelfareState(state)
 
   const file = findAttachment(state, fileId)
   if (!file || !file.r2Key)
     return json({ error: '图片文件不存在' }, 404)
-  if (!attachmentVisibleToUser(file, auth.user.id, state))
+  if (!attachmentVisibleToUser(file, auth.user.id, state, auth.user.role === 'admin'))
     return json({ error: '无权读取该图片' }, 403)
   if (!env.AI_ASSETS)
     throw new Error('AI_ASSETS R2 Binding 未配置')
