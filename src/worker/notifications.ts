@@ -1433,6 +1433,19 @@ async function deletePushSubscriptionByEndpoint(env: WorkerEnv, userId: string, 
 }
 
 async function hasEnoughPoints(env: WorkerEnv, userId: string, points: number) {
+  // 优化：直接查询 users 表，避免读取整个 state
+  if (env.USE_NORMALIZED_TABLES === 'true') {
+    const db = env.LOCAL_DB
+    if (!db) return false
+
+    const result = await db.prepare(`
+      SELECT points FROM users WHERE id = ?
+    `).bind(userId).first<{ points: number }>()
+
+    return result ? result.points >= points : false
+  }
+
+  // 降级：使用旧方式
   const state = await readWelfareState(env) as Partial<WelfareState>
   assertWelfareState(state)
   const user = state.users.find(item => item.id === userId)

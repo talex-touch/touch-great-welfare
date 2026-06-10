@@ -58,6 +58,7 @@ export default defineConfig({
     'i-carbon-dashboard',
     'i-carbon-arrow-left',
     'i-carbon-add',
+    'i-carbon-renew',
     'i-carbon-chevron-down',
     'i-carbon-paragraph',
     'i-carbon-text-font',
