@@ -1499,7 +1499,8 @@ async function hasEnoughPoints(env: WorkerEnv, userId: string, points: number) {
   // 优化：直接查询 users 表，避免读取整个 state
   if (env.USE_NORMALIZED_TABLES === 'true') {
     const db = env.LOCAL_DB
-    if (!db) return false
+    if (!db)
+      return false
 
     const result = await db.prepare(`
       SELECT points FROM users WHERE id = ?
@@ -2223,7 +2224,7 @@ async function fetchFeishuMailboxOptions(accessToken: string, url: string, type:
   const response = await fetchWithTimeout(url, {
     method: 'GET',
     headers: {
-      authorization: `Bearer ${accessToken}`,
+      'authorization': `Bearer ${accessToken}`,
       'content-type': 'application/json; charset=utf-8',
     },
   })

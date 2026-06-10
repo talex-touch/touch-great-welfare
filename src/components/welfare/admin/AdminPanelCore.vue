@@ -3061,8 +3061,8 @@ onMounted(() => {
                 </div>
               </label>
             </div>
-            <div class="mt-8 border-t border-black/8 pt-8 dark:border-white/10">
-              <label class="text-sm flex gap-2 items-center lg:col-span-2 mb-5">
+            <div class="mt-8 pt-8 border-t border-black/8 dark:border-white/10">
+              <label class="text-sm mb-5 flex gap-2 items-center lg:col-span-2">
                 <TxCheckbox v-model="notificationProviderConfigForm.smtpEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用 SMTP 邮件通知" />
                 启用 SMTP 邮件通知
               </label>
@@ -4186,61 +4186,61 @@ onMounted(() => {
 
               <section class="admin-verification-drawer">
                 <div class="gap-3 grid md:grid-cols-4">
-                    <div class="application-detail-stat">
-                      <span>提交时间</span>
-                      <b>{{ formatDate(selectedStudentVerification.createdAt) }}</b>
-                    </div>
-                    <div class="application-detail-stat">
-                      <span>审核时间</span>
-                      <b>{{ formatOptionalDate(selectedStudentVerification.reviewedAt) }}</b>
-                    </div>
-                    <div class="application-detail-stat">
-                      <span>附件</span>
-                      <b>{{ selectedStudentVerification.attachments.length }} 个材料</b>
-                    </div>
-                    <div class="application-detail-stat">
-                      <span>认证编号</span>
-                      <b>{{ selectedStudentVerification.id }}</b>
-                    </div>
+                  <div class="application-detail-stat">
+                    <span>提交时间</span>
+                    <b>{{ formatDate(selectedStudentVerification.createdAt) }}</b>
                   </div>
-
-                  <div class="gap-4 grid lg:grid-cols-[1fr_1fr]">
-                    <section class="verification-detail-section">
-                      <h3>认证信息</h3>
-                      <dl class="verification-detail-list">
-                        <div>
-                          <dt>真实姓名</dt>
-                          <dd>{{ selectedStudentVerification.realName || '-' }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ verificationOrganizationLabel(selectedStudentVerification.verificationType) }}</dt>
-                          <dd>{{ selectedStudentVerification.school || '-' }}</dd>
-                        </div>
-                        <div>
-                          <dt>{{ selectedStudentVerification.verificationType === 'frontline' ? '服务周期' : '年级' }}</dt>
-                          <dd>{{ selectedStudentVerification.grade || '-' }}</dd>
-                        </div>
-                        <div v-if="selectedStudentVerification.identity || selectedStudentVerification.educationLevel">
-                          <dt>身份信息</dt>
-                          <dd>{{ [selectedStudentVerification.identity, selectedStudentVerification.educationLevel].filter(Boolean).join(' · ') }}</dd>
-                        </div>
-                        <div v-if="selectedStudentVerification.educationEmail">
-                          <dt>邮箱证明</dt>
-                          <dd>{{ selectedStudentVerification.educationEmail }}{{ selectedStudentVerification.educationEmailVerified ? ' · 已验证' : '' }}</dd>
-                        </div>
-                      </dl>
-                    </section>
-
-                    <section class="verification-detail-section">
-                      <h3>审核回复</h3>
-                      <RichTextView :content="selectedStudentVerification.reply || '暂无审核回复。'" class="rich-text-preview" />
-                    </section>
+                  <div class="application-detail-stat">
+                    <span>审核时间</span>
+                    <b>{{ formatOptionalDate(selectedStudentVerification.reviewedAt) }}</b>
                   </div>
+                  <div class="application-detail-stat">
+                    <span>附件</span>
+                    <b>{{ selectedStudentVerification.attachments.length }} 个材料</b>
+                  </div>
+                  <div class="application-detail-stat">
+                    <span>认证编号</span>
+                    <b>{{ selectedStudentVerification.id }}</b>
+                  </div>
+                </div>
+
+                <div class="gap-4 grid lg:grid-cols-[1fr_1fr]">
+                  <section class="verification-detail-section">
+                    <h3>认证信息</h3>
+                    <dl class="verification-detail-list">
+                      <div>
+                        <dt>真实姓名</dt>
+                        <dd>{{ selectedStudentVerification.realName || '-' }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ verificationOrganizationLabel(selectedStudentVerification.verificationType) }}</dt>
+                        <dd>{{ selectedStudentVerification.school || '-' }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ selectedStudentVerification.verificationType === 'frontline' ? '服务周期' : '年级' }}</dt>
+                        <dd>{{ selectedStudentVerification.grade || '-' }}</dd>
+                      </div>
+                      <div v-if="selectedStudentVerification.identity || selectedStudentVerification.educationLevel">
+                        <dt>身份信息</dt>
+                        <dd>{{ [selectedStudentVerification.identity, selectedStudentVerification.educationLevel].filter(Boolean).join(' · ') }}</dd>
+                      </div>
+                      <div v-if="selectedStudentVerification.educationEmail">
+                        <dt>邮箱证明</dt>
+                        <dd>{{ selectedStudentVerification.educationEmail }}{{ selectedStudentVerification.educationEmailVerified ? ' · 已验证' : '' }}</dd>
+                      </div>
+                    </dl>
+                  </section>
 
                   <section class="verification-detail-section">
-                    <h3>材料说明</h3>
-                    <RichTextView :content="selectedStudentVerification.notes || '暂无材料说明。'" class="rich-text-preview" />
+                    <h3>审核回复</h3>
+                    <RichTextView :content="selectedStudentVerification.reply || '暂无审核回复。'" class="rich-text-preview" />
                   </section>
+                </div>
+
+                <section class="verification-detail-section">
+                  <h3>材料说明</h3>
+                  <RichTextView :content="selectedStudentVerification.notes || '暂无材料说明。'" class="rich-text-preview" />
+                </section>
 
                 <section class="verification-detail-section">
                   <h3>附件材料</h3>

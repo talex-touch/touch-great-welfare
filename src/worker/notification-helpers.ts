@@ -7,7 +7,8 @@ import type { WorkerEnv } from './welfare-state'
 // 直接从 users 表查询积分
 export async function getUserPoints(env: WorkerEnv, userId: string): Promise<number | null> {
   const db = env.LOCAL_DB
-  if (!db) return null
+  if (!db)
+    return null
 
   const result = await db.prepare(`
     SELECT points FROM users WHERE id = ?

@@ -2,10 +2,10 @@
  * 灰度切换逻辑测试
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
-import { shouldReadFromTable, setMigrationConfig } from '../src/worker/welfare/core/repository/base'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { setMigrationConfig, shouldReadFromTable } from '../src/worker/welfare/core/repository/base'
 
-describe('Canary Logic', () => {
+describe('canary Logic', () => {
   beforeEach(() => {
     // 重置到默认配置
     setMigrationConfig({
@@ -97,7 +97,7 @@ describe('Canary Logic', () => {
   })
 })
 
-describe('Canary Distribution', () => {
+describe('canary Distribution', () => {
   it('should distribute users evenly with 10% canary', () => {
     setMigrationConfig({
       readMode: {
