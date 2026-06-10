@@ -584,6 +584,13 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
           feishu_user_mailbox_id text not null default 'me',
           feishu_site_base_url text not null default '',
           feishu_daily_limit integer not null default 400,
+          smtp_enabled integer not null default 0,
+          smtp_host text not null default '',
+          smtp_port integer not null default 465,
+          smtp_username text not null default '',
+          smtp_password_encrypted text,
+          smtp_from_email text not null default '',
+          smtp_from_name text not null default '',
           created_at text not null default current_timestamp,
           updated_at text not null default current_timestamp
         )
@@ -719,6 +726,20 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_user_mailbox_id', 'text not null default \'me\'')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_site_base_url', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'feishu_daily_limit', 'integer not null default 400')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_enabled', 'integer not null default 0')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_host', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_port', 'integer not null default 465')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_username', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_password_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_from_email', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_from_name', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_enabled', 'integer not null default 0')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_host', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_port', 'integer not null default 465')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_username', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_password_encrypted', 'text')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_from_email', 'text not null default \'\'')
+    await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_from_name', 'text not null default \'\'')
     return
   }
 
@@ -983,6 +1004,13 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       feishu_user_mailbox_id text not null default 'me',
       feishu_site_base_url text not null default '',
       feishu_daily_limit integer not null default 400,
+      smtp_enabled boolean not null default false,
+      smtp_host text not null default '',
+      smtp_port integer not null default 465,
+      smtp_username text not null default '',
+      smtp_password_encrypted text,
+      smtp_from_email text not null default '',
+      smtp_from_name text not null default '',
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
@@ -997,6 +1025,13 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
   await pool.query('alter table notification_provider_config add column if not exists feishu_user_mailbox_id text not null default $1', [DEFAULT_FEISHU_USER_MAILBOX_ID])
   await pool.query('alter table notification_provider_config add column if not exists feishu_site_base_url text not null default $1', [''])
   await pool.query('alter table notification_provider_config add column if not exists feishu_daily_limit integer not null default $1', [DEFAULT_FEISHU_DAILY_LIMIT])
+  await pool.query('alter table notification_provider_config add column if not exists smtp_enabled boolean not null default false')
+  await pool.query('alter table notification_provider_config add column if not exists smtp_host text not null default $1', [''])
+  await pool.query('alter table notification_provider_config add column if not exists smtp_port integer not null default 465')
+  await pool.query('alter table notification_provider_config add column if not exists smtp_username text not null default $1', [''])
+  await pool.query('alter table notification_provider_config add column if not exists smtp_password_encrypted text')
+  await pool.query('alter table notification_provider_config add column if not exists smtp_from_email text not null default $1', [''])
+  await pool.query('alter table notification_provider_config add column if not exists smtp_from_name text not null default $1', [''])
 }
 
 async function insertNotification(env: WorkerEnv, input: CreateNotificationInput) {
@@ -1618,6 +1653,7 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
   let feishuAppSecretEncrypted = stored?.feishu_app_secret_encrypted || null
   let feishuUserAccessTokenEncrypted = stored?.feishu_user_access_token_encrypted || null
   let feishuRefreshTokenEncrypted = stored?.feishu_refresh_token_encrypted || null
+  let smtpPasswordEncrypted = stored?.smtp_password_encrypted || null
   if (payload.clearResendApiKey)
     resendApiKeyEncrypted = null
   if (payload.clearVapidPrivateKey)
@@ -1628,6 +1664,8 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
     feishuUserAccessTokenEncrypted = null
   if (payload.clearFeishuRefreshToken)
     feishuRefreshTokenEncrypted = null
+  if (payload.clearSmtpPassword)
+    smtpPasswordEncrypted = null
   if (payload.resendApiKey?.trim())
     resendApiKeyEncrypted = await encryptSecret(payload.resendApiKey.trim(), encryptionSecret(env))
   if (payload.vapidPrivateKey?.trim())
@@ -1638,6 +1676,8 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
     feishuUserAccessTokenEncrypted = await encryptSecret(payload.feishuUserAccessToken.trim(), encryptionSecret(env))
   if (payload.feishuRefreshToken?.trim())
     feishuRefreshTokenEncrypted = await encryptSecret(payload.feishuRefreshToken.trim(), encryptionSecret(env))
+  if (payload.smtpPassword?.trim())
+    smtpPasswordEncrypted = await encryptSecret(payload.smtpPassword.trim(), encryptionSecret(env))
 
   const feishuMailEnabled = !!payload.feishuMailEnabled
   const feishuAppId = payload.feishuAppId?.trim() || ''
@@ -1651,6 +1691,21 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
       throw new Error('启用飞书邮件前请填写 App Secret')
     if (!feishuUserMailboxId)
       throw new Error('启用飞书邮件前请填写发信邮箱')
+  }
+
+  const smtpEnabled = !!payload.smtpEnabled
+  const smtpHost = payload.smtpHost?.trim() || ''
+  const smtpPort = payload.smtpPort || 465
+  const smtpUsername = payload.smtpUsername?.trim() || ''
+  const smtpFromEmail = payload.smtpFromEmail?.trim() || ''
+  const smtpFromName = payload.smtpFromName?.trim() || ''
+  if (smtpEnabled) {
+    if (!smtpHost)
+      throw new Error('启用 SMTP 邮件前请填写 SMTP 服务器地址')
+    if (!smtpPasswordEncrypted)
+      throw new Error('启用 SMTP 邮件前请填写 SMTP 密码')
+    if (!smtpFromEmail)
+      throw new Error('启用 SMTP 邮件前请填写发件邮箱')
   }
 
   const config = {
@@ -1669,6 +1724,13 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
     feishuUserMailboxId,
     feishuSiteBaseUrl,
     feishuDailyLimit,
+    smtpEnabled,
+    smtpHost,
+    smtpPort,
+    smtpUsername,
+    smtpPasswordEncrypted,
+    smtpFromEmail,
+    smtpFromName,
   }
 
   if (shouldUseD1(env)) {
@@ -1678,9 +1740,11 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
           id, resend_api_key_encrypted, resend_from_email, vapid_public_key, vapid_private_key_encrypted, vapid_subject,
           feishu_mail_enabled, feishu_app_id, feishu_app_secret_encrypted, feishu_user_access_token_encrypted,
           feishu_refresh_token_encrypted, feishu_access_token_expires_at, feishu_refresh_token_expires_at,
-          feishu_user_mailbox_id, feishu_site_base_url, feishu_daily_limit, updated_at
+          feishu_user_mailbox_id, feishu_site_base_url, feishu_daily_limit,
+          smtp_enabled, smtp_host, smtp_port, smtp_username, smtp_password_encrypted, smtp_from_email, smtp_from_name,
+          updated_at
         )
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, current_timestamp)
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, current_timestamp)
         on conflict (id)
         do update set
           resend_api_key_encrypted = excluded.resend_api_key_encrypted,
@@ -1698,6 +1762,13 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
           feishu_user_mailbox_id = excluded.feishu_user_mailbox_id,
           feishu_site_base_url = excluded.feishu_site_base_url,
           feishu_daily_limit = excluded.feishu_daily_limit,
+          smtp_enabled = excluded.smtp_enabled,
+          smtp_host = excluded.smtp_host,
+          smtp_port = excluded.smtp_port,
+          smtp_username = excluded.smtp_username,
+          smtp_password_encrypted = excluded.smtp_password_encrypted,
+          smtp_from_email = excluded.smtp_from_email,
+          smtp_from_name = excluded.smtp_from_name,
           updated_at = current_timestamp
       `)
       .bind(
@@ -1717,6 +1788,13 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
         config.feishuUserMailboxId,
         config.feishuSiteBaseUrl,
         config.feishuDailyLimit,
+        config.smtpEnabled ? 1 : 0,
+        config.smtpHost,
+        config.smtpPort,
+        config.smtpUsername,
+        config.smtpPasswordEncrypted,
+        config.smtpFromEmail,
+        config.smtpFromName,
       )
       .run()
   }
@@ -1726,9 +1804,11 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
         id, resend_api_key_encrypted, resend_from_email, vapid_public_key, vapid_private_key_encrypted, vapid_subject,
         feishu_mail_enabled, feishu_app_id, feishu_app_secret_encrypted, feishu_user_access_token_encrypted,
         feishu_refresh_token_encrypted, feishu_access_token_expires_at, feishu_refresh_token_expires_at,
-        feishu_user_mailbox_id, feishu_site_base_url, feishu_daily_limit, updated_at
+        feishu_user_mailbox_id, feishu_site_base_url, feishu_daily_limit,
+        smtp_enabled, smtp_host, smtp_port, smtp_username, smtp_password_encrypted, smtp_from_email, smtp_from_name,
+        updated_at
       )
-      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, now())
       on conflict (id)
       do update set
         resend_api_key_encrypted = excluded.resend_api_key_encrypted,
@@ -1746,6 +1826,13 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
         feishu_user_mailbox_id = excluded.feishu_user_mailbox_id,
         feishu_site_base_url = excluded.feishu_site_base_url,
         feishu_daily_limit = excluded.feishu_daily_limit,
+        smtp_enabled = excluded.smtp_enabled,
+        smtp_host = excluded.smtp_host,
+        smtp_port = excluded.smtp_port,
+        smtp_username = excluded.smtp_username,
+        smtp_password_encrypted = excluded.smtp_password_encrypted,
+        smtp_from_email = excluded.smtp_from_email,
+        smtp_from_name = excluded.smtp_from_name,
         updated_at = now()
     `, [
       NOTIFICATION_PROVIDER_CONFIG_ID,
@@ -1764,6 +1851,13 @@ async function saveNotificationProviderConfig(env: WorkerEnv, payload: Notificat
       config.feishuUserMailboxId,
       config.feishuSiteBaseUrl,
       config.feishuDailyLimit,
+      config.smtpEnabled,
+      config.smtpHost,
+      config.smtpPort,
+      config.smtpUsername,
+      config.smtpPasswordEncrypted,
+      config.smtpFromEmail,
+      config.smtpFromName,
     ])
   }
 
