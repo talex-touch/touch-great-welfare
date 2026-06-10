@@ -897,6 +897,75 @@ describe('welfare state security', () => {
     expect(d1.queries.some(item => item.query.includes('insert into welfare_applications') && item.values[0] === payload.state.applications[0].id)).toBe(true)
   })
 
+  it('appends point transactions from the latest ledger balance', async () => {
+    const d1 = createMemoryD1(state())
+    d1.pointTransactions.push({
+      id: 'tx_existing_balance',
+      user_id: 'user_1',
+      delta: 800,
+      type: 'recharge',
+      reason: '历史充值',
+      ref_id: 'recharge_existing',
+      balance_after: 800,
+      created_at: '2026-06-07T00:00:00.000Z',
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    await appendPointTransaction(env, {
+      id: 'tx_after_ledger',
+      userId: 'user_1',
+      delta: 10,
+      type: 'grant',
+      reason: '助力奖励',
+      refId: 'boost_1',
+      createdAt: '2026-06-07T01:00:00.000Z',
+    })
+
+    expect(d1.pointTransactions.at(-1)).toMatchObject({
+      id: 'tx_after_ledger',
+      balance_after: 810,
+    })
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(810)
+  })
+
+  it('does not write square boost point transactions when the state write loses CAS', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ id: 'owner_1' }), user({ id: 'user_1', points: 1000 })],
+      squarePosts: [{
+        id: 'post_1',
+        userId: 'owner_1',
+        type: 'review',
+        title: '公益方向',
+        content: '<p>这个公益方向值得长期支持和维护。</p>',
+        createdAt: '2026-06-07T00:00:00.000Z',
+        updatedAt: '2026-06-07T00:00:00.000Z',
+      }],
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    d1.bumpVersionAfterNextVersionRead()
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/square/boosts', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        postId: 'post_1',
+        declaration: '<p>我认可这个公益方向，愿意支持它继续帮助更多项目降低协作和资源成本。</p>',
+      }),
+    }), env)
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toMatchObject({ code: 'STATE_VERSION_CONFLICT' })
+    expect(d1.pointTransactions).toHaveLength(0)
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.squareBoosts).toHaveLength(0)
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1000)
+  })
+
   it('does not write student review point transactions when the state write loses CAS', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }

@@ -2961,49 +2961,63 @@ export async function redeemCouponCodeAction(request: Request, env: WorkerEnv) {
 }
 
 export async function boostSquarePostAction(request: Request, env: WorkerEnv) {
-  return commitCurrentUserAction(request, env, async (state, user, payload) => {
-    const postId = typeof payload.postId === 'string' ? payload.postId : ''
-    const post = ensureSquarePosts(state).find(item => item.id === postId)
-    if (!post)
-      throw new Error('广场内容不存在')
-    if (post.userId === user.id)
-      throw new Error('不能为自己的广场内容拼一刀')
-    const boosts = ensureSquareBoosts(state)
-    if (boosts.some(item => item.postId === postId && item.userId === user.id))
-      throw new Error('你已经为该内容助力过')
-    const createdAt = now()
-    const dailyBoostCount = boosts.filter(item =>
-      item.userId === user.id
-      && (item.mode ?? 'boost') === 'boost'
-      && localDateKey(item.createdAt) === localDateKey(createdAt),
-    ).length
-    if (dailyBoostCount >= SQUARE_DAILY_BOOST_LIMIT)
-      throw new Error(`今日助力机会已用完，每人每天最多 ${SQUARE_DAILY_BOOST_LIMIT} 次`)
-    const declaration = sanitizeWorkerRichText(payload.declaration)
-    if (richTextToPlainText(declaration).trim().length < 20)
-      throw new Error('助力宣言至少 20 字，请说明为什么支持这个领域')
+  const userId = await requestUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
 
-    const boost: SquareBoost = {
-      id: createId('boost'),
-      postId,
-      userId: user.id,
-      mode: 'boost',
-      declaration,
-      pointsGranted: SQUARE_BOOST_REWARD_POINTS,
-      createdAt,
-    }
-    boosts.unshift(boost)
-    await appendTrustedPointTransaction(env, state, {
-      id: transactionId('square_boost', boost.id),
-      userId: user.id,
-      delta: SQUARE_BOOST_REWARD_POINTS,
-      type: 'grant',
-      reason: '广场拼一刀助力奖励',
-      refId: boost.id,
-      createdAt,
-    })
-    return { boost }
-  })
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
+  const mutableState = state as Partial<WelfareState>
+  const originalState = cloneState(mutableState)
+  const user = stateUsers(mutableState).find(item => item.id === userId && item.accountStatus !== 'suspended')
+  if (!user)
+    throw new Error('请先登录')
+
+  const payload = await readPayload(request) as Record<string, unknown>
+  const postId = typeof payload.postId === 'string' ? payload.postId : ''
+  const post = ensureSquarePosts(mutableState).find(item => item.id === postId)
+  if (!post)
+    throw new Error('广场内容不存在')
+  if (post.userId === user.id)
+    throw new Error('不能为自己的广场内容拼一刀')
+  const boosts = ensureSquareBoosts(mutableState)
+  const existingBoost = boosts.find(item => item.postId === postId && item.userId === user.id)
+  if (existingBoost)
+    return json({ ok: true, boost: existingBoost, version })
+
+  const createdAt = now()
+  const dailyBoostCount = boosts.filter(item =>
+    item.userId === user.id
+    && (item.mode ?? 'boost') === 'boost'
+    && localDateKey(item.createdAt) === localDateKey(createdAt),
+  ).length
+  if (dailyBoostCount >= SQUARE_DAILY_BOOST_LIMIT)
+    throw new Error(`今日助力机会已用完，每人每天最多 ${SQUARE_DAILY_BOOST_LIMIT} 次`)
+  const declaration = sanitizeWorkerRichText(payload.declaration)
+  if (richTextToPlainText(declaration).trim().length < 20)
+    throw new Error('助力宣言至少 20 字，请说明为什么支持这个领域')
+
+  const boost: SquareBoost = {
+    id: createId('boost'),
+    postId,
+    userId: user.id,
+    mode: 'boost',
+    declaration,
+    pointsGranted: SQUARE_BOOST_REWARD_POINTS,
+    createdAt,
+  }
+  boosts.unshift(boost)
+  user.points += SQUARE_BOOST_REWARD_POINTS
+  const result = await commitActionStateWithPointTransactions(env, originalState, mutableState, version, [{
+    id: transactionId('square_boost', `${postId}_${user.id}`),
+    userId: user.id,
+    delta: SQUARE_BOOST_REWARD_POINTS,
+    type: 'grant',
+    reason: '广场拼一刀助力奖励',
+    refId: boost.id,
+    balanceAfter: user.points,
+    createdAt,
+  }])
+  return json({ ok: true, boost, ...stateVersionPayload(result.version) })
 }
 
 export async function reportSquareBoostAction(request: Request, env: WorkerEnv) {

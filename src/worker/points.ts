@@ -390,16 +390,15 @@ export async function appendPointTransaction(env: WorkerEnv, input: PointTransac
     throw new Error('积分变动必须是非零整数')
 
   const currentPoints = Number(user.points)
-  const currentBalance = Number.isFinite(currentPoints) ? currentPoints : 0
+  const ledgerBalance = await latestBalanceForUser(env, input.userId)
+  const currentBalance = ledgerBalance ?? (Number.isFinite(currentPoints) ? currentPoints : 0)
+  user.points = currentBalance
   const existingTransaction = input.id ? await transactionById(env, input.id) : undefined
   const txId = input.id || createTransactionId()
   if (existingTransaction) {
-    const latestBalance = await latestBalanceForUser(env, input.userId)
-    if (latestBalance !== undefined)
-      user.points = latestBalance
     const tx = {
       ...existingTransaction,
-      balanceAfter: latestBalance ?? existingTransaction.balanceAfter,
+      balanceAfter: ledgerBalance ?? existingTransaction.balanceAfter,
     } satisfies CreditTransaction
     if (stateOverride === undefined)
       await writeWelfareState(env, state, { expectedVersion: record!.version })
