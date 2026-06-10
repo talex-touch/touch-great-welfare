@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ApplicationItem, AttachmentMeta } from '~/composables/welfare'
 import type { UploadLikeFile } from '~/composables/welfare-ui'
-import { TxButton, TxCard, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxSelect, TxSelectItem, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -10,6 +10,7 @@ import { useWelfareUiState } from '~/composables/welfare-ui'
 import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText, resourceTicketStatus, resourceTicketSteps } from '~/composables/welfare/resource-display'
 import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
 import ApplicationThread from './ApplicationThread.vue'
+import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
 import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
@@ -41,6 +42,8 @@ const {
   completeApplication,
   addApplicationMessage,
   requestResourceLifecycle,
+  resourceReviewDraftFor,
+  approveResourceItem,
 } = useWelfareUiState()
 
 const applicationId = computed(() => {
@@ -157,6 +160,13 @@ function handleResourceLifecycle(itemId: string, action: 'request_renewal' | 're
       action,
     })
   }, `${actionText}已提交`)
+}
+
+function handleReviewResourceItem(itemId: string) {
+  if (!application.value || !isAdmin.value)
+    return
+
+  runSafely(() => approveResourceItem(application.value!.id, itemId), '资源明细审批结果已保存')
 }
 
 function resourceItemAttachments(item: { payload: Record<string, any> }): AttachmentMeta[] {
@@ -391,6 +401,29 @@ function handleComplete() {
                   明细附件
                 </div>
                 <VerificationAttachmentGrid :files="resourceItemAttachments(item)" />
+              </div>
+              <div v-if="isAdmin && item.approvalStatus === 'pending'" class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
+                <label class="gap-2 grid">
+                  <span class="field-label">审批结果</span>
+                  <TxSelect v-model="resourceReviewDraftFor(item.id).status" panel-background="pure">
+                    <TxSelectItem value="approved" label="通过" />
+                    <TxSelectItem value="adjusted_approved" label="调整后通过" />
+                    <TxSelectItem value="rejected" label="驳回" />
+                  </TxSelect>
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">说明 / 驳回原因</span>
+                  <RichTextEditor v-model="resourceReviewDraftFor(item.id).note" :min-height="110" placeholder="驳回时必填；通过可填写开通备注。" />
+                </label>
+                <label v-if="resourceReviewDraftFor(item.id).status === 'adjusted_approved'" class="gap-2 grid md:col-span-2">
+                  <span class="field-label">批准后的额度/权限 JSON</span>
+                  <textarea v-model="resourceReviewDraftFor(item.id).approvedPayloadText" class="form-textarea" rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
+                </label>
+                <div class="md:col-span-2">
+                  <TxButton size="sm" variant="primary" @click="handleReviewResourceItem(item.id)">
+                    保存审批结果
+                  </TxButton>
+                </div>
               </div>
               <div v-if="resourceItemApprovedFields(item).length" class="mt-3 p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30">
                 <div class="text-xs text-emerald-900 fw-900 dark:text-emerald-100">
