@@ -14,13 +14,13 @@ import VerificationAttachmentGrid from '../VerificationAttachmentGrid.vue'
 
 const {
   state,
+  currentUser,
   isAdmin,
   reloadWelfareState,
   pointDrafts,
   userLevelCard,
   setUserCrowdReviewer,
   setUserSuspended,
-  setUserStudentVerified,
   revokeUserStudentVerification,
   submitAdminStudentVerificationFromForm,
   resetAdminStudentVerificationForm,
@@ -357,6 +357,8 @@ const announcementChannelOptions = [
   { value: 'browser_push', label: '浏览器推送' },
 ] as const
 
+const EMAIL_ADDRESS_PATTERN = /[\w.%+-]+@[\w.-]+\.[a-z]{2,}/i
+
 const auditAreaFilterOptions = [
   { value: ALL_FILTER, label: '全部模块' },
   { value: '用户', label: '用户' },
@@ -431,7 +433,22 @@ const revokeStudentReason = ref('')
 const selectedStudentVerificationId = ref('')
 const isStudentVerificationDialogOpen = ref(false)
 const studentVerificationDialogSource = ref<HTMLElement | null>(null)
+const isUserStudentVerificationCreateOpen = ref(false)
 const adminTransactions = computed(() => pointTransactions.value)
+const feishuSenderMailboxOptions = computed(() => {
+  const options = [
+    {
+      label: '用户邮箱',
+      value: currentUser.value?.profile.email,
+    },
+    {
+      label: '公告邮箱',
+      value: notificationProviderConfigForm.resendFromEmail.match(EMAIL_ADDRESS_PATTERN)?.[0],
+    },
+  ].filter((item): item is { label: string, value: string } => !!item.value?.trim())
+
+  return options.filter((item, index) => options.findIndex(option => option.value === item.value) === index)
+})
 
 function userDisplayName(userId: string) {
   return state.users.find(user => user.id === userId)?.profile.displayName ?? '未知用户'
@@ -730,6 +747,7 @@ function openUserDrawer(userId: string, mode: 'detail' | 'points' = 'detail') {
   activeUserDrawerTab.value = mode === 'points' ? USER_DRAWER_TABS.wallet : USER_DRAWER_TABS.account
   pendingAdminUserAction.value = ''
   revokeStudentReason.value = ''
+  isUserStudentVerificationCreateOpen.value = false
   isUserDrawerOpen.value = true
 }
 
@@ -737,6 +755,7 @@ function closeUserDrawer() {
   isUserDrawerOpen.value = false
   pendingAdminUserAction.value = ''
   revokeStudentReason.value = ''
+  isUserStudentVerificationCreateOpen.value = false
   closeStudentVerificationDialog()
 }
 
@@ -1759,15 +1778,22 @@ function confirmUserAction(userId: string, action: string) {
   return false
 }
 
-function onToggleStudentVerified(userId: string, verified: boolean) {
-  const action = verified ? 'verify-student' : 'unbind-student'
-  if (!confirmUserAction(userId, action))
-    return
+function openUserStudentVerificationCreate(userId: string) {
+  resetAdminStudentVerificationForm()
+  adminStudentVerificationForm.userId = userId
+  adminStudentVerificationForm.verificationType = 'student'
+  adminStudentVerificationForm.category = '大学生'
+  adminStudentVerificationForm.message = '请补充文本说明并上传材料；提交后会生成一条待审核认证记录。'
+  pendingAdminUserAction.value = ''
+  isUserStudentVerificationCreateOpen.value = true
+}
 
+function onSubmitUserStudentVerificationCreate() {
   runSafely(async () => {
-    await setUserStudentVerified(userId, verified)
+    await submitAdminStudentVerificationFromForm()
     pendingAdminUserAction.value = ''
-  }, verified ? '已标记学生认证' : '已解绑学生认证')
+    isUserStudentVerificationCreateOpen.value = false
+  }, '已新添加学生认证')
 }
 
 function onRevokeStudentVerification(userId: string) {
@@ -2788,7 +2814,7 @@ onMounted(() => {
                   Sub2API 直连配置
                 </div>
                 <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在个人信息页生成和删除 API Key。' : '尚未配置 Sub2API 基础地址，或未提供 Admin API Key / 数据库连接。' }}
+                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在资源申请通过后自动发放 API Key。' : '尚未配置 Sub2API 基础地址或 Admin API Key。' }}
                 </div>
                 <div class="gap-5 grid lg:grid-cols-2">
                   <label class="gap-2 grid lg:col-span-2">
@@ -2798,36 +2824,19 @@ onMounted(() => {
                   <label class="gap-2 grid">
                     <span class="field-label">Admin API Key</span>
                     <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
-                    <span class="field-hint">优先用于查询/创建 Sub2API 用户，并通过 Admin API 创建/删除 API Key；服务端加密保存。</span>
+                    <span class="field-hint">用于测试连接、拉取分组、查询/创建 Sub2API 用户，并通过 Admin API 创建/删除 API Key；服务端加密保存。</span>
                   </label>
                   <label class="gap-2 grid">
-                    <span class="field-label">Sub2API 数据库连接</span>
-                    <TxInput v-model="sub2ApiConfigForm.databaseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.databaseUrlMasked || 'postgresql://...'" />
-                    <span class="field-hint">仅在 Admin API 不支持创建/删除 API Key 时作为受控兜底；只在 Worker 后端使用。</span>
-                  </label>
-                  <label class="gap-2 grid">
-                    <span class="field-label">默认分组 ID</span>
-                    <TxInput v-model="sub2ApiConfigForm.defaultGroupId" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="可选" />
-                  </label>
-                  <label class="gap-2 grid">
-                    <span class="field-label">默认额度（USD）</span>
-                    <TxInput v-model="sub2ApiConfigForm.defaultQuotaUsd" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-                  </label>
-                  <label class="gap-2 grid">
-                    <span class="field-label">默认有效期（天）</span>
-                    <TxInput v-model="sub2ApiConfigForm.defaultExpiresInDays" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-                  </label>
-                  <label class="gap-2 grid">
-                    <span class="field-label">默认 5h 限额（USD）</span>
-                    <TxInput v-model="sub2ApiConfigForm.defaultRateLimit5h" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-                  </label>
-                  <label class="gap-2 grid">
-                    <span class="field-label">默认日限额（USD）</span>
-                    <TxInput v-model="sub2ApiConfigForm.defaultRateLimit1d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
-                  </label>
-                  <label class="gap-2 grid">
-                    <span class="field-label">默认 7 日限额（USD）</span>
-                    <TxInput v-model="sub2ApiConfigForm.defaultRateLimit7d" type="number" :disabled="!isAdmin || sub2ApiConfigForm.loading" />
+                    <span class="field-label">默认分组</span>
+                    <select v-model="sub2ApiConfigForm.defaultGroupId" class="form-select" :disabled="!isAdmin || sub2ApiConfigForm.loading || !sub2ApiConfigForm.groups.length">
+                      <option value="">
+                        {{ sub2ApiConfigForm.groups.length ? '不指定分组' : '请先测试连接拉取分组' }}
+                      </option>
+                      <option v-for="group in sub2ApiConfigForm.groups" :key="group.id" :value="group.id">
+                        {{ group.name }}（{{ group.id }}）
+                      </option>
+                    </select>
+                    <span class="field-hint">点击“测试连接”后自动拉取 Sub2API 分组；额度、有效期和限额以资源申请表单为准。</span>
                   </label>
                 </div>
                 <div class="mt-5 flex flex-wrap gap-3 items-center">
@@ -2839,7 +2848,7 @@ onMounted(() => {
                     {{ sub2ApiConfigForm.loading ? '读取 / 保存中...' : '保存 Sub2API 配置' }}
                   </TxButton>
                   <TxButton variant="secondary" :disabled="!isAdmin || sub2ApiConfigForm.testing || sub2ApiConfigForm.loading" @click="testSub2ApiProviderConfig">
-                    {{ sub2ApiConfigForm.testing ? '测试中...' : '测试连接' }}
+                    {{ sub2ApiConfigForm.testing ? '测试中...' : '测试连接并拉取分组' }}
                   </TxButton>
                 </div>
                 <div v-if="sub2ApiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
@@ -2978,9 +2987,8 @@ onMounted(() => {
                 <span class="field-label">飞书 App Secret</span>
                 <TxInput v-model="notificationProviderConfigForm.feishuAppSecret" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuAppSecretMasked || '保存到服务端加密配置'" />
               </label>
-              <div class="text-xs text-slate-500 leading-5 p-3 rounded-2xl bg-slate-50 dark:text-slate-300 dark:bg-white/8 lg:col-span-2">
-                飞书邮件发送需要邮箱账号授权。请先保存 App ID / Secret，并点击“授权飞书邮箱”；授权成功后系统会自动加密保存 user_access_token / refresh_token。
-                <div class="mt-3 flex flex-wrap gap-3 items-center">
+              <div class="lg:col-span-2">
+                <div class="flex flex-wrap gap-3 items-center">
                   <TxButton size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.authorizingFeishu || !notificationProviderConfigForm.feishuAppId" @click="authorizeFeishuProvider">
                     {{ notificationProviderConfigForm.authorizingFeishu ? '跳转中...' : '授权飞书邮箱' }}
                   </TxButton>
@@ -2991,6 +2999,18 @@ onMounted(() => {
               <label class="gap-2 grid">
                 <span class="field-label">飞书发信邮箱</span>
                 <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />
+                <div v-if="feishuSenderMailboxOptions.length" class="flex flex-wrap gap-2">
+                  <TxButton
+                    v-for="option in feishuSenderMailboxOptions"
+                    :key="option.value"
+                    size="sm"
+                    variant="secondary"
+                    :disabled="!isAdmin || notificationProviderConfigForm.loading"
+                    @click="notificationProviderConfigForm.feishuUserMailboxId = option.value"
+                  >
+                    {{ option.label }}：{{ option.value }}
+                  </TxButton>
+                </div>
               </label>
               <label class="gap-2 grid">
                 <span class="field-label">站点根地址</span>
@@ -3017,9 +3037,6 @@ onMounted(() => {
             </div>
             <div v-if="notificationProviderConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
               {{ notificationProviderConfigForm.message }}
-            </div>
-            <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-              用户启用邮箱通知后优先通过飞书邮件投递，每日最多 400 封；飞书 Webhook 仍由用户通知设置保存。
             </div>
           </div>
 
@@ -3726,15 +3743,81 @@ onMounted(() => {
                             </TxButton>
                           </div>
 
-                          <div v-else class="mt-4 flex flex-wrap gap-3 items-center">
-                            <TxButton
-                              size="sm"
-                              variant="secondary"
-                              :disabled="!isAdmin || selectedUserDetail.user.profile.studentVerified"
-                              @click="onToggleStudentVerified(selectedUserDetail.user.id, true)"
-                            >
-                              {{ pendingAdminUserAction === userActionKey(selectedUserDetail.user.id, 'verify-student') ? '确认标记' : '标记学生认证' }}
-                            </TxButton>
+                          <div v-else class="mt-4 gap-4 grid">
+                            <div class="flex flex-wrap gap-3 items-center justify-between">
+                              <p class="text-xs text-slate-500 leading-5 dark:text-slate-400">
+                                标记学生认证会新添加一条待审核认证记录，管理员可补充说明和上传材料。
+                              </p>
+                              <TxButton
+                                size="sm"
+                                variant="secondary"
+                                :disabled="!isAdmin || selectedUserDetail.user.profile.studentVerified"
+                                @click="openUserStudentVerificationCreate(selectedUserDetail.user.id)"
+                              >
+                                {{ isUserStudentVerificationCreateOpen ? '正在新添加认证' : '新添加认证' }}
+                              </TxButton>
+                            </div>
+
+                            <div v-if="isUserStudentVerificationCreateOpen" class="p-4 border border-blue-500/15 rounded-3xl bg-blue-50/60 gap-4 grid dark:border-blue-300/15 dark:bg-blue-950/20">
+                              <div class="admin-filter-bar">
+                                <label class="admin-filter-field">
+                                  <span class="field-label">真实姓名</span>
+                                  <TxInput v-model="adminStudentVerificationForm.realName" placeholder="用于人工复核" />
+                                </label>
+                                <label class="admin-filter-field">
+                                  <span class="field-label">认证类目</span>
+                                  <TxInput v-model="adminStudentVerificationForm.category" placeholder="大学生 / 研究生等" />
+                                </label>
+                                <label class="admin-filter-field">
+                                  <span class="field-label">学校</span>
+                                  <TxInput v-model="adminStudentVerificationForm.school" placeholder="学校名称" />
+                                </label>
+                                <label class="admin-filter-field">
+                                  <span class="field-label">年级</span>
+                                  <TxInput v-model="adminStudentVerificationForm.grade" placeholder="2026 级" />
+                                </label>
+                                <label class="admin-filter-field">
+                                  <span class="field-label">学历/身份</span>
+                                  <TxInput v-model="adminStudentVerificationForm.educationLevel" placeholder="本科 / 研究生等" />
+                                </label>
+                                <label class="admin-filter-field admin-filter-field--wide">
+                                  <span class="field-label">教育邮箱</span>
+                                  <TxInput v-model="adminStudentVerificationForm.educationEmail" type="email" placeholder="可选；填写后可标记管理员已核验" />
+                                </label>
+                                <label class="admin-filter-field">
+                                  <span class="field-label">邮箱核验</span>
+                                  <span class="text-sm flex gap-2 min-h-11 items-center">
+                                    <TxCheckbox v-model="adminStudentVerificationForm.educationEmailVerified" variant="checkmark" aria-label="管理员已核验教育邮箱" />
+                                    管理员已核验
+                                  </span>
+                                </label>
+                              </div>
+
+                              <label class="gap-2 grid">
+                                <span class="field-label">材料说明</span>
+                                <RichTextEditor v-model="adminStudentVerificationForm.notes" :min-height="160" placeholder="说明身份背景、材料清单和管理员新添加认证原因" />
+                              </label>
+                              <div class="gap-2 grid">
+                                <div class="flex flex-wrap gap-2 items-center justify-between">
+                                  <span class="field-label">证明材料</span>
+                                  <span class="field-hint">{{ formatBytes(totalAdminStudentVerificationBytes) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
+                                </div>
+                                <FileUploader v-model="adminStudentVerificationFiles" :max="12" button-text="上传材料" drop-text="拖拽证明材料" hint-text="支持任意材料，总大小 200MB 内" />
+                              </div>
+                              <div class="flex flex-wrap gap-3 items-center justify-between">
+                                <p class="text-xs text-slate-500 dark:text-slate-400">
+                                  {{ adminStudentVerificationForm.message || '提交后记录会进入认证历史，等待管理员审核。' }}
+                                </p>
+                                <div class="flex flex-wrap gap-2">
+                                  <TxButton size="sm" variant="ghost" :disabled="adminStudentVerificationForm.submitting" @click="isUserStudentVerificationCreateOpen = false">
+                                    取消
+                                  </TxButton>
+                                  <TxButton size="sm" variant="primary" :disabled="adminStudentVerificationForm.submitting" @click="onSubmitUserStudentVerificationCreate">
+                                    {{ adminStudentVerificationForm.submitting ? '提交中...' : '提交新认证' }}
+                                  </TxButton>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </section>
 

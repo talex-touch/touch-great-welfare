@@ -106,7 +106,7 @@ export interface WorkerEnv {
   WELFARE_STATE_SECRET_KEY?: string
   WEBHOOK_SECRET?: string
   ASYNC_JOBS?: Queue<unknown>
-  USE_NORMALIZED_TABLES?: string  // 'true' = 从规范化表读取
+  USE_NORMALIZED_TABLES?: string // 'true' = 从规范化表读取
 }
 
 const STATE_KEY = 'default'
@@ -4210,7 +4210,7 @@ export async function reviewAdminApplicationItemAction(request: Request, env: Wo
       throw new Error('调整后通过必须填写批准后的额度/权限')
     item.approvalStatus = status
     item.approvedPayload = isRecord(payload.approvedPayload) ? payload.approvedPayload : undefined
-    item.rejectReason = note || undefined
+    item.rejectReason = status === 'rejected' ? note || undefined : undefined
     item.provisionStatus = ['approved', 'adjusted_approved'].includes(status) ? 'pending' : 'not_required'
     item.lifecycleStatus = status === 'rejected' ? 'rejected' : 'provisioning'
     item.expiresAt = typeof item.expiresAt === 'string' ? item.expiresAt : typeof item.approvedPayload?.expiresAt === 'string' ? item.approvedPayload.expiresAt : typeof item.payload?.expiresAt === 'string' ? item.payload.expiresAt : undefined

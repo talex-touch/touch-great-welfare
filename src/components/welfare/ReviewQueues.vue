@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AttachmentMeta } from '~/composables/welfare'
-import { TxButton, TxCard, TxCheckbox, TxFlipOverlay, TxSelect, TxSelectItem, TxTag } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxCheckbox, TxDrawer, TxSelect, TxSelectItem, TxTag } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
 })
 
 const {
+  state,
   pricingSummary,
   isAdmin,
   canCrowdReview,
@@ -64,14 +65,12 @@ const visibleReviewApplications = computed(() => {
 })
 const selectedReviewApplicationId = ref<string | undefined>()
 const isReviewApplicationDialogOpen = ref(false)
-const reviewApplicationDialogSource = ref<HTMLElement | null>(null)
-const selectedReviewApplication = computed(() => visibleReviewApplications.value.find(item => item.id === selectedReviewApplicationId.value))
+const selectedReviewApplication = computed(() => state.applications.find(item => item.id === selectedReviewApplicationId.value))
 const reviewDraftKey = 'welfare:review-drafts'
 const crowdReviewDraftKey = 'welfare:crowd-review-drafts'
 
-function openReviewApplication(id: string, source: HTMLElement | null = null) {
+function openReviewApplication(id: string, _source: HTMLElement | null = null) {
   selectedReviewApplicationId.value = id
-  reviewApplicationDialogSource.value = source
   isReviewApplicationDialogOpen.value = true
 }
 
@@ -85,11 +84,11 @@ defineExpose({
 
 function closeReviewApplicationDialog() {
   isReviewApplicationDialogOpen.value = false
+  handleReviewApplicationDialogClosed()
 }
 
 function handleReviewApplicationDialogClosed() {
   selectedReviewApplicationId.value = undefined
-  reviewApplicationDialogSource.value = null
 }
 
 function onApproveApplication(id: string, type: string) {
@@ -273,301 +272,297 @@ onMounted(() => {
       </div>
     </TxCard>
 
-    <Teleport to="body">
-      <TxFlipOverlay
-        v-if="selectedReviewApplicationId"
-        v-model="isReviewApplicationDialogOpen"
-        :source="reviewApplicationDialogSource"
-        :header="false"
-        :mask-closable="true"
-        :scrollable="true"
-        mask-class="application-detail-flip-mask"
-        card-class="review-application-flip-dialog"
-        close-aria-label="关闭审核详情"
-        surface="pure"
-        @closed="handleReviewApplicationDialogClosed"
-      >
-        <div v-if="selectedReviewApplication" class="review-application-dialog">
-          <template v-for="item in [selectedReviewApplication]" :key="item.id">
-            <div class="flex flex-wrap gap-4 items-start justify-between">
-              <div class="min-w-0">
-                <div class="text-2xl fw-900 truncate">
-                  {{ item.title }}
-                </div>
-                <div v-if="isAdmin" class="text-xs text-slate-500 mt-1">
-                  {{ userName(item.userId) }} · {{ userEmail(item.userId) }} · {{ item.attachments.length }} 个附件
-                </div>
-                <div v-else class="text-xs text-slate-500 mt-1">
-                  {{ userName(item.userId) }} · {{ item.type.toUpperCase() }} · {{ userLevelCard(item.userId).name }}
-                </div>
-                <div class="text-xs text-slate-500 mt-1">
-                  云端记录预计保留至 {{ item.retentionExpiresAt ? formatDate(item.retentionExpiresAt) : formatRetentionExpiry(item.createdAt) }}
-                </div>
+    <TxDrawer
+      v-if="selectedReviewApplicationId"
+      v-model:visible="isReviewApplicationDialogOpen"
+      class="review-application-drawer-host"
+      direction="right"
+      size="min(1120px, 96vw)"
+      title="审核详情"
+      :z-index="130"
+      mask-effect="blur"
+      @close="handleReviewApplicationDialogClosed"
+    >
+      <div v-if="selectedReviewApplication" class="review-application-dialog">
+        <template v-for="item in [selectedReviewApplication]" :key="item.id">
+          <div class="flex flex-wrap gap-4 items-start justify-between">
+            <div class="min-w-0">
+              <div class="text-2xl fw-900 truncate">
+                {{ item.title }}
               </div>
-              <div class="flex flex-wrap gap-2 items-center justify-end">
-                <TxTag :label="`${item.type.toUpperCase()} ${item.cost}`" color="#7c2d12" background="rgba(251,146,60,.18)" />
-                <TxButton size="sm" variant="ghost" @click="closeReviewApplicationDialog">
-                  关闭
-                </TxButton>
+              <div v-if="isAdmin" class="text-xs text-slate-500 mt-1">
+                {{ userName(item.userId) }} · {{ userEmail(item.userId) }} · {{ item.attachments.length }} 个附件
+              </div>
+              <div v-else class="text-xs text-slate-500 mt-1">
+                {{ userName(item.userId) }} · {{ item.type.toUpperCase() }} · {{ userLevelCard(item.userId).name }}
+              </div>
+              <div class="text-xs text-slate-500 mt-1">
+                云端记录预计保留至 {{ item.retentionExpiresAt ? formatDate(item.retentionExpiresAt) : formatRetentionExpiry(item.createdAt) }}
               </div>
             </div>
-            <div class="mt-3 flex flex-wrap gap-2">
-              <TxTag :label="`${userLevelCard(item.userId).name} · P${userLevelCard(item.userId).priority}`" color="#475569" background="rgba(100,116,139,.14)" />
-              <TxTag :label="aiReviewTone(item.aiReview?.status).label" :color="aiReviewTone(item.aiReview?.status).color" :background="aiReviewTone(item.aiReview?.status).background" />
-              <TxTag v-if="item.storageExtended" label="存储 +7 天" color="#0f766e" background="rgba(45,212,191,.16)" />
-              <TxTag v-if="item.rejectionReviewFeeWaived && item.rejectionFraudulent" label="造假仍扣手续费" color="#991b1b" background="rgba(248,113,113,.16)" />
-              <TxTag v-else-if="item.rejectionReviewFeeWaived" label="退回免手续费" color="#7c3aed" background="rgba(167,139,250,.16)" />
-              <TxTag v-else :label="`退回手续费 ${formatPoints(item.rejectionReviewFee)}`" color="#be123c" background="rgba(244,63,94,.12)" />
-              <TxTag v-if="item.rejectionFraudulent" label="造假限制" color="#991b1b" background="rgba(248,113,113,.16)" />
-              <TxTag v-if="item.type === 'code' && item.llmApiBudgetUsd" :label="`LLMApi ${item.llmApiModelName ?? ''} ${llmBudgetText(item)}`" color="#475569" background="rgba(100,116,139,.14)" />
-              <TxTag v-if="item.llmApiRequiresExtendedReview" label="更长审核" color="#b45309" background="rgba(245,158,11,.16)" />
+            <div class="flex flex-wrap gap-2 items-center justify-end">
+              <TxTag :label="`${item.type.toUpperCase()} ${item.cost}`" color="#7c2d12" background="rgba(251,146,60,.18)" />
+              <TxButton size="sm" variant="ghost" @click="closeReviewApplicationDialog">
+                关闭
+              </TxButton>
             </div>
-            <div v-if="isAdmin && item.type === 'code' && item.llmApiBudgetUsd" class="text-xs text-indigo-900 leading-5 mt-3 p-3 rounded-2xl bg-indigo-50 dark:text-indigo-100 dark:bg-indigo-950/30">
-              LLMApi {{ item.llmApiModelName }}（{{ item.llmApiProvider }}）{{ isGptProModel(item.llmApiModelKey) ? '对话' : '额度' }} {{ llmBudgetText(item) }}，已按 {{ llmPointRateText(item) }} 预扣 {{ formatPoints(item.cost) }}。首次访问 IP 最多 {{ item.llmApiIpLimit }} 个；默认 RPM {{ item.llmApiRpmLimit }}；并发限制 {{ item.llmApiConcurrencyLimit }}。超出 IP 限制时需要管理员清除绑定。
+          </div>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <TxTag :label="`${userLevelCard(item.userId).name} · P${userLevelCard(item.userId).priority}`" color="#475569" background="rgba(100,116,139,.14)" />
+            <TxTag :label="aiReviewTone(item.aiReview?.status).label" :color="aiReviewTone(item.aiReview?.status).color" :background="aiReviewTone(item.aiReview?.status).background" />
+            <TxTag v-if="item.storageExtended" label="存储 +7 天" color="#0f766e" background="rgba(45,212,191,.16)" />
+            <TxTag v-if="item.rejectionReviewFeeWaived && item.rejectionFraudulent" label="造假仍扣手续费" color="#991b1b" background="rgba(248,113,113,.16)" />
+            <TxTag v-else-if="item.rejectionReviewFeeWaived" label="退回免手续费" color="#7c3aed" background="rgba(167,139,250,.16)" />
+            <TxTag v-else :label="`退回手续费 ${formatPoints(item.rejectionReviewFee)}`" color="#be123c" background="rgba(244,63,94,.12)" />
+            <TxTag v-if="item.rejectionFraudulent" label="造假限制" color="#991b1b" background="rgba(248,113,113,.16)" />
+            <TxTag v-if="item.type === 'code' && item.llmApiBudgetUsd" :label="`LLMApi ${item.llmApiModelName ?? ''} ${llmBudgetText(item)}`" color="#475569" background="rgba(100,116,139,.14)" />
+            <TxTag v-if="item.llmApiRequiresExtendedReview" label="更长审核" color="#b45309" background="rgba(245,158,11,.16)" />
+          </div>
+          <div v-if="isAdmin && item.type === 'code' && item.llmApiBudgetUsd" class="text-xs text-indigo-900 leading-5 mt-3 p-3 rounded-2xl bg-indigo-50 dark:text-indigo-100 dark:bg-indigo-950/30">
+            LLMApi {{ item.llmApiModelName }}（{{ item.llmApiProvider }}）{{ isGptProModel(item.llmApiModelKey) ? '对话' : '额度' }} {{ llmBudgetText(item) }}，已按 {{ llmPointRateText(item) }} 预扣 {{ formatPoints(item.cost) }}。首次访问 IP 最多 {{ item.llmApiIpLimit }} 个；默认 RPM {{ item.llmApiRpmLimit }}；并发限制 {{ item.llmApiConcurrencyLimit }}。超出 IP 限制时需要管理员清除绑定。
+          </div>
+          <div v-if="item.aiReview" class="text-xs leading-5 mt-3 p-3 rounded-2xl bg-slate-50 dark:bg-white/5">
+            <div class="fw-800">
+              {{ item.aiReview.summary }}
             </div>
-            <div v-if="item.aiReview" class="text-xs leading-5 mt-3 p-3 rounded-2xl bg-slate-50 dark:bg-white/5">
-              <div class="fw-800">
-                {{ item.aiReview.summary }}
-              </div>
-              <div v-if="isAdmin && item.aiReview.reason" class="text-slate-500 mt-1 dark:text-slate-400">
-                {{ item.aiReview.reason }}
-              </div>
+            <div v-if="isAdmin && item.aiReview.reason" class="text-slate-500 mt-1 dark:text-slate-400">
+              {{ item.aiReview.reason }}
             </div>
-            <RichTextView v-if="isAdmin" :content="item.description" class="rich-text-preview mt-3" />
-            <div v-else class="text-xs text-slate-500 leading-5 mt-3 p-3 rounded-2xl bg-slate-50 dark:text-slate-400 dark:bg-white/5">
-              协作建议不展示申请正文、邮箱、附件清单和学生材料；请基于标题、AI 初审摘要、等级和公开标签给出建议。
+          </div>
+          <RichTextView v-if="isAdmin" :content="item.description" class="rich-text-preview mt-3" />
+          <div v-else class="text-xs text-slate-500 leading-5 mt-3 p-3 rounded-2xl bg-slate-50 dark:text-slate-400 dark:bg-white/5">
+            协作建议不展示申请正文、邮箱、附件清单和学生材料；请基于标题、AI 初审摘要、等级和公开标签给出建议。
+          </div>
+          <div v-if="isAdmin && item.type === 'resource'" class="mt-4 space-y-3">
+            <div class="flex flex-wrap gap-3 items-center justify-between">
+              <div class="text-sm fw-900">
+                资源审核工单
+              </div>
+              <TxTag :label="resourceTicketStatus(item).label" :color="resourceTicketStatus(item).tone === 'danger' ? '#be123c' : resourceTicketStatus(item).tone === 'success' ? '#047857' : resourceTicketStatus(item).tone === 'warning' ? '#b45309' : '#0369a1'" background="rgba(100,116,139,.14)" />
             </div>
-            <div v-if="isAdmin && item.type === 'resource'" class="mt-4 space-y-3">
-              <div class="flex flex-wrap gap-3 items-center justify-between">
-                <div class="text-sm fw-900">
-                  资源审核工单
-                </div>
-                <TxTag :label="resourceTicketStatus(item).label" :color="resourceTicketStatus(item).tone === 'danger' ? '#be123c' : resourceTicketStatus(item).tone === 'success' ? '#047857' : resourceTicketStatus(item).tone === 'warning' ? '#b45309' : '#0369a1'" background="rgba(100,116,139,.14)" />
-              </div>
-              <div class="text-xs text-slate-500 leading-5 p-3 rounded-2xl bg-slate-50 dark:text-slate-400 dark:bg-white/5">
-                项目：{{ item.projectId || '未填写' }} · 成本归属：{{ item.costCenter || '未填写' }} · 期望生效：{{ item.expectedEffectiveAt || '-' }}
-              </div>
-              <div v-for="resourceItem in item.resourceItems ?? []" :key="resourceItem.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
-                <div class="flex flex-wrap gap-3 items-start justify-between">
-                  <div>
-                    <div class="fw-900">
-                      {{ resourceTypeLabel(resourceItem.resourceType) }} · {{ resourceItem.resourceSubtype }}
-                    </div>
-                    <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
-                      {{ resourceItem.approverGroup }} · 权限 {{ resourceItem.requestedPermission || '-' }} · 额度 {{ resourceItem.requestedQuota || '-' }} · 有效期 {{ resourceItem.duration || '-' }}
-                    </div>
+            <div class="text-xs text-slate-500 leading-5 p-3 rounded-2xl bg-slate-50 dark:text-slate-400 dark:bg-white/5">
+              项目：{{ item.projectId || '未填写' }} · 成本归属：{{ item.costCenter || '未填写' }} · 期望生效：{{ item.expectedEffectiveAt || '-' }}
+            </div>
+            <div v-for="resourceItem in item.resourceItems ?? []" :key="resourceItem.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+              <div class="flex flex-wrap gap-3 items-start justify-between">
+                <div>
+                  <div class="fw-900">
+                    {{ resourceTypeLabel(resourceItem.resourceType) }} · {{ resourceItem.resourceSubtype }}
                   </div>
-                  <TxTag :label="resourceApprovalStatusText(resourceItem.approvalStatus)" :color="resourceItem.approvalStatus === 'rejected' ? '#be123c' : resourceItem.approvalStatus === 'pending' ? '#b45309' : '#047857'" background="rgba(100,116,139,.14)" />
+                  <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                    {{ resourceItem.approverGroup }} · 权限 {{ resourceItem.requestedPermission || '-' }} · 额度 {{ resourceItem.requestedQuota || '-' }} · 有效期 {{ resourceItem.duration || '-' }}
+                  </div>
                 </div>
-                <div class="mt-3 gap-2 grid md:grid-cols-2 xl:grid-cols-3">
-                  <div v-for="field in resourceItemSummaryFields(resourceItem)" :key="`${resourceItem.id}-${field.label}`" class="application-detail-stat">
+                <TxTag :label="resourceApprovalStatusText(resourceItem.approvalStatus)" :color="resourceItem.approvalStatus === 'rejected' ? '#be123c' : resourceItem.approvalStatus === 'pending' ? '#b45309' : '#047857'" background="rgba(100,116,139,.14)" />
+              </div>
+              <div class="mt-3 gap-2 grid md:grid-cols-2 xl:grid-cols-3">
+                <div v-for="field in resourceItemSummaryFields(resourceItem)" :key="`${resourceItem.id}-${field.label}`" class="application-detail-stat">
+                  <span>{{ field.label }}</span>
+                  <b>{{ field.value }}</b>
+                </div>
+              </div>
+              <div v-if="resourceItemAttachments(resourceItem).length" class="mt-3 p-3 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-black">
+                <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+                  明细附件
+                </div>
+                <VerificationAttachmentGrid :files="resourceItemAttachments(resourceItem)" />
+              </div>
+
+              <div v-if="resourceItem.approvalStatus === 'pending'" class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
+                <label class="gap-2 grid">
+                  <span class="field-label">审批结果</span>
+                  <TxSelect v-model="resourceReviewDraftFor(resourceItem.id).status" panel-background="pure">
+                    <TxSelectItem value="approved" label="通过" />
+                    <TxSelectItem value="adjusted_approved" label="调整后通过" />
+                    <TxSelectItem value="rejected" label="驳回" />
+                  </TxSelect>
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">说明 / 驳回原因</span>
+                  <RichTextEditor v-model="resourceReviewDraftFor(resourceItem.id).note" :min-height="110" placeholder="驳回时必填；通过可填写开通备注。" />
+                </label>
+                <label v-if="resourceReviewDraftFor(resourceItem.id).status === 'adjusted_approved'" class="gap-2 grid md:col-span-2">
+                  <span class="field-label">批准后的额度/权限 JSON</span>
+                  <textarea v-model="resourceReviewDraftFor(resourceItem.id).approvedPayloadText" class="form-textarea" rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
+                </label>
+                <div class="md:col-span-2">
+                  <TxButton size="sm" variant="primary" @click="onReviewResourceItem(item.id, resourceItem.id)">
+                    保存审批结果
+                  </TxButton>
+                </div>
+              </div>
+
+              <div v-else-if="['approved', 'adjusted_approved'].includes(resourceItem.approvalStatus)" class="mt-3 p-3 rounded-2xl bg-white dark:bg-black/20">
+                <div class="text-xs fw-900">
+                  发放状态：{{ resourceProvisionStatusText(resourceItem.provisionStatus) }}
+                </div>
+                <div v-if="resourceItemApprovedFields(resourceItem).length" class="mt-2 gap-2 grid md:grid-cols-2">
+                  <div v-for="field in resourceItemApprovedFields(resourceItem)" :key="`${resourceItem.id}-approved-${field.label}`" class="application-detail-stat">
                     <span>{{ field.label }}</span>
                     <b>{{ field.value }}</b>
                   </div>
                 </div>
-                <div v-if="resourceItemAttachments(resourceItem).length" class="mt-3 p-3 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-black">
-                  <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
-                    明细附件
-                  </div>
-                  <VerificationAttachmentGrid :files="resourceItemAttachments(resourceItem)" />
-                </div>
-
-                <div v-if="resourceItem.approvalStatus === 'pending'" class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
+                <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-3 grid md:grid-cols-2">
                   <label class="gap-2 grid">
-                    <span class="field-label">审批结果</span>
-                    <TxSelect v-model="resourceReviewDraftFor(resourceItem.id).status" panel-background="pure">
-                      <TxSelectItem value="approved" label="通过" />
-                      <TxSelectItem value="adjusted_approved" label="调整后通过" />
-                      <TxSelectItem value="rejected" label="驳回" />
-                    </TxSelect>
+                    <span class="field-label">资源名称</span>
+                    <input v-model="provisionDraftFor(resourceItem.id).resourceName" class="form-input" placeholder="如 Codex API Key / 数据库账号">
                   </label>
                   <label class="gap-2 grid">
-                    <span class="field-label">说明 / 驳回原因</span>
-                    <RichTextEditor v-model="resourceReviewDraftFor(resourceItem.id).note" :min-height="110" placeholder="驳回时必填；通过可填写开通备注。" />
+                    <span class="field-label">资源类型</span>
+                    <input v-model="provisionDraftFor(resourceItem.id).resourceType" class="form-input" placeholder="account / api_key / database / subscription">
                   </label>
-                  <label v-if="resourceReviewDraftFor(resourceItem.id).status === 'adjusted_approved'" class="gap-2 grid md:col-span-2">
-                    <span class="field-label">批准后的额度/权限 JSON</span>
-                    <textarea v-model="resourceReviewDraftFor(resourceItem.id).approvedPayloadText" class="form-textarea" rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
+                  <label class="gap-2 grid">
+                    <span class="field-label">访问地址</span>
+                    <input v-model="provisionDraftFor(resourceItem.id).accessUrl" class="form-input" placeholder="控制台、订阅或连接地址">
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">有效期</span>
+                    <input v-model="provisionDraftFor(resourceItem.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
+                  </label>
+                  <label class="gap-2 grid md:col-span-2">
+                    <span class="field-label">凭据 / 备注</span>
+                    <textarea v-model="provisionDraftFor(resourceItem.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或连接凭据；会发送给用户" />
+                  </label>
+                  <label class="gap-2 grid md:col-span-2">
+                    <span class="field-label">补充说明</span>
+                    <textarea v-model="provisionDraftFor(resourceItem.id).note" class="form-textarea" rows="2" placeholder="使用说明、限制或交付方式" />
                   </label>
                   <div class="md:col-span-2">
-                    <TxButton size="sm" variant="primary" @click="onReviewResourceItem(item.id, resourceItem.id)">
-                      保存审批结果
+                    <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
+                      提交并发送给用户
                     </TxButton>
                   </div>
                 </div>
+                <div v-else class="text-xs text-slate-500 mt-2 dark:text-slate-400">
+                  {{ resourceItem.provisionNote || '已完成' }} · {{ formatDate(resourceItem.provisionCompletedAt) }}
+                </div>
+              </div>
 
-                <div v-else-if="['approved', 'adjusted_approved'].includes(resourceItem.approvalStatus)" class="mt-3 p-3 rounded-2xl bg-white dark:bg-black/20">
-                  <div class="text-xs fw-900">
-                    发放状态：{{ resourceProvisionStatusText(resourceItem.provisionStatus) }}
-                  </div>
-                  <div v-if="resourceItemApprovedFields(resourceItem).length" class="mt-2 gap-2 grid md:grid-cols-2">
-                    <div v-for="field in resourceItemApprovedFields(resourceItem)" :key="`${resourceItem.id}-approved-${field.label}`" class="application-detail-stat">
-                      <span>{{ field.label }}</span>
-                      <b>{{ field.value }}</b>
-                    </div>
-                  </div>
-                  <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-3 grid md:grid-cols-2">
-                    <label class="gap-2 grid">
-                      <span class="field-label">资源名称</span>
-                      <input v-model="provisionDraftFor(resourceItem.id).resourceName" class="form-input" placeholder="如 Codex API Key / 数据库账号">
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">资源类型</span>
-                      <input v-model="provisionDraftFor(resourceItem.id).resourceType" class="form-input" placeholder="account / api_key / database / subscription">
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">访问地址</span>
-                      <input v-model="provisionDraftFor(resourceItem.id).accessUrl" class="form-input" placeholder="控制台、订阅或连接地址">
-                    </label>
-                    <label class="gap-2 grid">
-                      <span class="field-label">有效期</span>
-                      <input v-model="provisionDraftFor(resourceItem.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
-                    </label>
-                    <label class="gap-2 grid md:col-span-2">
-                      <span class="field-label">凭据 / 备注</span>
-                      <textarea v-model="provisionDraftFor(resourceItem.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或连接凭据；会发送给用户" />
-                    </label>
-                    <label class="gap-2 grid md:col-span-2">
-                      <span class="field-label">补充说明</span>
-                      <textarea v-model="provisionDraftFor(resourceItem.id).note" class="form-textarea" rows="2" placeholder="使用说明、限制或交付方式" />
-                    </label>
-                    <div class="md:col-span-2">
-                      <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
-                        提交并发送给用户
-                      </TxButton>
-                    </div>
-                  </div>
-                  <div v-else class="text-xs text-slate-500 mt-2 dark:text-slate-400">
-                    {{ resourceItem.provisionNote || '已完成' }} · {{ formatDate(resourceItem.provisionCompletedAt) }}
-                  </div>
+              <div v-if="resourceItem.rejectReason" class="text-xs text-red-700 mt-2 dark:text-red-200">
+                驳回原因：{{ resourceItem.rejectReason }}
+              </div>
+              <details class="text-xs text-slate-500 mt-3 dark:text-slate-400">
+                <summary class="fw-800 cursor-pointer">
+                  调试原始数据
+                </summary>
+                <pre class="mt-2 p-3 rounded-xl bg-white overflow-auto dark:bg-black/20">{{ JSON.stringify({ payload: resourceItem.payload, approvedPayload: resourceItem.approvedPayload }, null, 2) }}</pre>
+              </details>
+            </div>
+          </div>
+          <div v-if="item.githubRepo" class="text-sm mt-3 flex flex-wrap gap-2 items-center">
+            <TxTag label="开源认证" color="#475569" background="rgba(100,116,139,.14)" />
+            <span v-if="isAdmin" class="text-slate-500">{{ item.githubRepo }}</span>
+          </div>
+          <div v-if="isAdmin && crowdReviewsFor('pro_application', item.id).length" class="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+            <div class="text-sm fw-900">
+              众包建议
+            </div>
+            <div class="mt-3 space-y-3">
+              <div v-for="review in crowdReviewsFor('pro_application', item.id)" :key="review.id" class="text-xs leading-5">
+                <div class="flex flex-wrap gap-2 items-center">
+                  <TxTag :label="crowdDecisionText(review.decision)" :color="crowdDecisionTone(review.decision).color" :background="crowdDecisionTone(review.decision).background" />
+                  <span class="text-slate-500 dark:text-slate-400">{{ userName(review.reviewerId) }} · {{ formatDate(review.createdAt) }}</span>
                 </div>
-
-                <div v-if="resourceItem.rejectReason" class="text-xs text-red-700 mt-2 dark:text-red-200">
-                  驳回原因：{{ resourceItem.rejectReason }}
-                </div>
-                <details class="text-xs text-slate-500 mt-3 dark:text-slate-400">
-                  <summary class="fw-800 cursor-pointer">
-                    调试原始数据
-                  </summary>
-                  <pre class="mt-2 p-3 rounded-xl bg-white overflow-auto dark:bg-black/20">{{ JSON.stringify({ payload: resourceItem.payload, approvedPayload: resourceItem.approvedPayload }, null, 2) }}</pre>
-                </details>
+                <RichTextView :content="review.note" class="rich-text-preview mt-2" />
               </div>
             </div>
-            <div v-if="item.githubRepo" class="text-sm mt-3 flex flex-wrap gap-2 items-center">
-              <TxTag label="开源认证" color="#475569" background="rgba(100,116,139,.14)" />
-              <span v-if="isAdmin" class="text-slate-500">{{ item.githubRepo }}</span>
+          </div>
+          <div v-if="isAdmin && item.status === 'needs_supplement'" class="text-amber-900 mt-4 p-4 rounded-2xl bg-amber-50 dark:text-amber-100 dark:bg-amber-950/20">
+            <div class="text-sm fw-900 flex gap-2 items-center">
+              <span class="i-carbon-time" />
+              等待用户补充材料
             </div>
-            <div v-if="isAdmin && crowdReviewsFor('pro_application', item.id).length" class="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
-              <div class="text-sm fw-900">
-                众包建议
-              </div>
-              <div class="mt-3 space-y-3">
-                <div v-for="review in crowdReviewsFor('pro_application', item.id)" :key="review.id" class="text-xs leading-5">
-                  <div class="flex flex-wrap gap-2 items-center">
-                    <TxTag :label="crowdDecisionText(review.decision)" :color="crowdDecisionTone(review.decision).color" :background="crowdDecisionTone(review.decision).background" />
-                    <span class="text-slate-500 dark:text-slate-400">{{ userName(review.reviewerId) }} · {{ formatDate(review.createdAt) }}</span>
-                  </div>
-                  <RichTextView :content="review.note" class="rich-text-preview mt-2" />
-                </div>
+            <p class="text-xs leading-5 mt-2 opacity-80">
+              用户提交补充后会自动回到待审核队列，补充内容会进入申请详情的协作线程。
+            </p>
+          </div>
+          <div v-else-if="isAdmin && item.type !== 'resource' && item.status === 'pending_allocation'" class="mt-4 p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20">
+            <div class="text-sm fw-900">
+              待分配资源
+            </div>
+            <p class="text-xs text-slate-500 leading-5 mt-1 dark:text-slate-400">
+              自动发放不可用或未配置，请填写完整资源信息；提交后会通过现有消息渠道发送给用户。
+            </p>
+            <div class="mt-3 gap-3 grid md:grid-cols-2">
+              <label class="gap-2 grid">
+                <span class="field-label">资源名称</span>
+                <input v-model="allocationDraftFor(item.id).resourceName" class="form-input" placeholder="如 Codex 订阅 / API Key">
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">资源类型</span>
+                <input v-model="allocationDraftFor(item.id).resourceType" class="form-input" placeholder="account / api_key / subscription">
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">访问地址</span>
+                <input v-model="allocationDraftFor(item.id).accessUrl" class="form-input" placeholder="订阅链接、控制台或登录地址">
+              </label>
+              <label class="gap-2 grid">
+                <span class="field-label">有效期</span>
+                <input v-model="allocationDraftFor(item.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
+              </label>
+              <label class="gap-2 grid md:col-span-2">
+                <span class="field-label">凭据</span>
+                <textarea v-model="allocationDraftFor(item.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或其他交付凭据；会发送给用户" />
+              </label>
+              <label class="gap-2 grid md:col-span-2">
+                <span class="field-label">使用说明</span>
+                <textarea v-model="allocationDraftFor(item.id).note" class="form-textarea" rows="2" placeholder="限制、注意事项、后续续期方式等" />
+              </label>
+            </div>
+            <TxButton class="mt-4" size="sm" variant="primary" @click="onCompleteApplicationAllocation(item.id)">
+              完成分配并发送给用户
+            </TxButton>
+          </div>
+          <RichTextEditor v-else-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : item.type === 'pro' ? '给用户的审核答复，或填写需要补充的具体材料' : '给用户的审核答复'" />
+          <label v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="option-check mt-4">
+            <TxCheckbox v-model="rejectFraudulentDrafts[item.id]" variant="checkmark" aria-label="判定造假或不实包装" />
+            <span>
+              <b>判定造假或不实包装</b>
+              <small>仅在确认存在虚构项目、冒用材料、AI 包装成本人经历、隐瞒关键事实等明显不实情况时勾选；退回后 7 天内不能提交同类申请。</small>
+            </span>
+          </label>
+          <div v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="mt-4 flex flex-wrap gap-3">
+            <TxButton variant="primary" @click="onApproveApplication(item.id, item.type)">
+              {{ item.type === 'image' ? '通过并生成图片' : '通过并答复' }}
+            </TxButton>
+            <TxButton v-if="item.type === 'pro'" variant="secondary" @click="onRequestSupplement(item.id)">
+              请求补充材料
+            </TxButton>
+            <TxButton variant="danger" @click="onRejectApplication(item.id)">
+              退回
+            </TxButton>
+          </div>
+          <div v-else-if="item.type === 'pro'" class="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+            <div class="text-sm fw-900">
+              提交审核建议
+            </div>
+            <div class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
+              <label class="gap-2 grid">
+                <span class="field-label">建议结论</span>
+                <select v-model="crowdReviewDraftFor(item.id).decision" class="form-select">
+                  <option value="needs_admin">
+                    管理员复核
+                  </option>
+                  <option value="approve">
+                    建议通过
+                  </option>
+                  <option value="reject">
+                    建议退回
+                  </option>
+                </select>
+              </label>
+              <div class="gap-2 grid">
+                <span class="field-label">建议说明</span>
+                <RichTextEditor v-model="crowdReviewDraftFor(item.id).note" :min-height="120" placeholder="仅填写审核判断依据；不要要求或记录邮箱、证件、附件原文等敏感材料。" />
               </div>
             </div>
-            <div v-if="isAdmin && item.status === 'needs_supplement'" class="text-amber-900 mt-4 p-4 rounded-2xl bg-amber-50 dark:text-amber-100 dark:bg-amber-950/20">
-              <div class="text-sm fw-900 flex gap-2 items-center">
-                <span class="i-carbon-time" />
-                等待用户补充材料
-              </div>
-              <p class="text-xs leading-5 mt-2 opacity-80">
-                用户提交补充后会自动回到待审核队列，补充内容会进入申请详情的协作线程。
-              </p>
-            </div>
-            <div v-else-if="isAdmin && item.type !== 'resource' && item.status === 'pending_allocation'" class="mt-4 p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20">
-              <div class="text-sm fw-900">
-                待分配资源
-              </div>
-              <p class="text-xs text-slate-500 leading-5 mt-1 dark:text-slate-400">
-                自动发放不可用或未配置，请填写完整资源信息；提交后会通过现有消息渠道发送给用户。
-              </p>
-              <div class="mt-3 gap-3 grid md:grid-cols-2">
-                <label class="gap-2 grid">
-                  <span class="field-label">资源名称</span>
-                  <input v-model="allocationDraftFor(item.id).resourceName" class="form-input" placeholder="如 Codex 订阅 / API Key">
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">资源类型</span>
-                  <input v-model="allocationDraftFor(item.id).resourceType" class="form-input" placeholder="account / api_key / subscription">
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">访问地址</span>
-                  <input v-model="allocationDraftFor(item.id).accessUrl" class="form-input" placeholder="订阅链接、控制台或登录地址">
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">有效期</span>
-                  <input v-model="allocationDraftFor(item.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
-                </label>
-                <label class="gap-2 grid md:col-span-2">
-                  <span class="field-label">凭据</span>
-                  <textarea v-model="allocationDraftFor(item.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或其他交付凭据；会发送给用户" />
-                </label>
-                <label class="gap-2 grid md:col-span-2">
-                  <span class="field-label">使用说明</span>
-                  <textarea v-model="allocationDraftFor(item.id).note" class="form-textarea" rows="2" placeholder="限制、注意事项、后续续期方式等" />
-                </label>
-              </div>
-              <TxButton class="mt-4" size="sm" variant="primary" @click="onCompleteApplicationAllocation(item.id)">
-                完成分配并发送给用户
-              </TxButton>
-            </div>
-            <RichTextEditor v-else-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : item.type === 'pro' ? '给用户的审核答复，或填写需要补充的具体材料' : '给用户的审核答复'" />
-            <label v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="option-check mt-4">
-              <TxCheckbox v-model="rejectFraudulentDrafts[item.id]" variant="checkmark" aria-label="判定造假或不实包装" />
-              <span>
-                <b>判定造假或不实包装</b>
-                <small>仅在确认存在虚构项目、冒用材料、AI 包装成本人经历、隐瞒关键事实等明显不实情况时勾选；退回后 7 天内不能提交同类申请。</small>
-              </span>
-            </label>
-            <div v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="mt-4 flex flex-wrap gap-3">
-              <TxButton variant="primary" @click="onApproveApplication(item.id, item.type)">
-                {{ item.type === 'image' ? '通过并生成图片' : '通过并答复' }}
-              </TxButton>
-              <TxButton v-if="item.type === 'pro'" variant="secondary" @click="onRequestSupplement(item.id)">
-                请求补充材料
-              </TxButton>
-              <TxButton variant="danger" @click="onRejectApplication(item.id)">
-                退回
-              </TxButton>
-            </div>
-            <div v-else-if="item.type === 'pro'" class="mt-4 p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
-              <div class="text-sm fw-900">
-                提交审核建议
-              </div>
-              <div class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
-                <label class="gap-2 grid">
-                  <span class="field-label">建议结论</span>
-                  <select v-model="crowdReviewDraftFor(item.id).decision" class="form-select">
-                    <option value="needs_admin">
-                      管理员复核
-                    </option>
-                    <option value="approve">
-                      建议通过
-                    </option>
-                    <option value="reject">
-                      建议退回
-                    </option>
-                  </select>
-                </label>
-                <div class="gap-2 grid">
-                  <span class="field-label">建议说明</span>
-                  <RichTextEditor v-model="crowdReviewDraftFor(item.id).note" :min-height="120" placeholder="仅填写审核判断依据；不要要求或记录邮箱、证件、附件原文等敏感材料。" />
-                </div>
-              </div>
-              <TxButton class="mt-4" size="sm" variant="secondary" @click="onSubmitCrowdReview(item.id)">
-                提交建议
-              </TxButton>
-            </div>
-          </template>
-        </div>
-      </TxFlipOverlay>
-    </Teleport>
+            <TxButton class="mt-4" size="sm" variant="secondary" @click="onSubmitCrowdReview(item.id)">
+              提交建议
+            </TxButton>
+          </div>
+        </template>
+      </div>
+    </TxDrawer>
 
     <TxCard v-if="props.mode !== 'dialog-only' && isAdmin && showStudent" class="solid-panel" background="pure" :padding="22" :radius="28">
       <h3 class="text-2xl fw-900">

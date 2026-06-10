@@ -777,6 +777,7 @@ export interface ReviewApplicationItemPayload {
   status: Exclude<ResourceApprovalStatus, 'pending'>
   approvedPayload?: Record<string, any>
   rejectReason?: string
+  note?: string
 }
 
 export interface CompleteProvisionPayload {

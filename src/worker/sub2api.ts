@@ -108,6 +108,11 @@ interface UpstreamApiKey {
   created_at?: string
 }
 
+interface Sub2ApiGroupView {
+  id: number
+  name: string
+}
+
 const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_KEY_QUOTA_USD = 10
 const SUB2API_CONFIG_ID = 'default'
@@ -225,7 +230,7 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
   const databaseUrl = await decryptOptionalSecret(stored?.database_url_encrypted, env)
   return {
     enabled: stored ? boolValue(stored.enabled) : false,
-    baseUrl: normalizeUrlBase(stored?.base_url || ''),
+    baseUrl: normalizeUrlBase(stored?.base_url || '', { allowHttp: true, allowLocalhost: true }),
     adminApiKey,
     databaseUrl,
     defaultGroupId: optionalInt(stored?.default_group_id),
@@ -234,7 +239,7 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
     defaultRateLimit5h: normalizeRateLimit(stored?.default_rate_limit_5h),
     defaultRateLimit1d: normalizeRateLimit(stored?.default_rate_limit_1d),
     defaultRateLimit7d: normalizeRateLimit(stored?.default_rate_limit_7d),
-    configured: !!(stored?.base_url && (adminApiKey || databaseUrl)),
+    configured: !!(stored?.base_url && adminApiKey),
     source: stored ? 'admin' as const : 'empty' as const,
   }
 }
@@ -326,7 +331,7 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
 
   const config = {
     enabled: payload.enabled !== false,
-    baseUrl: normalizeUrlBase(payload.baseUrl?.trim() || ''),
+    baseUrl: normalizeUrlBase(payload.baseUrl?.trim() || '', { allowHttp: true, allowLocalhost: true }),
     adminApiKeyEncrypted,
     databaseUrlEncrypted,
     defaultGroupId: optionalInt(payload.defaultGroupId),
@@ -422,7 +427,7 @@ async function callSub2Api<T>(
   if (!config.adminApiKey)
     throw new Error('Sub2API Admin API Key 未配置')
 
-  const baseUrl = assertSafeExternalUrl(config.baseUrl).toString().replace(/\/+$/, '')
+  const baseUrl = assertSafeExternalUrl(config.baseUrl, { allowHttp: true, allowLocalhost: true }).toString().replace(/\/+$/, '')
   const response = await fetchWithTimeout(`${baseUrl}${path}`, {
     ...init,
     headers: {
@@ -971,26 +976,57 @@ async function deleteKey(request: Request, env: WorkerEnv) {
   return { ok: true }
 }
 
-async function testSub2ApiConfig(env: WorkerEnv) {
-  const config = await getEffectiveSub2ApiConfig(env)
+function normalizeSub2ApiGroups(value: unknown): Sub2ApiGroupView[] {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? ('items' in value ? (value as { items?: unknown }).items : 'list' in value ? (value as { list?: unknown }).list : value)
+    : value
+  if (!Array.isArray(source))
+    return []
+
+  return source
+    .map((item) => {
+      if (!item || typeof item !== 'object')
+        return undefined
+      const record = item as Record<string, unknown>
+      const id = optionalInt(record.id ?? record.group_id ?? record.groupId)
+      if (!id)
+        return undefined
+      return {
+        id,
+        name: String(record.name ?? record.group_name ?? record.groupName ?? `分组 ${id}`),
+      }
+    })
+    .filter((item): item is Sub2ApiGroupView => !!item)
+}
+
+async function listSub2ApiGroups(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>) {
+  const payload = await callSub2Api<unknown>(config, '/api/v1/admin/groups?page=1&page_size=200')
+  return normalizeSub2ApiGroups(payload)
+}
+
+async function sub2ApiConfigForTest(env: WorkerEnv, payload: SaveSub2ApiConfigPayload) {
+  const stored = await getEffectiveSub2ApiConfig(env)
+  const baseUrl = payload.baseUrl?.trim() ? normalizeUrlBase(payload.baseUrl, { allowHttp: true, allowLocalhost: true }) : stored.baseUrl
+  const adminApiKey = payload.adminApiKey?.trim() || stored.adminApiKey
+  return {
+    ...stored,
+    enabled: payload.enabled ?? stored.enabled,
+    baseUrl,
+    adminApiKey,
+    databaseUrl: '',
+    configured: !!(baseUrl && adminApiKey),
+  }
+}
+
+async function testSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPayload = {}) {
+  const config = await sub2ApiConfigForTest(env, payload)
   if (!config.enabled)
     throw new Error('Sub2API 未启用')
   if (!config.configured)
     throw new Error('Sub2API 尚未配置完成')
 
-  let adminApiReachable = false
-  let databaseReachable = false
-  if (config.adminApiKey) {
-    await callSub2Api(config, '/api/v1/admin/users?page=1&page_size=1')
-    adminApiReachable = true
-  }
-  if (config.databaseUrl) {
-    await withSub2ApiDatabase(config, async (pool) => {
-      await pool.query('select 1')
-    })
-    databaseReachable = true
-  }
-  return { ok: true, adminApiReachable, databaseReachable }
+  await callSub2Api(config, '/api/v1/admin/users?page=1&page_size=1')
+  return { ok: true, adminApiReachable: true, groups: await listSub2ApiGroups(config) }
 }
 
 export async function handleSub2ApiRequest(request: Request, env: WorkerEnv) {
@@ -1011,7 +1047,8 @@ export async function handleSub2ApiRequest(request: Request, env: WorkerEnv) {
 
     if (url.pathname === '/api/sub2api/test' && request.method === 'POST') {
       await assertAdminRequest(request, env)
-      return json(await testSub2ApiConfig(env))
+      const payload = await readJson<SaveSub2ApiConfigPayload>(request)
+      return json(await testSub2ApiConfig(env, payload))
     }
 
     if (url.pathname === '/api/sub2api/keys') {

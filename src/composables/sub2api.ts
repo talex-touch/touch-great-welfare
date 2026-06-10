@@ -1,3 +1,8 @@
+export interface Sub2ApiGroupView {
+  id: number
+  name: string
+}
+
 export interface Sub2ApiConfigView {
   enabled: boolean
   configured: boolean
@@ -107,10 +112,10 @@ export function saveSub2ApiConfig(adminUserId: string, payload: SaveSub2ApiConfi
   })
 }
 
-export function testSub2ApiConfig(adminUserId: string) {
-  return requestSub2Api<{ ok: boolean }>('/api/sub2api/test', adminUserId, {
+export function testSub2ApiConfig(adminUserId: string, payload?: Partial<SaveSub2ApiConfigPayload>) {
+  return requestSub2Api<{ ok: boolean, groups: Sub2ApiGroupView[] }>('/api/sub2api/test', adminUserId, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(payload ?? {}),
   })
 }
 

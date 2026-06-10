@@ -144,6 +144,17 @@ interface FeishuMailAuthorizePayload {
   providerConfig?: NotificationProviderConfigPayload
 }
 
+interface FeishuMailboxesPayload {
+  providerConfig?: NotificationProviderConfigPayload
+}
+
+interface FeishuMailboxOption {
+  id: string
+  label: string
+  email: string
+  type: string
+}
+
 interface FeishuMailOAuthState {
   createdAt: number
   redirect: string
@@ -173,7 +184,7 @@ const FEISHU_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000
 const EMAIL_BODY_TEXT_LIMIT = 1800
 const FEISHU_MAIL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 const FEISHU_MAIL_AUTHORIZE_URL = 'https://open.feishu.cn/open-apis/authen/v1/index'
-const FEISHU_MAIL_AUTH_SCOPE = 'offline_access'
+const FEISHU_MAIL_AUTH_SCOPE = 'offline_access mail:user_mailbox.message:send'
 const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
 type EmailDeliveryProvider = EmailDeliveryAttempt['provider']
 type EmailDeliveryStatus = EmailDeliveryAttempt['status']
@@ -2024,6 +2035,79 @@ async function feishuAccessTokenForSend(env: WorkerEnv, config: Awaited<ReturnTy
   return config.feishuUserAccessToken
 }
 
+function feishuStringField(item: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = item[key]
+    if (typeof value === 'string' && value.trim())
+      return value.trim()
+  }
+  return ''
+}
+
+function normalizeFeishuMailboxOption(item: unknown): FeishuMailboxOption | null {
+  if (!item || typeof item !== 'object')
+    return null
+
+  const record = item as Record<string, unknown>
+  const id = feishuStringField(record, ['user_mailbox_id', 'mailbox_id', 'mailboxId', 'id'])
+  const email = feishuStringField(record, ['email', 'mail_address', 'email_address', 'mailAddress', 'address'])
+  const name = feishuStringField(record, ['name', 'display_name', 'mailbox_name', 'mailboxName'])
+  const type = feishuStringField(record, ['type', 'mailbox_type', 'mailboxType'])
+  const value = id || email
+  if (!value)
+    return null
+
+  return {
+    id: value,
+    email,
+    type,
+    label: name || email || value,
+  }
+}
+
+function extractFeishuMailboxItems(data: unknown) {
+  if (Array.isArray(data))
+    return data
+  if (!data || typeof data !== 'object')
+    return []
+
+  const record = data as Record<string, unknown>
+  for (const key of ['items', 'user_mailboxes', 'mailboxes', 'list']) {
+    const value = record[key]
+    if (Array.isArray(value))
+      return value
+  }
+  return []
+}
+
+async function listFeishuMailboxes(env: WorkerEnv, payload: FeishuMailboxesPayload = {}) {
+  if (payload.providerConfig)
+    await saveNotificationProviderConfig(env, payload.providerConfig)
+
+  const config = await getEffectiveNotificationProviderConfig(env)
+  const accessToken = await feishuAccessTokenForSend(env, config)
+  const response = await fetchWithTimeout('https://open.feishu.cn/open-apis/mail/v1/user_mailboxes', {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json; charset=utf-8',
+    },
+  })
+  const text = await response.text()
+  const result = text
+    ? JSON.parse(text) as { code?: number, msg?: string, data?: unknown }
+    : {}
+  if (!response.ok || result.code !== 0)
+    throw new Error(result.msg || `飞书邮箱列表请求失败：${response.status}`)
+
+  const mailboxes = extractFeishuMailboxItems(result.data)
+    .map(normalizeFeishuMailboxOption)
+    .filter((item): item is FeishuMailboxOption => !!item)
+    .filter((item, index, items) => items.findIndex(candidate => candidate.id === item.id) === index)
+
+  return { mailboxes }
+}
+
 async function sendResendEmail(
   config: Awaited<ReturnType<typeof getEffectiveNotificationProviderConfig>>,
   to: string,
@@ -2987,6 +3071,12 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
       await assertAdminRequest(request, env)
       const payload = await readJson<FeishuMailAuthorizePayload>(request)
       return json(await createFeishuMailAuthorization(env, request, payload))
+    }
+
+    if (path === '/provider-config/feishu/mailboxes' && request.method === 'POST') {
+      await assertAdminRequest(request, env)
+      const payload = await readJson<FeishuMailboxesPayload>(request)
+      return json(await listFeishuMailboxes(env, payload))
     }
 
     if (path === '/provider-config/feishu/callback' && request.method === 'GET')

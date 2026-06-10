@@ -43,6 +43,17 @@ export interface FeishuMailAuthorizationResult {
   callbackUrl: string
 }
 
+export interface FeishuMailboxOption {
+  id: string
+  label: string
+  email: string
+  type: string
+}
+
+export interface FeishuMailboxListResult {
+  mailboxes: FeishuMailboxOption[]
+}
+
 export interface SaveNotificationProviderConfigPayload {
   resendApiKey?: string
   resendFromEmail: string
@@ -158,6 +169,13 @@ export function generateVapidKeys(adminUserId: string, regenerate: boolean) {
 
 export function createFeishuMailAuthorization(adminUserId: string, payload: { redirect?: string, providerConfig?: SaveNotificationProviderConfigPayload }) {
   return requestNotifications<FeishuMailAuthorizationResult>('/api/notifications/provider-config/feishu/authorize', adminUserId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function loadFeishuMailboxes(adminUserId: string, payload: { providerConfig?: SaveNotificationProviderConfigPayload }) {
+  return requestNotifications<FeishuMailboxListResult>('/api/notifications/provider-config/feishu/mailboxes', adminUserId, {
     method: 'POST',
     body: JSON.stringify(payload),
   })

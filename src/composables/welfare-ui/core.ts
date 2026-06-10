@@ -3,7 +3,7 @@ import type { EducationMailSyncResult } from '../education-mail'
 import type { GitHubAppConfigView, SaveGitHubAppConfigResult } from '../github-app'
 import type { OAuthProviderConfigView, PublicOAuthProvider } from '../oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from '../recharge'
-import type { Sub2ApiKeyView } from '../sub2api'
+import type { Sub2ApiGroupView, Sub2ApiKeyView } from '../sub2api'
 import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceLifecycleActionPayload, ResourceTermId, ResourceType, SquarePostType, StudentVerification, UserProfile, VerificationType, WelfareApplication } from '../welfare'
 import type { NotificationChannel, SystemLogItem } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
@@ -394,6 +394,7 @@ export const sub2ApiConfigForm = reactive({
   defaultRateLimit5h: 0,
   defaultRateLimit1d: 0,
   defaultRateLimit7d: 0,
+  groups: [] as Sub2ApiGroupView[],
   configured: false,
   loading: false,
   testing: false,
@@ -1538,7 +1539,7 @@ export function useWelfareUiState() {
       itemId,
       status: draft.status,
       approvedPayload,
-      rejectReason: draft.note,
+      note: draft.note,
     })
     delete resourceReviewDrafts[itemId]
     let provisionResult: ProvisionApplicationRewardResult | undefined
@@ -2251,7 +2252,7 @@ export function useWelfareUiState() {
         enabled: sub2ApiConfigForm.enabled,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
-        databaseUrl: sub2ApiConfigForm.databaseUrl,
+        clearDatabaseUrl: true,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
         defaultQuotaUsd: Number(sub2ApiConfigForm.defaultQuotaUsd),
         defaultExpiresInDays: Number(sub2ApiConfigForm.defaultExpiresInDays),
@@ -2275,8 +2276,20 @@ export function useWelfareUiState() {
     sub2ApiConfigForm.testing = true
     sub2ApiConfigForm.message = ''
     try {
-      await testSub2ApiConfig(welfare.currentUser.value.id)
-      sub2ApiConfigForm.message = 'Sub2API 连接测试通过'
+      const result = await testSub2ApiConfig(welfare.currentUser.value.id, {
+        enabled: sub2ApiConfigForm.enabled,
+        baseUrl: sub2ApiConfigForm.baseUrl,
+        adminApiKey: sub2ApiConfigForm.adminApiKey,
+        clearDatabaseUrl: true,
+        defaultGroupId: sub2ApiConfigForm.defaultGroupId,
+        defaultQuotaUsd: Number(sub2ApiConfigForm.defaultQuotaUsd),
+        defaultExpiresInDays: Number(sub2ApiConfigForm.defaultExpiresInDays),
+        defaultRateLimit5h: Number(sub2ApiConfigForm.defaultRateLimit5h),
+        defaultRateLimit1d: Number(sub2ApiConfigForm.defaultRateLimit1d),
+        defaultRateLimit7d: Number(sub2ApiConfigForm.defaultRateLimit7d),
+      })
+      sub2ApiConfigForm.groups = result.groups
+      sub2ApiConfigForm.message = result.groups.length ? `Sub2API 连接测试通过，已拉取 ${result.groups.length} 个分组` : 'Sub2API 连接测试通过，未返回可选分组'
     }
     finally {
       sub2ApiConfigForm.testing = false
