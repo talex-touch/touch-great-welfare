@@ -47,7 +47,7 @@ export interface EncryptedWelfareStateEnvelope {
 }
 
 // 全局状态（保留在这里以保持兼容性）
-export let adminLoginAttempts = new Map<string, {
+export const adminLoginAttempts = new Map<string, {
   failures: number
   firstFailureAt: number
   lockedUntil: number

@@ -38,10 +38,10 @@ export function perfEnd(operation: string) {
     console.warn(`[PERF SLOW] ${operation}: ${entry.duration}ms`, entry.metadata || {})
   }
   else if (entry.duration > 500) {
-    console.log(`[PERF WARN] ${operation}: ${entry.duration}ms`)
+    console.warn(`[PERF WARN] ${operation}: ${entry.duration}ms`)
   }
   else {
-    console.log(`[PERF] ${operation}: ${entry.duration}ms`)
+    console.warn(`[PERF] ${operation}: ${entry.duration}ms`)
   }
 }
 

@@ -51,6 +51,9 @@ function rejectCrossOriginWrite(request: Request, url: URL) {
 }
 
 async function assertTemporaryAdminEndpoint(request: Request, env: WorkerEnv) {
+  if (env.ENABLE_TEMP_ADMIN_ENDPOINTS !== 'true')
+    return new Response('Not Found', { status: 404 })
+
   try {
     await assertAdminRequest(request, env)
     return null

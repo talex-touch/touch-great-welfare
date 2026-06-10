@@ -2,6 +2,7 @@ import type { WorkerEnv } from './core'
 import type { WelfareState } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
 import { dispatchWelfareStateChangeNotifications } from '../notifications'
+import { syncUserPointBalancesFromLedger } from '../points'
 import { clearSessionCookie } from '../session'
 import {
   addAdminApplicationMessageAction,
@@ -86,6 +87,26 @@ function sessionLogoutResponse(request: Request) {
   return json({ ok: true }, 200, { 'set-cookie': clearSessionCookie(request) })
 }
 
+function changedPointUserIds(previousState: Partial<WelfareState>, nextState: unknown) {
+  if (!isRecord(nextState) || !Array.isArray(nextState.users))
+    return []
+
+  const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
+  const previousPointsByUserId = new Map(previousUsers.map(user => [user.id, user.points]))
+  const userIds = new Set<string>()
+
+  for (const user of nextState.users) {
+    if (!isRecord(user) || typeof user.id !== 'string')
+      continue
+
+    const previousPoints = previousPointsByUserId.get(user.id)
+    if (previousPoints !== undefined && user.points !== previousPoints)
+      userIds.add(user.id)
+  }
+
+  return Array.from(userIds)
+}
+
 function preserveServerPointState(previousState: Partial<WelfareState>, nextState: unknown) {
   if (!isRecord(nextState))
     return
@@ -110,7 +131,7 @@ async function legacyFullStateSave(request: Request, env: WorkerEnv) {
   const userId = await requestUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
-  const previousRecord = await readWelfareStateRecord(env, { syncPointBalances: 'all' })
+  const previousRecord = await readWelfareStateRecord(env)
   const previousState = previousRecord.state as Partial<WelfareState>
   const currentVersion = previousRecord.version
   if (!isAdminUser(previousState, userId))
@@ -128,6 +149,10 @@ async function legacyFullStateSave(request: Request, env: WorkerEnv) {
     throw new StateVersionConflictError()
   assertStateShape(payload.state)
   const statePayload = payload.state
+  const pointUserIds = changedPointUserIds(previousState, statePayload)
+  if (pointUserIds.length)
+    await syncUserPointBalancesFromLedger(env, previousState, pointUserIds)
+
   const mergedSensitiveState = await mergeSensitiveWelfareState(previousState, statePayload, request, env)
   preserveServerPointState(previousState, mergedSensitiveState)
   const nextState = applyWelfareRetentionPolicy(mergedSensitiveState).state

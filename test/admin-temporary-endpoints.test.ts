@@ -89,10 +89,25 @@ function createMemoryD1(initialState: WelfareState) {
 }
 
 describe('temporary admin endpoints', () => {
-  it('requires admin authentication for legacy admin endpoints', async () => {
+  it('keeps legacy admin endpoints disabled by default', async () => {
     const env = {
       LOCAL_DB: createMemoryD1(state()) as unknown as D1Database,
       NOTIFY_SECRET_KEY: 'test-secret',
+    }
+    const adminCookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await worker.fetch(new Request('https://example.com/admin/debug-env', {
+      headers: { cookie: adminCookie },
+    }), env)
+
+    expect(response.status).toBe(404)
+  })
+
+  it('requires admin authentication for enabled legacy admin endpoints', async () => {
+    const env = {
+      LOCAL_DB: createMemoryD1(state()) as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      ENABLE_TEMP_ADMIN_ENDPOINTS: 'true',
     }
     const endpoints = [
       ['GET', '/admin/test-tables'],
@@ -116,11 +131,12 @@ describe('temporary admin endpoints', () => {
     }
   })
 
-  it('allows admins to read temporary debug status', async () => {
+  it('allows admins to read temporary debug status when enabled', async () => {
     const env = {
       LOCAL_DB: createMemoryD1(state()) as unknown as D1Database,
       NOTIFY_SECRET_KEY: 'test-secret',
       USE_NORMALIZED_TABLES: 'false',
+      ENABLE_TEMP_ADMIN_ENDPOINTS: 'true',
     }
     const adminCookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
 

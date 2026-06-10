@@ -450,6 +450,39 @@ describe('welfare state security', () => {
     await expect(response.text()).resolves.toBe('real')
   })
 
+  it('rejects image uploads without a declared content length', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ id: 'user_a' })],
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      AI_ASSETS: {
+        async put() {
+          throw new Error('R2 should not be reached for an unknown upload size')
+        },
+      } as unknown as R2Bucket,
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_a')
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('image'))
+        controller.close()
+      },
+    })
+
+    const response = await handleUploadRequest(new Request('https://example.com/api/uploads/images', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'image/png', 'x-file-name': encodeURIComponent('proof.png') },
+      body,
+      duplex: 'half',
+    } as RequestInit), env)
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ error: '缺少图片大小信息' })
+  })
+
   it('returns an unauthorized response when reading uploads without a session', async () => {
     const d1 = createMemoryD1({
       ...state(),
@@ -801,6 +834,74 @@ describe('welfare state security', () => {
     const balanceQueries = d1.queries.filter(item => item.method === 'all' && item.query.includes('from point_transactions'))
     expect(balanceQueries).toHaveLength(1)
     expect(balanceQueries[0].values).toEqual(['admin_1'])
+  })
+
+  it('syncs only changed user balances for legacy full-state saves', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const normalUser = user({ id: 'user_1', points: 1000 })
+    const untouchedUser = user({ id: 'user_2', points: 1000 })
+    const d1 = createMemoryD1({ ...state(), users: [admin, normalUser, untouchedUser] })
+    d1.pointTransactions.push(
+      {
+        id: 'tx_admin_1',
+        user_id: 'admin_1',
+        delta: 50,
+        type: 'grant',
+        reason: 'sync admin',
+        ref_id: null,
+        balance_after: 50,
+        created_at: '2026-06-03T00:00:00.000Z',
+      },
+      {
+        id: 'tx_user_1',
+        user_id: 'user_1',
+        delta: 999,
+        type: 'grant',
+        reason: 'sync changed user',
+        ref_id: null,
+        balance_after: 1999,
+        created_at: '2026-06-03T00:00:00.000Z',
+      },
+      {
+        id: 'tx_user_2',
+        user_id: 'user_2',
+        delta: 777,
+        type: 'grant',
+        reason: 'do not sync untouched user',
+        ref_id: null,
+        balance_after: 1777,
+        created_at: '2026-06-03T00:00:00.000Z',
+      },
+    )
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+    const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/admin/welfare/state', {
+      headers: { cookie },
+    }), env)
+    const current = await currentResponse.json() as { state: WelfareState, version: number }
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        version: current.version,
+        state: {
+          ...current.state,
+          siteBanner: { enabled: true, title: '公告', body: '系统维护通知' },
+          users: current.state.users.map(item => item.id === 'user_1' ? { ...item, points: 999999 } : item),
+        },
+      }),
+    }), env)
+
+    expect(response.status).toBe(200)
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.users.find(item => item.id === 'admin_1')?.points).toBe(50)
+    expect(latest.users.find(item => item.id === 'user_1')?.points).toBe(1999)
+    expect(latest.users.find(item => item.id === 'user_2')?.points).toBe(1000)
+
+    const balanceQueries = d1.queries.filter(item => item.method === 'all' && item.query.includes('from point_transactions'))
+    expect(balanceQueries.at(-1)?.values).toContain('user_1')
+    expect(balanceQueries.at(-1)?.values).not.toContain('user_2')
   })
 
   it('credits replayed recharge notifications only once', async () => {

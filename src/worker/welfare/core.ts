@@ -107,6 +107,7 @@ export interface WorkerEnv {
   WEBHOOK_SECRET?: string
   ASYNC_JOBS?: Queue<unknown>
   USE_NORMALIZED_TABLES?: string // 'true' = 从规范化表读取
+  ENABLE_TEMP_ADMIN_ENDPOINTS?: string // 'true' = 启用临时迁移/调试端点
 }
 
 const STATE_KEY = 'default'
