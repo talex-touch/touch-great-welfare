@@ -22,6 +22,7 @@ import { getPool, shouldUseD1 } from './welfare-state'
 interface Sub2ApiConfigRow {
   id: string
   enabled: number | boolean
+  mock_enabled?: number | boolean
   base_url: string
   admin_api_key_encrypted?: string | null
   database_url_encrypted?: string | null
@@ -52,6 +53,7 @@ interface Sub2ApiKeyBindingRow {
 
 interface SaveSub2ApiConfigPayload {
   enabled?: boolean
+  mockEnabled?: boolean
   baseUrl?: string
   adminApiKey?: string
   databaseUrl?: string
@@ -115,6 +117,7 @@ interface Sub2ApiGroupView {
 
 const DEFAULT_EXPIRES_IN_DAYS = 30
 const DEFAULT_KEY_QUOTA_USD = 10
+const MOCK_SUB2API_KEY_ID_PREFIX = 'mock_'
 const SUB2API_CONFIG_ID = 'default'
 const RESOURCE_LOCK_TTL_SECONDS = 60
 let sub2ApiSchemaPromise: Promise<void> | undefined
@@ -228,8 +231,10 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
   const stored = await getStoredSub2ApiConfig(env)
   const adminApiKey = await decryptOptionalSecret(stored?.admin_api_key_encrypted, env)
   const databaseUrl = await decryptOptionalSecret(stored?.database_url_encrypted, env)
+  const mockEnabled = stored ? boolValue(stored.mock_enabled) : false
   return {
     enabled: stored ? boolValue(stored.enabled) : false,
+    mockEnabled,
     baseUrl: normalizeUrlBase(stored?.base_url || '', { allowHttp: true, allowLocalhost: true }),
     adminApiKey,
     databaseUrl,
@@ -239,7 +244,7 @@ async function getEffectiveSub2ApiConfig(env: WorkerEnv) {
     defaultRateLimit5h: normalizeRateLimit(stored?.default_rate_limit_5h),
     defaultRateLimit1d: normalizeRateLimit(stored?.default_rate_limit_1d),
     defaultRateLimit7d: normalizeRateLimit(stored?.default_rate_limit_7d),
-    configured: !!(stored?.base_url && (adminApiKey || databaseUrl)),
+    configured: mockEnabled || !!(stored?.base_url && (adminApiKey || databaseUrl)),
     source: stored ? 'admin' as const : 'empty' as const,
   }
 }
@@ -258,6 +263,7 @@ async function addD1ColumnIfMissing(env: WorkerEnv, table: string, column: strin
 async function runSub2ApiSchemaSetup(env: WorkerEnv) {
   await ensureNotificationSchema(env)
   if (shouldUseD1(env)) {
+    await addD1ColumnIfMissing(env, 'sub2api_config', 'mock_enabled', 'integer not null default 0')
     await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'application_id', 'text')
     await addD1ColumnIfMissing(env, 'sub2api_key_bindings', 'item_id', 'text')
     await env.LOCAL_DB!
@@ -267,6 +273,7 @@ async function runSub2ApiSchemaSetup(env: WorkerEnv) {
   }
 
   const pool = getPool(env)
+  await pool.query('alter table sub2api_config add column if not exists mock_enabled boolean not null default false')
   await pool.query('alter table sub2api_key_bindings add column if not exists application_id text')
   await pool.query('alter table sub2api_key_bindings add column if not exists item_id text')
   await pool.query('create index if not exists idx_sub2api_key_bindings_resource_item on sub2api_key_bindings (application_id, item_id, status)')
@@ -283,6 +290,7 @@ async function ensureSub2ApiSchema(env: WorkerEnv) {
 function serializeConfig(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>) {
   return {
     enabled: config.enabled,
+    mockEnabled: config.mockEnabled,
     configured: config.configured,
     baseUrl: config.baseUrl,
     adminApiKeyMasked: maskSecret(config.adminApiKey),
@@ -300,6 +308,7 @@ function serializeConfig(config: Awaited<ReturnType<typeof getEffectiveSub2ApiCo
 function serializePublicConfig(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>) {
   return {
     enabled: config.enabled,
+    mockEnabled: config.mockEnabled,
     configured: config.configured,
     baseUrl: config.baseUrl,
     adminApiKeyMasked: '',
@@ -331,6 +340,7 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
 
   const config = {
     enabled: payload.enabled !== false,
+    mockEnabled: payload.mockEnabled ?? (stored ? boolValue(stored.mock_enabled) : false),
     baseUrl: normalizeUrlBase(payload.baseUrl?.trim() || '', { allowHttp: true, allowLocalhost: true }),
     adminApiKeyEncrypted,
     databaseUrlEncrypted,
@@ -346,14 +356,15 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
     await env.LOCAL_DB!
       .prepare(`
         insert into sub2api_config (
-          id, enabled, base_url, admin_api_key_encrypted, database_url_encrypted,
+          id, enabled, mock_enabled, base_url, admin_api_key_encrypted, database_url_encrypted,
           default_group_id, default_quota_usd, default_expires_in_days,
           default_rate_limit_5h, default_rate_limit_1d, default_rate_limit_7d, updated_at
         )
-        values ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, current_timestamp)
+        values ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, current_timestamp)
         on conflict (id)
         do update set
           enabled = excluded.enabled,
+          mock_enabled = excluded.mock_enabled,
           base_url = excluded.base_url,
           admin_api_key_encrypted = excluded.admin_api_key_encrypted,
           database_url_encrypted = excluded.database_url_encrypted,
@@ -367,6 +378,7 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
       `)
       .bind(
         config.enabled ? 1 : 0,
+        config.mockEnabled ? 1 : 0,
         config.baseUrl,
         config.adminApiKeyEncrypted,
         config.databaseUrlEncrypted,
@@ -382,14 +394,15 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
   else {
     await getPool(env).query(`
       insert into sub2api_config (
-        id, enabled, base_url, admin_api_key_encrypted, database_url_encrypted,
+        id, enabled, mock_enabled, base_url, admin_api_key_encrypted, database_url_encrypted,
         default_group_id, default_quota_usd, default_expires_in_days,
         default_rate_limit_5h, default_rate_limit_1d, default_rate_limit_7d, updated_at
       )
-      values ('default', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+      values ('default', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
       on conflict (id)
       do update set
         enabled = excluded.enabled,
+        mock_enabled = excluded.mock_enabled,
         base_url = excluded.base_url,
         admin_api_key_encrypted = excluded.admin_api_key_encrypted,
         database_url_encrypted = excluded.database_url_encrypted,
@@ -402,6 +415,7 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
         updated_at = now()
     `, [
       config.enabled,
+      config.mockEnabled,
       config.baseUrl,
       config.adminApiKeyEncrypted,
       config.databaseUrlEncrypted,
@@ -576,6 +590,23 @@ function buildSub2ApiKeyPayload(
     ip_idle_timeout_seconds: optionalNonNegativeInt(payload.ipIdleTimeoutSeconds) ?? 0,
     max_concurrency: optionalNonNegativeInt(payload.maxConcurrency) ?? 0,
   }
+}
+
+function createMockSub2ApiKey(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, payload: CreateSub2ApiKeyPayload) {
+  const request = buildSub2ApiKeyPayload(config, payload)
+  const random = `${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`
+  return {
+    id: `${MOCK_SUB2API_KEY_ID_PREFIX}${random.slice(0, 16)}`,
+    key: `sk-mock-${random}`,
+    name: request.name,
+    status: 'active',
+    quota: request.quota,
+    expires_at: new Date(Date.now() + Number(request.expires_in_days) * 24 * 60 * 60 * 1000).toISOString(),
+  } satisfies UpstreamApiKey
+}
+
+function isMockSub2ApiKeyId(value: string | null | undefined) {
+  return !!value?.startsWith(MOCK_SUB2API_KEY_ID_PREFIX)
 }
 
 async function createSub2ApiKeyByDatabase(
@@ -949,8 +980,11 @@ async function createSub2ApiKey(env: WorkerEnv, user: User, payload: CreateSub2A
   if (!config.configured)
     throw new Error('Sub2API 尚未配置完成')
 
-  const sub2apiUserId = await ensureSub2ApiUser(config, user)
   const quotaUsd = normalizeQuota(payload.quotaUsd, config.defaultQuotaUsd)
+  if (config.mockEnabled)
+    return await insertBinding(env, user.id, `mock-${user.id}`, createMockSub2ApiKey(config, payload), quotaUsd, resourceRef)
+
+  const sub2apiUserId = await ensureSub2ApiUser(config, user)
   let upstreamKey: UpstreamApiKey
   if (config.adminApiKey) {
     try {
@@ -997,7 +1031,7 @@ async function deleteKey(request: Request, env: WorkerEnv) {
     throw new Error('API Key 不存在或已删除')
 
   const config = await getEffectiveSub2ApiConfig(env)
-  if (binding.sub2api_key_id) {
+  if (binding.sub2api_key_id && !isMockSub2ApiKeyId(binding.sub2api_key_id)) {
     if (config.adminApiKey) {
       try {
         await deleteSub2ApiKeyByAdminApi(config, binding.sub2api_key_id)
@@ -1051,13 +1085,15 @@ async function sub2ApiConfigForTest(env: WorkerEnv, payload: SaveSub2ApiConfigPa
   const stored = await getEffectiveSub2ApiConfig(env)
   const baseUrl = payload.baseUrl?.trim() ? normalizeUrlBase(payload.baseUrl, { allowHttp: true, allowLocalhost: true }) : stored.baseUrl
   const adminApiKey = payload.adminApiKey?.trim() || stored.adminApiKey
+  const mockEnabled = payload.mockEnabled ?? stored.mockEnabled
   return {
     ...stored,
     enabled: payload.enabled ?? stored.enabled,
+    mockEnabled,
     baseUrl,
     adminApiKey,
     databaseUrl: '',
-    configured: !!(baseUrl && adminApiKey),
+    configured: mockEnabled || !!(baseUrl && adminApiKey),
   }
 }
 
@@ -1067,6 +1103,8 @@ async function testSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
     throw new Error('Sub2API 未启用')
   if (!config.configured)
     throw new Error('Sub2API 尚未配置完成')
+  if (config.mockEnabled)
+    return { ok: true, adminApiReachable: false, mock: true, groups: [] }
 
   await callSub2Api(config, '/api/v1/admin/users?page=1&page_size=1')
   return { ok: true, adminApiReachable: true, groups: await listSub2ApiGroups(config) }

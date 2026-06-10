@@ -5,6 +5,7 @@ export interface Sub2ApiGroupView {
 
 export interface Sub2ApiConfigView {
   enabled: boolean
+  mockEnabled: boolean
   configured: boolean
   baseUrl: string
   adminApiKeyMasked: string
@@ -20,6 +21,7 @@ export interface Sub2ApiConfigView {
 
 export interface SaveSub2ApiConfigPayload {
   enabled: boolean
+  mockEnabled?: boolean
   baseUrl: string
   adminApiKey?: string
   databaseUrl?: string
@@ -113,7 +115,7 @@ export function saveSub2ApiConfig(adminUserId: string, payload: SaveSub2ApiConfi
 }
 
 export function testSub2ApiConfig(adminUserId: string, payload?: Partial<SaveSub2ApiConfigPayload>) {
-  return requestSub2Api<{ ok: boolean, groups: Sub2ApiGroupView[] }>('/api/sub2api/test', adminUserId, {
+  return requestSub2Api<{ ok: boolean, adminApiReachable?: boolean, mock?: boolean, groups: Sub2ApiGroupView[] }>('/api/sub2api/test', adminUserId, {
     method: 'POST',
     body: JSON.stringify(payload ?? {}),
   })

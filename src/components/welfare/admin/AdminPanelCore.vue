@@ -2826,16 +2826,17 @@ onMounted(() => {
                   Sub2API 直连配置
                 </div>
                 <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在资源申请通过后自动发放 API Key。' : '尚未配置 Sub2API 基础地址或 Admin API Key。' }}
+                  {{ sub2ApiConfigForm.mockEnabled ? 'Sub2API 模拟分配已启用，资源申请通过后会自动生成 sk-mock-* 测试 API Key。' : sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在资源申请通过后自动发放 API Key。' : '尚未配置 Sub2API 基础地址或 Admin API Key。' }}
                 </div>
                 <div class="gap-5 grid lg:grid-cols-2">
                   <label class="gap-2 grid lg:col-span-2">
                     <span class="field-label">Sub2API 基础地址</span>
-                    <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="https://sub2api.example.com" />
+                    <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading || sub2ApiConfigForm.mockEnabled" placeholder="https://sub2api.example.com" />
+                    <span v-if="sub2ApiConfigForm.mockEnabled" class="field-hint">模拟分配模式不调用真实 Sub2API，可留空基础地址和 Admin API Key。</span>
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Admin API Key</span>
-                    <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
+                    <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading || sub2ApiConfigForm.mockEnabled" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
                     <span class="field-hint">用于测试连接、拉取分组、查询/创建 Sub2API 用户，并通过 Admin API 创建/删除 API Key；服务端加密保存。</span>
                   </label>
                   <label class="gap-2 grid">
@@ -2856,6 +2857,10 @@ onMounted(() => {
                     <TxCheckbox v-model="sub2ApiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用 Sub2API" />
                     启用 Sub2API
                   </label>
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="sub2ApiConfigForm.mockEnabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用模拟分配 API Key" />
+                    模拟分配 API Key
+                  </label>
                   <TxButton variant="primary" :disabled="!isAdmin || sub2ApiConfigForm.loading" @click="saveSub2ApiProviderConfig">
                     {{ sub2ApiConfigForm.loading ? '读取 / 保存中...' : '保存 Sub2API 配置' }}
                   </TxButton>
@@ -2867,7 +2872,7 @@ onMounted(() => {
                   {{ sub2ApiConfigForm.message }}
                 </div>
                 <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-                  用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。
+                  用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。模拟分配仅用于联调/演示，生成的 sk-mock-* 不会写入真实 Sub2API。
                 </div>
               </div>
             </TxTabItem>

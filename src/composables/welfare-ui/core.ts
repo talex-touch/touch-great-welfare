@@ -384,6 +384,7 @@ export const generatedTemporaryAiKey = ref('')
 
 export const sub2ApiConfigForm = reactive({
   enabled: true,
+  mockEnabled: false,
   baseUrl: '',
   adminApiKey: '',
   adminApiKeyMasked: '',
@@ -2220,6 +2221,7 @@ export function useWelfareUiState() {
 
   function applySub2ApiConfig(config: Awaited<ReturnType<typeof loadSub2ApiConfig>>) {
     sub2ApiConfigForm.enabled = config.enabled
+    sub2ApiConfigForm.mockEnabled = config.mockEnabled
     sub2ApiConfigForm.baseUrl = config.baseUrl
     sub2ApiConfigForm.adminApiKey = ''
     sub2ApiConfigForm.adminApiKeyMasked = config.adminApiKeyMasked
@@ -2265,6 +2267,7 @@ export function useWelfareUiState() {
     try {
       const result = await saveSub2ApiConfig(welfare.currentUser.value.id, {
         enabled: sub2ApiConfigForm.enabled,
+        mockEnabled: sub2ApiConfigForm.mockEnabled,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
@@ -2292,6 +2295,7 @@ export function useWelfareUiState() {
     try {
       const result = await testSub2ApiConfig(welfare.currentUser.value.id, {
         enabled: sub2ApiConfigForm.enabled,
+        mockEnabled: sub2ApiConfigForm.mockEnabled,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
@@ -2302,7 +2306,9 @@ export function useWelfareUiState() {
         defaultRateLimit7d: Number(sub2ApiConfigForm.defaultRateLimit7d),
       })
       sub2ApiConfigForm.groups = result.groups
-      sub2ApiConfigForm.message = result.groups.length ? `Sub2API 连接测试通过，已拉取 ${result.groups.length} 个分组` : 'Sub2API 连接测试通过，未返回可选分组'
+      sub2ApiConfigForm.message = result.mock
+        ? 'Sub2API 模拟分配可用：自动申请会生成 sk-mock-* 测试 Key，不调用真实 Sub2API。'
+        : result.groups.length ? `Sub2API 连接测试通过，已拉取 ${result.groups.length} 个分组` : 'Sub2API 连接测试通过，未返回可选分组'
     }
     finally {
       sub2ApiConfigForm.testing = false

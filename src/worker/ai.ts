@@ -1313,9 +1313,6 @@ async function provisionApplicationReward(request: Request, env: WorkerEnv) {
     return { status: 'skipped' as const, applicationId: application.id, reason: '该申请类型不需要自动发放' }
 
   const job = { applicationId: application.id, adminUserId: admin.id, itemId: payload.itemId?.trim() || undefined }
-  if (job.itemId)
-    return runResourceProvision(env, job)
-
   if (await enqueueResourceProvisionJob(env, job))
     return { status: 'pending' as const, applicationId: application.id, itemId: job.itemId }
 

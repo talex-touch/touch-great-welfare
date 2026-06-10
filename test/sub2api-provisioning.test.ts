@@ -38,15 +38,16 @@ function createMemoryD1(state: WelfareState) {
             sub2apiConfig = {
               id: 'default',
               enabled: this.values[0],
-              base_url: this.values[1],
-              admin_api_key_encrypted: this.values[2],
-              database_url_encrypted: this.values[3],
-              default_group_id: this.values[4],
-              default_quota_usd: this.values[5],
-              default_expires_in_days: this.values[6],
-              default_rate_limit_5h: this.values[7],
-              default_rate_limit_1d: this.values[8],
-              default_rate_limit_7d: this.values[9],
+              mock_enabled: this.values[1],
+              base_url: this.values[2],
+              admin_api_key_encrypted: this.values[3],
+              database_url_encrypted: this.values[4],
+              default_group_id: this.values[5],
+              default_quota_usd: this.values[6],
+              default_expires_in_days: this.values[7],
+              default_rate_limit_5h: this.values[8],
+              default_rate_limit_1d: this.values[9],
+              default_rate_limit_7d: this.values[10],
             }
           }
           if (query.includes('update welfare_app_state')) {
@@ -311,6 +312,71 @@ describe('sub2api resource provisioning', () => {
     expect(result.status).toBe('pending')
     expect(jobs).toEqual([{ type: 'resource.provision', applicationId: 'app_1', adminUserId: 'admin_1', itemId: 'item_1' }])
     expect(d1.data.bindings).toHaveLength(0)
+  })
+
+  it('auto provisions mock Sub2API keys without calling upstream Sub2API', async () => {
+    const d1 = createMemoryD1(createState())
+    const env = {
+      LOCAL_DB: d1,
+      NOTIFY_SECRET_KEY: 'test-secret-for-sub2api',
+      WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
+    }
+    const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const saveResponse = await handleSub2ApiRequest(new Request('https://welfare.example.com/api/sub2api/config', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        mockEnabled: true,
+        baseUrl: '',
+        clearAdminApiKey: true,
+        clearDatabaseUrl: true,
+        defaultQuotaUsd: 10,
+        defaultExpiresInDays: 30,
+        defaultRateLimit5h: 0,
+        defaultRateLimit1d: 0,
+        defaultRateLimit7d: 0,
+      }),
+    }), env)
+    const savedConfig = await saveResponse.json() as { configured: boolean, mockEnabled: boolean }
+
+    expect(saveResponse.ok).toBe(true)
+    expect(savedConfig).toMatchObject({ configured: true, mockEnabled: true })
+
+    const testResponse = await handleSub2ApiRequest(new Request('https://welfare.example.com/api/sub2api/test', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true, mockEnabled: true }),
+    }), env)
+    await expect(testResponse.json()).resolves.toMatchObject({ ok: true, mock: true, groups: [] })
+
+    const response = await handleAiRequest(new Request('https://welfare.example.com/api/ai/applications/app_1/provision', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ itemId: 'item_1' }),
+    }), env)
+    const result = await response.json() as { status: string, items: Array<{ key: { key: string, sub2apiKeyId: string, quotaUsd: number } }> }
+
+    expect(response.ok).toBe(true)
+    expect(result.status).toBe('provisioned')
+    expect(result.items[0].key.key).toMatch(/^sk-mock-/)
+    expect(result.items[0].key.sub2apiKeyId).toMatch(/^mock_/)
+    expect(result.items[0].key.quotaUsd).toBe(25)
+    expect(d1.data.bindings).toHaveLength(1)
+    expect(d1.data.bindings[0]).toMatchObject({
+      application_id: 'app_1',
+      item_id: 'item_1',
+      sub2api_user_id: 'mock-user_1',
+    })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('sub2api.example.com'))).toBe(false)
+
+    const updatedState = await readWelfareState(env) as WelfareState
+    expect(updatedState.applications[0].status).toBe('delivered')
+    expect(updatedState.applications[0].answer).toContain('sk-mock-')
+    expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('completed')
   })
 
   it('passes approved LLM resource limits to the Sub2API admin create endpoint', async () => {

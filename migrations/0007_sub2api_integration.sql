@@ -1,6 +1,7 @@
 create table if not exists sub2api_config (
   id text primary key,
   enabled integer not null default 0,
+  mock_enabled integer not null default 0,
   base_url text not null default '',
   admin_api_key_encrypted text,
   database_url_encrypted text,
