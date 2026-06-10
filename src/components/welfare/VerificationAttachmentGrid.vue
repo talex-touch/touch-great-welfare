@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AttachmentMeta } from '~/composables/welfare'
 import { computed, ref } from 'vue'
+import { useWelfareFeedback } from '~/composables/feedback'
 import { formatBytes } from '~/composables/welfare'
 
 const props = defineProps<{
@@ -8,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const selectedFile = ref<AttachmentMeta | null>(null)
+const { notify, notifyLoginRequired } = useWelfareFeedback()
 
 const gridClass = computed(() => {
   const count = props.files.length
@@ -33,6 +35,19 @@ function openPreview(file: AttachmentMeta) {
 function closePreview() {
   selectedFile.value = null
 }
+
+async function handleImageError(file: AttachmentMeta) {
+  const source = previewSource(file)
+  if (source.startsWith('/api/uploads/')) {
+    const response = await fetch(source, { credentials: 'same-origin' }).catch(() => undefined)
+    if (response?.status === 401) {
+      notifyLoginRequired()
+      return
+    }
+  }
+
+  notify(`材料图片加载失败：${file.name}`)
+}
 </script>
 
 <template>
@@ -45,7 +60,7 @@ function closePreview() {
       :aria-label="`预览材料 ${file.name}`"
       @click="openPreview(file)"
     >
-      <img v-if="isPreviewableImage(file)" :src="previewSource(file)" :alt="file.name" loading="lazy">
+      <img v-if="isPreviewableImage(file)" :src="previewSource(file)" :alt="file.name" loading="lazy" @error="handleImageError(file)">
       <span v-else class="verification-attachment-placeholder">
         <span class="i-carbon-image" />
         <small>{{ file.type || '未知类型' }}</small>
@@ -70,7 +85,7 @@ function closePreview() {
             </button>
           </div>
           <div class="verification-attachment-preview__body">
-            <img v-if="isPreviewableImage(selectedFile)" :src="previewSource(selectedFile)" :alt="selectedFile.name">
+            <img v-if="isPreviewableImage(selectedFile)" :src="previewSource(selectedFile)" :alt="selectedFile.name" @error="handleImageError(selectedFile)">
             <div v-else class="verification-attachment-preview__empty">
               <span class="i-carbon-document-attachment" />
               <b>该材料不是可直接预览的图片</b>

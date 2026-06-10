@@ -161,7 +161,7 @@ export async function handleUploadRequest(request: Request, env: WorkerEnv) {
 
     const fileMatch = path.match(/^\/([^/]+)\/file$/)
     if (fileMatch && request.method === 'GET')
-      return readUploadedFile(request, env, decodeURIComponent(fileMatch[1]))
+      return await readUploadedFile(request, env, decodeURIComponent(fileMatch[1]))
 
     return json({ error: 'Not Found' }, 404)
   }

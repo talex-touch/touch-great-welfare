@@ -340,6 +340,48 @@ describe('welfare state security', () => {
     await expect(response.json()).resolves.toMatchObject({ error: '无权读取该图片' })
   })
 
+  it('returns an unauthorized response when reading uploads without a session', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [user({ id: 'user_a' })],
+      studentVerifications: [{
+        id: 'stu_1',
+        userId: 'user_a',
+        verificationType: 'student',
+        realName: '测试用户',
+        category: '高校学生',
+        school: '测试大学',
+        notes: '<p>学生认证材料说明。</p>',
+        attachments: [{
+          id: 'att_login_required',
+          name: 'proof.png',
+          size: 4,
+          type: 'image/png',
+          r2Key: 'user-uploads/user_a/att_login_required.png',
+          url: '/api/uploads/att_login_required/file',
+        }],
+        status: 'pending',
+        reviewFee: STUDENT_REVIEW_FEE,
+        feeReturned: false,
+        createdAt: '2026-06-08T00:00:00.000Z',
+      }],
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      AI_ASSETS: {
+        async get() {
+          throw new Error('R2 should not be reached without a session')
+        },
+      } as unknown as R2Bucket,
+    }
+
+    const response = await handleUploadRequest(new Request('https://example.com/api/uploads/att_login_required/file'), env)
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ error: '请先登录' })
+  })
+
   it('initializes the welfare schema once per D1 binding', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }

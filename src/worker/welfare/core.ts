@@ -1746,9 +1746,10 @@ export function errorResponse(error: unknown) {
     }, 409)
   }
 
+  const message = error instanceof Error ? error.message : '服务端错误'
   return json({
-    error: error instanceof Error ? error.message : '服务端错误',
-  }, 500)
+    error: message,
+  }, message === '请先登录' ? 401 : 500)
 }
 
 export function assertStateShape(state: unknown): asserts state is Record<string, unknown> {

@@ -27,7 +27,8 @@ export function json(payload: unknown, status = 200, headers?: HeadersInit) {
 }
 
 export function errorResponse(error: unknown, status = 500) {
-  return json({ error: error instanceof Error ? error.message : '服务端错误' }, status)
+  const message = error instanceof Error ? error.message : '服务端错误'
+  return json({ error: message }, message === '请先登录' ? 401 : status)
 }
 
 export async function readJson<T>(request: Request, maxBytes = 64 * 1024): Promise<T> {
