@@ -17,6 +17,8 @@ import { handleMigrateNow } from './worker/migrate-helper'
 import { handleExportState } from './worker/export-state'
 import { handleFullMigration } from './worker/full-migration'
 import { handleBatchMigration } from './worker/batch-migration'
+import { handleTestNewTables } from './worker/test-tables'
+import { handleDebugEnv } from './worker/debug-env'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -62,6 +64,14 @@ export default {
     const blocked = rejectCrossOriginWrite(request, url)
     if (blocked)
       return blocked
+
+    // 测试新表读取
+    if (url.pathname === '/admin/test-tables' && request.method === 'GET')
+      return handleTestNewTables(env)
+
+    // 调试环境变量
+    if (url.pathname === '/admin/debug-env' && request.method === 'GET')
+      return handleDebugEnv(env)
 
     // 临时迁移端点
     if (url.pathname === '/admin/migrate-now' && request.method === 'POST')

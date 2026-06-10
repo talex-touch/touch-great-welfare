@@ -106,6 +106,7 @@ export interface WorkerEnv {
   WELFARE_STATE_SECRET_KEY?: string
   WEBHOOK_SECRET?: string
   ASYNC_JOBS?: Queue<unknown>
+  USE_NORMALIZED_TABLES?: string  // 'true' = 从规范化表读取
 }
 
 const STATE_KEY = 'default'
@@ -1349,6 +1350,12 @@ export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfar
 }
 
 export async function readWelfareState(env: WorkerEnv, options: ReadWelfareStateOptions = {}) {
+  // 🚀 新特性：从规范化表读取（通过环境变量控制）
+  if (env.USE_NORMALIZED_TABLES === 'true') {
+    const { readWelfareStateFromTables } = await import('./hybrid-read')
+    return readWelfareStateFromTables(env)
+  }
+
   return (await readWelfareStateRecord(env, options)).state
 }
 
