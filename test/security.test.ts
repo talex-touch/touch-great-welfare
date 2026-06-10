@@ -25,7 +25,7 @@ describe('security hardening', () => {
     expect(markdownToSafeHtml('![x](data:image/png;base64,aaaa)')).not.toContain('data:image')
   })
 
-  it('rejects cross-origin writes and exempts external callback paths', async () => {
+  it('rejects cross-origin writes and only exempts external callback paths', async () => {
     const worker = (await import('../src/worker')).default
     const env = {}
 
@@ -80,6 +80,15 @@ describe('security hardening', () => {
       headers: { origin: 'https://github.com' },
       body: '{}',
     }))
+
+    // Temporary admin endpoints are not external callbacks and remain protected.
+    const adminBlocked = await worker.fetch(new Request('https://example.com/admin/migrate-now', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'origin': 'https://evil.com' },
+      body: '{}',
+    }), env)
+    expect(adminBlocked.status).toBe(403)
+    expect((await adminBlocked.json() as { error: string }).error).toContain('跨源')
   })
 
   it('requires a configured secret for signed sessions', async () => {

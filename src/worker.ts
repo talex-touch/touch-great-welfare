@@ -1,34 +1,31 @@
 import type { WorkerEnv } from './worker/welfare-state'
 import { handleAiRequest } from './worker/ai'
 import { handleAsyncJobBatch } from './worker/async-jobs'
+import { assertAdminRequest, errorResponse } from './worker/auth'
+import { handleBatchMigration } from './worker/batch-migration'
 import { handleDatabaseProvisionRequest } from './worker/database-provisioning'
+import { handleDebugEnv } from './worker/debug-env'
 import { handleEducationMailRequest } from './worker/education-mail'
+import { handleExportState } from './worker/export-state'
+import { handleFullMigration } from './worker/full-migration'
 import { handleGitHubAppRequest } from './worker/github-app'
+import { handleMigrateNow } from './worker/migrate-helper'
 import { handleNotificationRequest } from './worker/notifications'
 import { handleOAuthRequest } from './worker/oauth'
 import { handlePointRequest } from './worker/points'
 import { handleRechargeRequest } from './worker/recharge'
 import { handleSub2ApiRequest } from './worker/sub2api'
+import { handleTestNewTables } from './worker/test-tables'
 import { handleTurnstileRequest } from './worker/turnstile'
 import { handleUploadRequest } from './worker/uploads'
 import { handleWebhookRequest } from './worker/webhook'
 import { handleApplicationSubmitRequest, handleWelfareStateRequest } from './worker/welfare-state'
-import { handleMigrateNow } from './worker/migrate-helper'
-import { handleExportState } from './worker/export-state'
-import { handleFullMigration } from './worker/full-migration'
-import { handleBatchMigration } from './worker/batch-migration'
-import { handleTestNewTables } from './worker/test-tables'
-import { handleDebugEnv } from './worker/debug-env'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /** Paths that receive external callbacks (signed or server-to-server) and are exempt from same-origin checks. */
 function isExternalCallbackPath(pathname: string) {
   return pathname === '/api/recharge/notify'
-    || pathname === '/admin/migrate-now'
-    || pathname === '/admin/full-migration'
-    || pathname === '/admin/batch-migration'
-    || pathname === '/admin/export-state'
     || pathname.startsWith('/api/webhooks/')
 }
 
@@ -53,12 +50,22 @@ function rejectCrossOriginWrite(request: Request, url: URL) {
   return null
 }
 
+async function assertTemporaryAdminEndpoint(request: Request, env: WorkerEnv) {
+  try {
+    await assertAdminRequest(request, env)
+    return null
+  }
+  catch (error) {
+    return errorResponse(error, error instanceof Error && error.message === '需要管理员权限' ? 403 : 500)
+  }
+}
+
 export default {
   async queue(batch: MessageBatch<unknown>, env: WorkerEnv) {
     return handleAsyncJobBatch(batch, env)
   },
 
-  fetch(request: Request, env: WorkerEnv) {
+  async fetch(request: Request, env: WorkerEnv) {
     const url = new URL(request.url)
 
     const blocked = rejectCrossOriginWrite(request, url)
@@ -66,28 +73,40 @@ export default {
       return blocked
 
     // 测试新表读取
-    if (url.pathname === '/admin/test-tables' && request.method === 'GET')
-      return handleTestNewTables(env)
+    if (url.pathname === '/admin/test-tables' && request.method === 'GET') {
+      const denied = await assertTemporaryAdminEndpoint(request, env)
+      return denied ?? handleTestNewTables(env)
+    }
 
     // 调试环境变量
-    if (url.pathname === '/admin/debug-env' && request.method === 'GET')
-      return handleDebugEnv(env)
+    if (url.pathname === '/admin/debug-env' && request.method === 'GET') {
+      const denied = await assertTemporaryAdminEndpoint(request, env)
+      return denied ?? handleDebugEnv(env)
+    }
 
     // 临时迁移端点
-    if (url.pathname === '/admin/migrate-now' && request.method === 'POST')
-      return handleMigrateNow(env)
+    if (url.pathname === '/admin/migrate-now' && request.method === 'POST') {
+      const denied = await assertTemporaryAdminEndpoint(request, env)
+      return denied ?? handleMigrateNow(env)
+    }
 
     // 完整数据迁移（推荐）
-    if (url.pathname === '/admin/full-migration' && request.method === 'POST')
-      return handleFullMigration(env)
+    if (url.pathname === '/admin/full-migration' && request.method === 'POST') {
+      const denied = await assertTemporaryAdminEndpoint(request, env)
+      return denied ?? handleFullMigration(env)
+    }
 
     // 批量数据迁移（推荐用这个）
-    if (url.pathname === '/admin/batch-migration' && request.method === 'POST')
-      return handleBatchMigration(env, request)
+    if (url.pathname === '/admin/batch-migration' && request.method === 'POST') {
+      const denied = await assertTemporaryAdminEndpoint(request, env)
+      return denied ?? handleBatchMigration(env, request)
+    }
 
     // 临时导出端点
-    if (url.pathname === '/admin/export-state' && request.method === 'GET')
-      return handleExportState(env)
+    if (url.pathname === '/admin/export-state' && request.method === 'GET') {
+      const denied = await assertTemporaryAdminEndpoint(request, env)
+      return denied ?? handleExportState(env)
+    }
 
     if (url.pathname === '/api/applications/submit')
       return handleApplicationSubmitRequest(request, env)
