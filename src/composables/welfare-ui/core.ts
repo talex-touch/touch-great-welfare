@@ -488,6 +488,14 @@ export const notificationProviderConfigForm = reactive({
   feishuDailyLimit: 400,
   feishuMailboxOptions: [] as Awaited<ReturnType<typeof loadFeishuMailboxes>>['mailboxes'],
   feishuMailboxesLoading: false,
+  smtpEnabled: false,
+  smtpHost: '',
+  smtpPort: 465,
+  smtpUsername: '',
+  smtpPassword: '',
+  smtpPasswordMasked: '',
+  smtpFromEmail: '',
+  smtpFromName: '',
   testEmailAddress: '',
   testingEmail: false,
   authorizingFeishu: false,
@@ -2614,6 +2622,14 @@ export function useWelfareUiState() {
     notificationProviderConfigForm.feishuUserMailboxId = config.feishuUserMailboxId
     notificationProviderConfigForm.feishuSiteBaseUrl = config.feishuSiteBaseUrl
     notificationProviderConfigForm.feishuDailyLimit = config.feishuDailyLimit
+    notificationProviderConfigForm.smtpEnabled = config.smtpEnabled
+    notificationProviderConfigForm.smtpHost = config.smtpHost
+    notificationProviderConfigForm.smtpPort = config.smtpPort
+    notificationProviderConfigForm.smtpUsername = config.smtpUsername
+    notificationProviderConfigForm.smtpPassword = ''
+    notificationProviderConfigForm.smtpPasswordMasked = config.smtpPasswordMasked
+    notificationProviderConfigForm.smtpFromEmail = config.smtpFromEmail
+    notificationProviderConfigForm.smtpFromName = config.smtpFromName
     notificationProviderConfigForm.emailConfigured = config.configured.email
     notificationProviderConfigForm.pushConfigured = config.configured.push
     notificationProviderConfigForm.feishuMailConfigured = config.configured.feishuMail
@@ -2646,6 +2662,13 @@ export function useWelfareUiState() {
       feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
       feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
       feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
+      smtpEnabled: notificationProviderConfigForm.smtpEnabled,
+      smtpHost: notificationProviderConfigForm.smtpHost,
+      smtpPort: Number(notificationProviderConfigForm.smtpPort),
+      smtpUsername: notificationProviderConfigForm.smtpUsername,
+      smtpPassword: notificationProviderConfigForm.smtpPassword,
+      smtpFromEmail: notificationProviderConfigForm.smtpFromEmail,
+      smtpFromName: notificationProviderConfigForm.smtpFromName,
     }
   }
 

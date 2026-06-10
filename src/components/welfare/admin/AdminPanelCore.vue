@@ -3029,6 +3029,38 @@ onMounted(() => {
                 </div>
               </label>
             </div>
+            <div class="mt-8 border-t border-black/8 pt-8 dark:border-white/10">
+              <label class="text-sm flex gap-2 items-center lg:col-span-2 mb-5">
+                <TxCheckbox v-model="notificationProviderConfigForm.smtpEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用 SMTP 邮件通知" />
+                启用 SMTP 邮件通知
+              </label>
+              <div class="gap-5 grid lg:grid-cols-2">
+                <label class="gap-2 grid">
+                  <span class="field-label">SMTP 服务器</span>
+                  <TxInput v-model="notificationProviderConfigForm.smtpHost" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="smtp.feishu.cn" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">SMTP 端口</span>
+                  <TxNumberInput v-model="notificationProviderConfigForm.smtpPort" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="65535" placeholder="465" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">SMTP 用户名</span>
+                  <TxInput v-model="notificationProviderConfigForm.smtpUsername" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="username" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">SMTP 密码</span>
+                  <TxInput v-model="notificationProviderConfigForm.smtpPassword" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.smtpPasswordMasked || '保存到服务端加密配置'" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">发件邮箱</span>
+                  <TxInput v-model="notificationProviderConfigForm.smtpFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="noreply@example.com" />
+                </label>
+                <label class="gap-2 grid">
+                  <span class="field-label">发件人名称</span>
+                  <TxInput v-model="notificationProviderConfigForm.smtpFromName" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="通知中心" />
+                </label>
+              </div>
+            </div>
             <div class="mt-5 flex flex-wrap gap-3 items-center">
               <TxButton variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.loading" @click="saveNotificationProviderConfig">
                 {{ notificationProviderConfigForm.loading ? '读取 / 保存中...' : '保存通知配置' }}
