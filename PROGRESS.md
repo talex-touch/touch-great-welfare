@@ -2,8 +2,8 @@
 
 **项目**: Touch Great Welfare - 从 JSONB 到规范化表架构迁移  
 **开始日期**: 2026-06-09  
-**当前状态**: Phase 2 完成 ✅  
-**总体进度**: **60% (3/5 阶段)**
+**当前状态**: Phase 2 原型完成，生产接入待收口 ⚠️  
+**总体进度**: **55% (Phase 0-1 完成，Phase 2 需生产路径对齐)**
 
 ---
 
@@ -13,10 +13,10 @@
 |------|------|------|------|------|---------|
 | **Phase 0** | 紧急止血 | 1-2天 | 2.5小时 | ✅ | 2026-06-09 |
 | **Phase 1** | 数据模型设计 | 3-5天 | 3小时 | ✅ | 2026-06-09 |
-| **Phase 2** | 实现双写层 | 1周 | 4小时 | ✅ | 2026-06-09 |
-| **Phase 3** | 灰度切换读取 | 2周 | - | ⏳ | - |
+| **Phase 2** | 实现双写层 | 1周 | 4小时 | ⚠️ 原型完成，生产未接入 | - |
+| **Phase 3** | 灰度切换读取 | 2周 | - | 🚫 暂缓 | - |
 | **Phase 4** | 完全迁移 | 1周 | - | 📋 | - |
-| **总计** | | **4-6周** | **10.5小时** | **60%** | - |
+| **总计** | | **4-6周** | **10.5小时** | **55%** | - |
 
 ---
 
@@ -57,11 +57,15 @@
 
 **交付**:
 ```
-migrations/0018_normalize_schema.sql
+migrations/0018_normalize_schema.sql.postgres_backup
+  - PostgreSQL 规范化 Schema 原型
   - 17 张规范化表
   - 60+ 个索引
   - 8 个触发器
-  - 完整约束
+
+migrations/0019_normalize_schema_sqlite.sql
+  - D1/SQLite 规范化 Schema 原型
+  - 需继续与迁移脚本、验证脚本、读取代码对齐列名
 
 docs/DATA_MAPPING.md
   - JSONB → 表映射
@@ -81,16 +85,18 @@ scripts/migrate-jsonb-to-normalized.ts
 
 ---
 
-### Phase 2: 实现双写层 (100%) ✅
+### Phase 2: 实现双写层原型 (70%) ⚠️
 
 **耗时**: 4 小时 (预计 1 周)
 
 **成果**:
 - ✅ Repository 抽象层 (BaseRepository, UserRepository, ApplicationRepository)
-- ✅ 双写模式实现
-- ✅ 灰度切换机制
+- ✅ 双写模式原型实现
+- ✅ 灰度切换算法原型
 - ✅ 数据一致性验证工具
 - ✅ 业务逻辑重构示例
+- ⚠️ 生产 API 路径尚未接入 Repository
+- ⚠️ 当前 Repository 基于 PostgreSQL/Hyperdrive，D1 生产路线需单独对齐
 
 **交付**:
 ```
@@ -106,7 +112,12 @@ src/worker/welfare/core/examples/
 scripts/validate-consistency.ts  # 一致性验证工具
 ```
 
-**配置示例**:
+**生产接入状态**:
+- 当前线上主要依赖 D1 与 `welfare_applications` / `user_coupons` 快照表优化。
+- `MIGRATION_WRITE_MODE` / `MIGRATION_READ_SOURCE` 仍属于 Repository 原型配置，尚未在生产 API 入口统一加载。
+- `USE_NORMALIZED_TABLES=true` 是全局表读取开关，不是按用户灰度；在字段覆盖完整前不要用于生产。
+
+**配置示例（原型/测试环境）**:
 ```typescript
 // Phase 2: 双写 + 从 state 读取
 setMigrationConfig({
@@ -129,28 +140,35 @@ setMigrationConfig({
 
 ---
 
-## ⏳ 进行中 (0%)
+## ⏳ 进行中
 
-### Phase 2: 实现双写层
+### Phase 2: 生产路径对齐
 
 **预计耗时**: 1 周  
-**状态**: 未开始
+**状态**: 准备中
 
 **任务**:
-- [ ] Task 2.1: 创建 Repository 抽象层 (2天)
-- [ ] Task 2.2: 重构业务逻辑 (3天)
-- [ ] Task 2.3: 数据一致性验证工具 (1天)
+- [x] Task 2.1: 创建 Repository 抽象层原型
+- [ ] Task 2.2: 明确 D1 还是 Hyperdrive/PostgreSQL 作为生产规范化目标
+- [ ] Task 2.3: 对齐 migration、迁移脚本、验证脚本与读取代码的 schema 契约
+- [ ] Task 2.4: 选择一个低风险生产 action 接入真实双写试点
 
 **目标**:
-- 同时写入 JSONB 和规范化表
+- 不再把示例代码等同于生产接入
 - 保证数据一致性
-- 可配置读取源（state/table/canary）
+- 在真实生产路径具备可回滚双写后，再开启读取灰度
 
 ---
 
 ## 📋 计划中 (60%)
 
-### Phase 3: 灰度切换读取 (2周)
+### Phase 3: 灰度切换读取 (2周，暂缓)
+
+**启动前置条件**:
+- [ ] 生产 API 写路径已真实双写
+- [ ] D1 或 PostgreSQL 的目标 schema 已与脚本/读取层完全对齐
+- [ ] 一致性验证工具通过
+- [ ] 表读取能完整恢复目标 API 所需字段
 
 **任务**:
 - [ ] 10% 灰度 (3天)
@@ -200,7 +218,8 @@ setMigrationConfig({
 - `PHASE1_REPORT.md` - Phase 1 数据模型设计
 
 ### 技术资产
-- `migrations/0018_normalize_schema.sql` - 规范化 Schema (696行)
+- `migrations/0018_normalize_schema.sql.postgres_backup` - PostgreSQL 规范化 Schema 原型 (696行)
+- `migrations/0019_normalize_schema_sqlite.sql` - D1/SQLite 规范化 Schema 原型
 - `scripts/migrate-jsonb-to-normalized.ts` - 迁移脚本 (609行)
 - `src/worker/welfare/perf-monitor.ts` - 性能监控工具
 

@@ -11,8 +11,8 @@
  *   DATABASE_URL="postgresql://..." pnpm tsx scripts/validate-consistency.ts --fix
  */
 
-import { Pool } from 'pg'
 import * as process from 'node:process'
+import { Pool } from 'pg'
 
 const DATABASE_URL = process.env.DATABASE_URL || process.env.HYPERDRIVE_URL
 if (!DATABASE_URL) {
@@ -306,7 +306,7 @@ async function insertApplicationToTable(app: any) {
 
 function printReport() {
   console.log('📊 Validation Report\n')
-  console.log('='  .repeat(80))
+  console.log('='.repeat(80))
 
   console.log(`\n✅ Summary:`)
   console.log(`   Total entities:      ${stats.totalEntities}`)
@@ -350,7 +350,7 @@ function printReport() {
     }
   }
 
-  console.log('\n' + '='.repeat(80))
+  console.log(`\n${'='.repeat(80)}`)
 
   if (stats.mismatches.length === 0 && stats.errors.length === 0) {
     console.log('\n✅ All data is consistent!')

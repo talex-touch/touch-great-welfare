@@ -28,7 +28,8 @@
 ### 代码文件 (16 个)
 
 **数据库**:
-- `migrations/0018_normalize_schema.sql` (696行)
+- `migrations/0018_normalize_schema.sql.postgres_backup` (PostgreSQL 原型，696行)
+- `migrations/0019_normalize_schema_sqlite.sql` (D1/SQLite 原型，需继续对齐脚本契约)
 
 **Repository 层**:
 - `src/worker/welfare/core/repository/base.ts`
@@ -103,8 +104,11 @@ wrangler tail
 # 连接测试数据库
 export DATABASE_URL="postgresql://test-db-url"
 
-# 创建表
-psql $DATABASE_URL < migrations/0018_normalize_schema.sql
+# PostgreSQL/Hyperdrive 路线：先审查原型 SQL 与脚本契约
+psql $DATABASE_URL < migrations/0018_normalize_schema.sql.postgres_backup
+
+# D1 路线：通过 wrangler d1 migrations apply 执行 SQLite migration
+# 执行前需确认 0019 schema 与脚本/读取代码列名一致
 
 # 迁移数据 (Dry-run)
 pnpm tsx scripts/migrate-jsonb-to-normalized.ts --dry-run
@@ -118,18 +122,14 @@ pnpm tsx scripts/validate-consistency.ts
 
 ---
 
-### 3. 启用双写模式 (优先级: 🟡 高)
+### 3. 启用双写模式 (优先级: 🟡 高，暂缓)
 
-**环境变量配置**:
-```bash
-MIGRATION_WRITE_MODE=dual-write
-MIGRATION_READ_SOURCE=state
-```
+当前 Repository 双写仍是原型，生产 API 尚未统一接入；不要仅通过 `MIGRATION_WRITE_MODE` / `MIGRATION_READ_SOURCE` 认为双写已启用。
 
-**部署**:
-```bash
-pnpm deploy
-```
+**启用前置条件**:
+- 明确生产数据库目标：D1 或 Hyperdrive/PostgreSQL。
+- 对齐 schema、迁移脚本、验证脚本、读取代码。
+- 至少一个低风险生产写路径已真实接入双写并可回滚。
 
 ---
 

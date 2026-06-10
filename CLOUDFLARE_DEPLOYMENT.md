@@ -26,12 +26,11 @@ pnpm test && pnpm build && pnpm deploy
 wrangler d1 migrations apply LOCAL_DB
 ```
 
-### Step 4: 启用双写 🔄
+> ⚠️ 执行前先确认 D1 migration 与迁移脚本/读取代码的 schema 契约一致。
 
-在 Cloudflare Dashboard:
-- Settings → Variables
-- 添加: `MIGRATION_WRITE_MODE` = `dual-write`
-- 添加: `MIGRATION_READ_SOURCE` = `state`
+### Step 4: 暂缓启用双写 🔄
+
+当前 Repository 双写仍是原型路径，生产 API 尚未统一接入。不要仅通过 Cloudflare Dashboard 添加 `MIGRATION_WRITE_MODE` / `MIGRATION_READ_SOURCE` 来启用双写；请先完成 DEPLOYMENT_GUIDE.md 中的生产路径对齐检查。
 
 ### Step 5: 监控 📊
 

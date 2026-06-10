@@ -24,10 +24,15 @@
 ### 代码文件 (10+ 个文件，3000+ 行代码)
 
 **数据库层**:
-1. `migrations/0018_normalize_schema.sql` (696行)
+1. `migrations/0018_normalize_schema.sql.postgres_backup` (696行)
+   - PostgreSQL 规范化 Schema 原型
    - 17 张规范化表
    - 60+ 个索引
    - 8 个触发器
+
+1b. `migrations/0019_normalize_schema_sqlite.sql`
+   - D1/SQLite 规范化 Schema 原型
+   - 仍需与迁移脚本、验证脚本、读取代码对齐列名
 
 2. `src/worker/welfare/core/database/connection.ts`
    - 数据库连接管理

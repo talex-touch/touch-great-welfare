@@ -7,8 +7,10 @@ export default antfu(
     pnpm: true,
     ignores: [
       '.codexpotter/**',
+      '.pi/**',
       '.playwright-mcp/**',
       '.spec-workflow/**',
+      '**/*.md',
     ],
   },
 )

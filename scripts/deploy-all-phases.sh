@@ -122,29 +122,27 @@ echo ""
 echo -e "${GREEN}Step 4/6: 🏗️  创建规范化表 (Phase 1)${NC}"
 echo ""
 
-echo "执行 SQL 迁移..."
-psql "$DATABASE_URL" < migrations/0018_normalize_schema.sql
+echo -e "${YELLOW}⚠️  规范化表迁移需要先人工确认数据库路线。${NC}"
+echo "当前仓库没有正式的 migrations/0018_normalize_schema.sql 文件。"
+echo "PostgreSQL 原型文件: migrations/0018_normalize_schema.sql.postgres_backup"
+echo "D1/SQLite migration: migrations/0019_normalize_schema_sqlite.sql"
+echo "请先确认 schema 与迁移脚本/验证脚本/读取代码完全一致。"
+read -p "确认已审查并要继续执行 PostgreSQL 原型 SQL? (y/n): " RUN_SCHEMA
+if [ "$RUN_SCHEMA" = "y" ]; then
+  psql "$DATABASE_URL" < migrations/0018_normalize_schema.sql.postgres_backup
 
-if [ $? -ne 0 ]; then
-  echo -e "${RED}❌ 创建表失败${NC}"
-  echo ""
-  echo "可能的原因:"
-  echo "  - 表已存在（正常，可以忽略）"
-  echo "  - 权限不足"
-  echo "  - SQL 语法错误"
-  echo ""
-  read -p "是否继续? (y/n): " CONTINUE
-  if [ "$CONTINUE" != "y" ]; then
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ 创建表失败${NC}"
     exit 1
   fi
+
+  echo ""
+  echo "验证表创建..."
+  psql "$DATABASE_URL" -c "\dt" | grep -E "(users|applications|point_transactions)"
+  echo -e "${GREEN}✅ 规范化表创建成功${NC}"
+else
+  echo -e "${YELLOW}跳过规范化表创建。${NC}"
 fi
-
-echo ""
-echo "验证表创建..."
-psql "$DATABASE_URL" -c "\dt" | grep -E "(users|applications|point_transactions)"
-
-echo ""
-echo -e "${GREEN}✅ 规范化表创建成功${NC}"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -155,23 +153,27 @@ echo ""
 echo -e "${GREEN}Step 5/6: 📦 迁移数据${NC}"
 echo ""
 
-echo "执行数据迁移..."
-pnpm tsx scripts/migrate-jsonb-to-normalized.ts --execute
+if [ "$RUN_SCHEMA" = "y" ]; then
+  echo "执行数据迁移..."
+  pnpm tsx scripts/migrate-jsonb-to-normalized.ts --execute
 
-if [ $? -ne 0 ]; then
-  echo -e "${RED}❌ 数据迁移失败${NC}"
+  if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ 数据迁移失败${NC}"
+    echo ""
+    echo "回滚方法:"
+    echo "  psql \$DATABASE_URL < backups/welfare_backup_*.sql"
+    exit 1
+  fi
+
   echo ""
-  echo "回滚方法:"
-  echo "  psql \$DATABASE_URL < backups/welfare_backup_*.sql"
-  exit 1
+  echo "验证数据一致性..."
+  pnpm tsx scripts/validate-consistency.ts
+
+  echo ""
+  echo -e "${GREEN}✅ 数据迁移成功${NC}"
+else
+  echo -e "${YELLOW}跳过数据迁移与一致性验证。${NC}"
 fi
-
-echo ""
-echo "验证数据一致性..."
-pnpm tsx scripts/validate-consistency.ts
-
-echo ""
-echo -e "${GREEN}✅ 数据迁移成功${NC}"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -182,34 +184,10 @@ echo ""
 echo -e "${GREEN}Step 6/6: 🔄 启用双写模式 (Phase 2)${NC}"
 echo ""
 
-echo -e "${YELLOW}⚠️  现在需要配置环境变量:${NC}"
-echo ""
-echo "在 Cloudflare Workers 设置中添加:"
-echo "  MIGRATION_WRITE_MODE=dual-write"
-echo "  MIGRATION_READ_SOURCE=state"
-echo ""
-echo "或者在 wrangler.toml 中添加:"
-echo "  [vars]"
-echo "  MIGRATION_WRITE_MODE = \"dual-write\""
-echo "  MIGRATION_READ_SOURCE = \"state\""
-echo ""
-
-read -p "是否自动配置并重新部署? (y/n): " AUTO_DEPLOY
-if [ "$AUTO_DEPLOY" = "y" ]; then
-  echo ""
-  echo "重新部署启用双写..."
-
-  # 这里需要通过 wrangler 设置环境变量
-  # 或者你可以手动在 Cloudflare Dashboard 设置
-
-  pnpm deploy
-
-  echo ""
-  echo -e "${GREEN}✅ 双写模式已启用${NC}"
-else
-  echo ""
-  echo -e "${YELLOW}⚠️  请手动配置环境变量后重新部署${NC}"
-fi
+echo -e "${YELLOW}⚠️  暂不自动启用双写模式。${NC}"
+echo "当前 Repository 双写仍需生产 API 路径真实接入。"
+echo "不要仅通过 MIGRATION_WRITE_MODE / MIGRATION_READ_SOURCE 判断双写已启用。"
+echo "请先完成 DEPLOYMENT_GUIDE.md 中的生产路径对齐检查。"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

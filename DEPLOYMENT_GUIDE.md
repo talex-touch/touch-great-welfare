@@ -2,7 +2,7 @@
 
 **项目**: Touch Great Welfare - 数据库架构迁移  
 **版本**: Phase 0-2  
-**状态**: ✅ 可部署
+**状态**: ✅ Phase 0 可部署；Phase 2 需完成生产路径对齐后再启用
 
 ---
 
@@ -11,10 +11,12 @@
 ### ✅ 代码准备
 
 - [x] Phase 0: 紧急止血代码
-- [x] Phase 1: 数据库 Schema (0018_normalize_schema.sql)
-- [x] Phase 2: Repository 抽象层
-- [x] 数据迁移脚本
-- [x] 一致性验证工具
+- [x] Phase 1: 数据库 Schema 原型 (`0018_normalize_schema.sql.postgres_backup` / `0019_normalize_schema_sqlite.sql`)
+- [x] Phase 2: Repository 抽象层原型
+- [x] 数据迁移脚本原型
+- [x] 一致性验证工具原型
+- [ ] 生产数据库目标确认（D1 或 Hyperdrive/PostgreSQL）
+- [ ] 生产 API 路径真实接入 Repository / D1 双写
 - [x] 单元测试（25+ 测试用例）
 
 ### ✅ 文档准备
@@ -76,7 +78,9 @@ wrangler tail
 
 ### Phase 1: 创建规范化表（测试环境）
 
-**目标**: 创建 17 张规范化表
+**目标**: 创建规范化表并验证 schema 契约
+
+> ⚠️ 当前仓库没有 `migrations/0018_normalize_schema.sql` 正式文件；PostgreSQL 版本保存在 `migrations/0018_normalize_schema.sql.postgres_backup`，D1/SQLite 版本为 `migrations/0019_normalize_schema_sqlite.sql`。执行前必须先确认生产数据库目标，并确保迁移脚本、验证脚本、读取代码与所选 schema 列名一致。
 
 #### 1. 备份数据库
 
@@ -94,11 +98,14 @@ psql $DATABASE_URL < backup_*.sql --dry-run
 # 连接测试数据库
 export DATABASE_URL="postgresql://test-db-url"
 
-# 执行 Schema 创建
-psql $DATABASE_URL < migrations/0018_normalize_schema.sql
+# PostgreSQL/Hyperdrive 路线（需先恢复并审查正式 SQL 文件）
+psql $DATABASE_URL < migrations/0018_normalize_schema.sql.postgres_backup
+
+# D1 路线
+wrangler d1 migrations apply <database-name> --local --config wrangler.local.jsonc
 
 # 验证表创建
-psql $DATABASE_URL -c "\dt"
+psql $DATABASE_URL -c "\dt" # PostgreSQL
 ```
 
 #### 3. 执行数据迁移（Dry-run）
@@ -139,9 +146,11 @@ DATABASE_URL="$TEST_DATABASE_URL" \
 
 ---
 
-### Phase 2: 启用双写模式（生产环境）
+### Phase 2: 启用双写模式（生产环境，暂缓）
 
 **目标**: 同时写入 JSONB 和规范化表
+
+> ⚠️ 暂缓直接启用。当前 Repository 主要基于 `pg.Pool` / Hyperdrive，生产 API 入口尚未统一接入 Repository 配置；仅设置 `MIGRATION_WRITE_MODE` 不会自动让现有业务路径进入双写。
 
 #### 1. 在生产环境创建表
 
@@ -149,8 +158,10 @@ DATABASE_URL="$TEST_DATABASE_URL" \
 # ⚠️ 重要：先在生产环境备份
 pg_dump $PROD_DATABASE_URL > prod_backup_$(date +%Y%m%d).sql
 
-# 创建表
-psql $PROD_DATABASE_URL < migrations/0018_normalize_schema.sql
+# PostgreSQL/Hyperdrive 路线（需先确认采用该路线）
+psql $PROD_DATABASE_URL < migrations/0018_normalize_schema.sql.postgres_backup
+
+# D1 路线应通过 wrangler d1 migrations apply 执行 SQLite migration
 ```
 
 #### 2. 迁移生产数据
@@ -167,25 +178,12 @@ DATABASE_URL="$PROD_DATABASE_URL" \
 
 #### 3. 配置双写模式
 
-**方式 A: 环境变量（推荐）**
+暂不建议在生产配置 `MIGRATION_WRITE_MODE` / `MIGRATION_READ_SOURCE` 作为启用双写的依据。启用前必须满足：
 
-在 Cloudflare Workers 设置中添加：
-
-```bash
-MIGRATION_WRITE_MODE=dual-write
-MIGRATION_READ_SOURCE=state
-```
-
-**方式 B: 代码配置**
-
-在 `src/worker/welfare/router.ts` 或入口文件添加：
-
-```typescript
-import { loadMigrationConfigFromEnv } from './core/repository'
-
-// Worker 启动时
-loadMigrationConfigFromEnv(env)
-```
+- 生产 API 写路径已真实调用 Repository 或 D1 双写层。
+- `loadMigrationConfigFromEnv(env)` 已在对应生产入口被调用。
+- 所选数据库 schema 与迁移脚本、验证脚本、读取代码完全一致。
+- 已有回滚策略：关闭双写并回退到 JSONB state。
 
 #### 4. 部署启用双写
 
@@ -200,9 +198,8 @@ wrangler tail
 #### 5. 验证双写成功
 
 ```bash
-# 监控日志，查找:
-# [Repository] Dual-write success
-# [Repository] Dual-write failed  # 应该很少
+# 监控日志，查找真实生产写路径的双写日志。
+# 注意：当前 Repository 原型只会在接入后的路径打印 [Repository] 日志。
 
 # 每日运行一致性检查
 DATABASE_URL="$PROD_DATABASE_URL" \

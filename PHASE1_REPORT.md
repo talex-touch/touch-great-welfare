@@ -10,7 +10,7 @@
 
 ### ✅ Task 1.1: 设计规范化表结构 (1天 → 1小时)
 
-**交付**: `migrations/0018_normalize_schema.sql` (696行)
+**交付**: `migrations/0018_normalize_schema.sql.postgres_backup` (PostgreSQL 原型，696行)；`migrations/0019_normalize_schema_sqlite.sql` (D1/SQLite 原型，需继续对齐脚本契约)
 
 **包含内容**:
 - ✅ 17 张规范化表
@@ -124,9 +124,10 @@ DATABASE_URL="postgresql://..." pnpm tsx scripts/migrate-jsonb-to-normalized.ts 
 ## 📦 交付文件
 
 ```
-migrations/0018_normalize_schema.sql     (696 行)
-docs/DATA_MAPPING.md                     (完整映射文档)
-scripts/migrate-jsonb-to-normalized.ts   (609 行)
+migrations/0018_normalize_schema.sql.postgres_backup  (696 行，PostgreSQL 原型)
+migrations/0019_normalize_schema_sqlite.sql           (D1/SQLite 原型)
+docs/DATA_MAPPING.md                                  (完整映射文档)
+scripts/migrate-jsonb-to-normalized.ts                (609 行)
 ```
 
 ---

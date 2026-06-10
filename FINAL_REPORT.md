@@ -31,12 +31,14 @@
 ### 代码 (13 个文件，3000+ 行)
 
 **数据库架构**:
-- ✅ migrations/0018_normalize_schema.sql (696行)
+- ⚠️ migrations/0018_normalize_schema.sql.postgres_backup (PostgreSQL 原型)
+- ⚠️ migrations/0019_normalize_schema_sqlite.sql (D1/SQLite 原型，需与脚本契约对齐)
 
 **Repository 抽象层**:
-- ✅ core/repository/base.ts
-- ✅ core/repository/user-repository.ts
-- ✅ core/repository/application-repository.ts
+- ✅ core/repository/base.ts（原型）
+- ✅ core/repository/user-repository.ts（原型）
+- ✅ core/repository/application-repository.ts（原型）
+- ⚠️ 生产 API 路径尚未统一接入 Repository
 
 **工具脚本**:
 - ✅ scripts/migrate-jsonb-to-normalized.ts (609行)

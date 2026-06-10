@@ -7,3 +7,7 @@ NOTIFY_SECRET_KEY=replace-with-32-byte-random-secret
 
 # Optional: required only when enabling /api/webhooks/:provider endpoints.
 WEBHOOK_SECRET=replace-with-provider-webhook-secret
+
+# Optional and normally disabled: exposes temporary migration/debug admin endpoints.
+# Keep this unset or false in production unless you are actively running a migration check.
+ENABLE_TEMP_ADMIN_ENDPOINTS=false

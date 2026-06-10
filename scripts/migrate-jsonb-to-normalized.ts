@@ -9,8 +9,8 @@
  *   DATABASE_URL - PostgreSQL 连接字符串
  */
 
-import { Pool } from 'pg'
 import * as process from 'node:process'
+import { Pool } from 'pg'
 
 const DATABASE_URL = process.env.DATABASE_URL || process.env.HYPERDRIVE_URL
 if (!DATABASE_URL) {
@@ -57,7 +57,7 @@ async function main() {
   // 1. 读取 JSONB state
   console.log('📖 Reading JSONB state...')
   const stateRow = await pool.query(
-    `SELECT state FROM welfare_app_state WHERE id = 'default'`
+    `SELECT state FROM welfare_app_state WHERE id = 'default'`,
   )
 
   if (!stateRow.rows[0]) {
@@ -76,7 +76,8 @@ async function main() {
   if (isDryRun) {
     await pool.query('BEGIN')
     console.log('🔄 Starting DRY RUN (changes will be rolled back)\n')
-  } else {
+  }
+  else {
     console.log('⚠️  EXECUTING REAL MIGRATION (changes will be committed)\n')
     await pool.query('BEGIN')
   }
@@ -109,18 +110,21 @@ async function main() {
     if (isDryRun) {
       await pool.query('ROLLBACK')
       console.log('\n🔄 Dry run complete - changes rolled back')
-    } else {
+    }
+    else {
       await pool.query('COMMIT')
       console.log('\n✅ Migration complete - changes committed')
     }
 
     printStats()
-  } catch (error) {
+  }
+  catch (error) {
     await pool.query('ROLLBACK')
     console.error('\n❌ Migration failed:', error)
     printStats()
     process.exit(1)
-  } finally {
+  }
+  finally {
     await pool.end()
   }
 }
@@ -160,7 +164,7 @@ async function migrateUsers(users: any[]) {
         user.profile?.bio,
         user.role || 'user',
         user.accountStatus || 'active',
-        0,  // points 从 point_transactions 计算，这里先设为 0
+        0, // points 从 point_transactions 计算，这里先设为 0
         user.profile?.githubUsername,
         user.profile?.githubAuthorized || false,
         user.profile?.selectedRepo,
@@ -173,7 +177,8 @@ async function migrateUsers(users: any[]) {
       ])
 
       stats.users++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'users',
         id: user.id,
@@ -332,7 +337,8 @@ async function migrateApplications(applications: any[]) {
           stats.applicationItems++
         }
       }
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'applications',
         id: app.id,
@@ -388,7 +394,8 @@ async function migrateStudentVerifications(verifications: any[]) {
       ])
 
       stats.studentVerifications++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'student_verifications',
         id: verif.id,
@@ -421,7 +428,8 @@ async function migrateDailyCheckIns(checkIns: any[]) {
       ])
 
       stats.dailyCheckIns++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'daily_check_ins',
         id: checkIn.id || checkIn.dateKey,
@@ -459,7 +467,8 @@ async function migrateInvitationBindings(bindings: any[]) {
       ])
 
       stats.invitationBindings++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'invitation_bindings',
         id: binding.id || binding.inviteeUserId,
@@ -498,7 +507,8 @@ async function migrateSquarePosts(posts: any[]) {
       ])
 
       stats.squarePosts++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'square_posts',
         id: post.id,
@@ -532,7 +542,8 @@ async function migrateSquareBoosts(boosts: any[]) {
       ])
 
       stats.squareBoosts++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'square_boosts',
         id: boost.id,
@@ -568,7 +579,8 @@ async function migrateCollaborationApplications(applications: any[]) {
       ])
 
       stats.collaborationApplications++
-    } catch (error) {
+    }
+    catch (error) {
       stats.errors.push({
         table: 'collaboration_applications',
         id: app.id,
@@ -597,7 +609,7 @@ function printStats() {
 
   if (stats.errors.length > 0) {
     console.log('\n❌ Errors:')
-    stats.errors.slice(0, 10).forEach(err => {
+    stats.errors.slice(0, 10).forEach((err) => {
       console.log(`  - ${err.table}/${err.id}: ${err.error}`)
     })
     if (stats.errors.length > 10) {
