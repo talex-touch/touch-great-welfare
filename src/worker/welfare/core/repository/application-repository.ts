@@ -2,8 +2,8 @@
  * ApplicationRepository - 申请数据访问层
  */
 
-import { BaseRepository } from './base'
 import type { WelfareApplication } from '~/composables/welfare'
+import { BaseRepository } from './base'
 
 export class ApplicationRepository extends BaseRepository<WelfareApplication> {
   // 从 JSONB state 读取申请
@@ -59,7 +59,15 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
       [applicationId],
     )
 
-    // 转换为 WelfareApplication 对象
+    const aiReview = row.ai_review_status || row.ai_review_summary || row.ai_reviewed_at
+      ? {
+          status: row.ai_review_status || 'pending',
+          summary: row.ai_review_summary || '',
+          risk: 'low' as const,
+          reviewedAt: row.ai_reviewed_at || undefined,
+        }
+      : undefined
+
     return {
       id: row.id,
       userId: row.user_id,
@@ -69,18 +77,17 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
       description: row.description,
       baseCost: row.base_cost,
       cost: row.cost,
-      costCharged: row.cost_charged,
+      costCharged: !!row.cost_charged,
       githubRepo: row.github_repo || undefined,
       hasOpenSourceBadge: row.has_open_source_badge || false,
       storageExtended: row.storage_extended || false,
-      retentionExpiresAt: row.retention_expires_at || undefined,
-      aiReviewStatus: row.ai_review_status || undefined,
-      aiReviewSummary: row.ai_review_summary || undefined,
-      aiReviewedAt: row.ai_reviewed_at || undefined,
-      reviewedAt: row.reviewed_at || undefined,
-      reviewerUserId: row.reviewer_user_id || undefined,
-      rejectionReason: row.rejection_reason || undefined,
+      storageExtensionCost: 0,
+      retentionExpiresAt: row.retention_expires_at || row.created_at,
+      aiReview,
+      aiReviewFeeRate: 0,
       rejectionReviewFee: row.rejection_review_fee || 0,
+      rejectionReviewFeeWaived: false,
+      reviewedAt: row.reviewed_at || undefined,
       answer: row.answer || undefined,
       completedAt: row.completed_at || undefined,
       deliveryAssigneeId: row.delivery_assignee_id || undefined,
@@ -90,11 +97,13 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
         name: att.file_name,
         size: att.file_size,
         type: att.mime_type,
-        url: att.storage_key,
+        r2Key: att.storage_key || undefined,
+        url: att.url || undefined,
       })),
       messages: messagesResult.rows.map(msg => ({
         id: msg.id,
-        senderId: msg.sender_user_id,
+        applicationId,
+        userId: msg.sender_user_id,
         type: msg.type,
         content: msg.content,
         attachments: msg.attachments || [],
@@ -103,13 +112,13 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
       resourceItems: itemsResult.rows.map(item => ({
         ...JSON.parse(item.payload),
         id: item.id,
+        applicationId,
         approvalStatus: item.approval_status,
         provisionStatus: item.provision_status,
       })),
       createdAt: row.created_at,
       submittedAt: row.submitted_at || undefined,
-      updatedAt: row.updated_at,
-    } as WelfareApplication
+    }
   }
 
   // 写入规范化表
@@ -180,12 +189,12 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
           application.hasOpenSourceBadge || false,
           application.storageExtended || false,
           application.retentionExpiresAt || null,
-          application.aiReviewStatus || null,
-          application.aiReviewSummary || null,
-          application.aiReviewedAt || null,
+          application.aiReview?.status || null,
+          application.aiReview?.summary || null,
+          application.aiReview?.reviewedAt || null,
           application.reviewedAt || null,
-          application.reviewerUserId || null,
-          application.rejectionReason || null,
+          null,
+          null,
           application.rejectionReviewFee || 0,
           application.answer || null,
           application.completedAt || null,
@@ -193,7 +202,7 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
           application.deliveryClaimedAt || null,
           application.createdAt,
           application.submittedAt || null,
-          application.updatedAt || application.createdAt,
+          application.submittedAt || application.createdAt,
         ],
       )
 
@@ -215,7 +224,7 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
               att.name,
               att.size,
               att.type || 'application/octet-stream',
-              att.url || att.storageKey,
+              att.r2Key || att.url || null,
             ],
           )
         }
@@ -236,7 +245,7 @@ export class ApplicationRepository extends BaseRepository<WelfareApplication> {
             [
               msg.id || `${application.id}_msg_${Date.now()}`,
               application.id,
-              msg.senderId || null,
+              msg.userId,
               msg.type,
               msg.content,
               msg.createdAt,

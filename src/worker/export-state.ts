@@ -1,13 +1,13 @@
 // 临时端点：导出解密后的 state 数据
 // 访问 /admin/export-state 获取解密后的数据
 
-import type { WorkerEnv } from '../composables/welfare'
+import type { WorkerEnv } from './welfare-state'
 import { readWelfareState } from './welfare/core'
 
 export async function handleExportState(env: WorkerEnv) {
   try {
     // 读取并解密 state
-    const state = await readWelfareState(env)
+    const state = await readWelfareState(env) as Record<string, any>
 
     // 返回解密后的数据
     return new Response(JSON.stringify({
@@ -23,16 +23,16 @@ export async function handleExportState(env: WorkerEnv) {
       },
       timestamp: new Date().toISOString(),
     }, null, 2), {
-      headers: { 'content-type': 'application/json' }
+      headers: { 'content-type': 'application/json' },
     })
-
-  } catch (error) {
+  }
+  catch (error) {
     return new Response(JSON.stringify({
       success: false,
       error: String(error),
     }), {
       status: 500,
-      headers: { 'content-type': 'application/json' }
+      headers: { 'content-type': 'application/json' },
     })
   }
 }

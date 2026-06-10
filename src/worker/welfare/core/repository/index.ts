@@ -3,12 +3,12 @@
  */
 
 import type { Pool } from 'pg'
-import type { WorkerEnv } from '~/composables/welfare'
-import { UserRepository } from './user-repository'
+import type { WorkerEnv } from '../../core'
 import { ApplicationRepository } from './application-repository'
 import { getMigrationConfig, setMigrationConfig } from './base'
+import { UserRepository } from './user-repository'
 
-export { setMigrationConfig, getMigrationConfig }
+export { getMigrationConfig, setMigrationConfig }
 export type { MigrationConfig } from './base'
 
 /**
@@ -51,6 +51,6 @@ export function loadMigrationConfigFromEnv(env: WorkerEnv) {
       },
     })
 
-    console.log('[Migration] Config loaded from env:', getMigrationConfig())
+    console.warn('[Migration] Config loaded from env:', getMigrationConfig())
   }
 }

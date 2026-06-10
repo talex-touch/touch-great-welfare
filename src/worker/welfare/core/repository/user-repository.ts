@@ -2,8 +2,8 @@
  * UserRepository - 用户数据访问层
  */
 
-import { BaseRepository } from './base'
 import type { User } from '~/composables/welfare'
+import { BaseRepository } from './base'
 
 export class UserRepository extends BaseRepository<User> {
   // 从 JSONB state 读取用户
@@ -62,7 +62,6 @@ export class UserRepository extends BaseRepository<User> {
     // 转换为 User 对象
     return {
       id: row.id,
-      email: row.email,
       passwordHash: row.password_hash || undefined,
       role: row.role as any,
       accountStatus: row.account_status as any,
@@ -76,12 +75,10 @@ export class UserRepository extends BaseRepository<User> {
         githubAuthorized: row.github_authorized,
         selectedRepo: row.selected_repo || undefined,
         studentVerified: row.student_verified,
-        studentVerifiedAt: row.student_verified_at || undefined,
+        inviteCode: row.invitation_code || undefined,
       },
-      invitationCode: row.invitation_code || undefined,
-      invitedByUserId: row.invited_by_user_id || undefined,
       createdAt: row.created_at,
-      lastLoginAt: row.last_login_at || undefined,
+      lastLoginAt: row.last_login_at || row.created_at,
     }
   }
 
@@ -124,7 +121,7 @@ export class UserRepository extends BaseRepository<User> {
       `,
       [
         user.id,
-        user.email,
+        user.profile.email,
         user.passwordHash || null,
         user.profile.displayName,
         user.profile.avatar || null,
@@ -136,9 +133,9 @@ export class UserRepository extends BaseRepository<User> {
         user.profile.githubAuthorized || false,
         user.profile.selectedRepo || null,
         user.profile.studentVerified || false,
-        user.profile.studentVerifiedAt || null,
-        user.invitationCode || null,
-        user.invitedByUserId || null,
+        null,
+        user.profile.inviteCode || null,
+        null,
         user.createdAt,
         user.lastLoginAt || null,
       ],

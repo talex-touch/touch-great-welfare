@@ -1,14 +1,8 @@
 // 批量数据迁移脚本
 // 分批处理，避免超时
 
-import type { WorkerEnv } from '../composables/welfare'
+import type { WorkerEnv } from './welfare-state'
 import { readWelfareState } from './welfare/core'
-
-interface MigrationProgress {
-  usersOffset: number
-  applicationsOffset: number
-  studentVerificationsOffset: number
-}
 
 export async function handleBatchMigration(env: WorkerEnv, request: Request) {
   const db = env.LOCAL_DB
@@ -16,19 +10,19 @@ export async function handleBatchMigration(env: WorkerEnv, request: Request) {
   if (!db) {
     return new Response(JSON.stringify({
       success: false,
-      error: 'D1 database not available'
+      error: 'D1 database not available',
     }), { status: 500 })
   }
 
   const url = new URL(request.url)
-  const batchSize = parseInt(url.searchParams.get('batchSize') || '50')
-  const usersOffset = parseInt(url.searchParams.get('usersOffset') || '0')
-  const applicationsOffset = parseInt(url.searchParams.get('applicationsOffset') || '0')
-  const studentVerificationsOffset = parseInt(url.searchParams.get('studentVerificationsOffset') || '0')
+  const batchSize = Number.parseInt(url.searchParams.get('batchSize') || '50')
+  const usersOffset = Number.parseInt(url.searchParams.get('usersOffset') || '0')
+  const applicationsOffset = Number.parseInt(url.searchParams.get('applicationsOffset') || '0')
+  const studentVerificationsOffset = Number.parseInt(url.searchParams.get('studentVerificationsOffset') || '0')
 
   try {
     // 读取并解密 state
-    const state = await readWelfareState(env)
+    const state = await readWelfareState(env) as Record<string, any>
 
     const stats = {
       users: { processed: 0, success: 0, errors: [] as string[], hasMore: false },
@@ -69,11 +63,12 @@ export async function handleBatchMigration(env: WorkerEnv, request: Request) {
             user.profile?.inviteCode || null,
             user.invitedByUserId || null,
             user.createdAt || new Date().toISOString(),
-            user.lastLoginAt || null
+            user.lastLoginAt || null,
           ).run()
 
           stats.users.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.users.errors.push(`User ${user.id}: ${error}`)
         }
         stats.users.processed++
@@ -108,11 +103,12 @@ export async function handleBatchMigration(env: WorkerEnv, request: Request) {
             app.updatedAt || app.createdAt || new Date().toISOString(),
             app.submittedAt || null,
             app.reviewedAt || null,
-            app.completedAt || null
+            app.completedAt || null,
           ).run()
 
           stats.applications.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.applications.errors.push(`Application ${app.id}: ${error}`)
         }
         stats.applications.processed++
@@ -143,11 +139,12 @@ export async function handleBatchMigration(env: WorkerEnv, request: Request) {
             sv.verificationSource || null,
             sv.balance || 0,
             sv.lastAwardedAt || null,
-            sv.createdAt || new Date().toISOString()
+            sv.createdAt || new Date().toISOString(),
           ).run()
 
           stats.studentVerifications.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.studentVerifications.errors.push(`StudentVerification ${sv.id}: ${error}`)
         }
         stats.studentVerifications.processed++
@@ -174,17 +171,17 @@ export async function handleBatchMigration(env: WorkerEnv, request: Request) {
       },
       timestamp: new Date().toISOString(),
     }, null, 2), {
-      headers: { 'content-type': 'application/json' }
+      headers: { 'content-type': 'application/json' },
     })
-
-  } catch (error) {
+  }
+  catch (error) {
     return new Response(JSON.stringify({
       success: false,
       error: String(error),
       stack: error instanceof Error ? error.stack : undefined,
     }), {
       status: 500,
-      headers: { 'content-type': 'application/json' }
+      headers: { 'content-type': 'application/json' },
     })
   }
 }

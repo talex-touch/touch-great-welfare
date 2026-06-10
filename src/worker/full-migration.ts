@@ -1,7 +1,7 @@
 // 完整数据迁移脚本
 // 一次性将所有 JSONB 数据导入规范化表
 
-import type { WorkerEnv } from '../composables/welfare'
+import type { WorkerEnv } from './welfare-state'
 import { readWelfareState } from './welfare/core'
 
 export async function handleFullMigration(env: WorkerEnv) {
@@ -10,13 +10,13 @@ export async function handleFullMigration(env: WorkerEnv) {
   if (!db) {
     return new Response(JSON.stringify({
       success: false,
-      error: 'D1 database not available'
+      error: 'D1 database not available',
     }), { status: 500 })
   }
 
   try {
     // 1. 读取并解密 state
-    const state = await readWelfareState(env)
+    const state = await readWelfareState(env) as Record<string, any>
 
     const stats = {
       users: { total: 0, success: 0, errors: [] as string[] },
@@ -57,11 +57,12 @@ export async function handleFullMigration(env: WorkerEnv) {
             user.profile?.inviteCode || null,
             user.invitedByUserId || null,
             user.createdAt || new Date().toISOString(),
-            user.lastLoginAt || null
+            user.lastLoginAt || null,
           ).run()
 
           stats.users.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.users.errors.push(`User ${user.id}: ${error}`)
         }
       }
@@ -94,11 +95,12 @@ export async function handleFullMigration(env: WorkerEnv) {
             app.updatedAt || app.createdAt || new Date().toISOString(),
             app.submittedAt || null,
             app.reviewedAt || null,
-            app.completedAt || null
+            app.completedAt || null,
           ).run()
 
           stats.applications.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.applications.errors.push(`Application ${app.id}: ${error}`)
         }
       }
@@ -127,11 +129,12 @@ export async function handleFullMigration(env: WorkerEnv) {
             sv.verificationSource || null,
             sv.balance || 0,
             sv.lastAwardedAt || null,
-            sv.createdAt || new Date().toISOString()
+            sv.createdAt || new Date().toISOString(),
           ).run()
 
           stats.studentVerifications.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.studentVerifications.errors.push(`StudentVerification ${sv.id}: ${error}`)
         }
       }
@@ -156,11 +159,12 @@ export async function handleFullMigration(env: WorkerEnv) {
             tx.type,
             tx.reason || null,
             tx.applicationId || null,
-            tx.createdAt || new Date().toISOString()
+            tx.createdAt || new Date().toISOString(),
           ).run()
 
           stats.pointTransactions.success++
-        } catch (error) {
+        }
+        catch (error) {
           stats.pointTransactions.errors.push(`Transaction ${tx.id}: ${error}`)
         }
       }
@@ -171,17 +175,17 @@ export async function handleFullMigration(env: WorkerEnv) {
       stats,
       timestamp: new Date().toISOString(),
     }, null, 2), {
-      headers: { 'content-type': 'application/json' }
+      headers: { 'content-type': 'application/json' },
     })
-
-  } catch (error) {
+  }
+  catch (error) {
     return new Response(JSON.stringify({
       success: false,
       error: String(error),
       stack: error instanceof Error ? error.stack : undefined,
     }), {
       status: 500,
-      headers: { 'content-type': 'application/json' }
+      headers: { 'content-type': 'application/json' },
     })
   }
 }

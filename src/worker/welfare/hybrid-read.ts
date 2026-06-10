@@ -2,7 +2,7 @@
  * 混合读取层 - 从规范化表读取数据，转换为 state 格式
  */
 
-import type { WorkerEnv } from '~/composables/welfare'
+import type { WorkerEnv } from './core'
 import { getAllUsersFromTable } from './table-access'
 
 export async function readWelfareStateFromTables(env: WorkerEnv) {
@@ -52,6 +52,6 @@ export async function readWelfareStateFromTables(env: WorkerEnv) {
       createdAt: row.created_at,
     })) || [],
     pointTransactions: [],
-    transactions: [],  // 兼容旧字段名
+    transactions: [], // 兼容旧字段名
   }
 }

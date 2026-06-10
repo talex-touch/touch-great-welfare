@@ -2,15 +2,14 @@
  * 数据库连接管理
  */
 
+import type { WorkerEnv } from '../../core'
 import { Pool } from 'pg'
-import type { D1Database } from '@cloudflare/workers-types'
-import type { WorkerEnv } from '~/composables/welfare'
 import {
   POSTGRES_CONNECTION_TIMEOUT_MS,
-  POSTGRES_QUERY_TIMEOUT_MS,
+  POSTGRES_IDLE_TIMEOUT_MS,
   POSTGRES_POOL_MAX,
   POSTGRES_POOL_MIN,
-  POSTGRES_IDLE_TIMEOUT_MS,
+  POSTGRES_QUERY_TIMEOUT_MS,
 } from '../config'
 
 let pool: Pool | undefined

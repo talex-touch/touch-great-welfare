@@ -5,10 +5,11 @@
  * 重构为使用 Repository 的代码
  */
 
-import type { WorkerEnv, User, UserProfile } from '~/composables/welfare'
+import type { WorkerEnv } from '../../core'
+import type { User, UserProfile } from '~/composables/welfare'
+import { readWelfareStateRecord, writeWelfareState } from '../../core'
 import { getPool } from '../database/connection'
 import { createRepositories } from '../repository'
-import { readWelfareStateRecord, writeWelfareState } from '../database/state-io'
 
 /**
  * 更新用户资料（重构后）
@@ -70,12 +71,15 @@ export async function updateCurrentProfileAction(
  */
 
 // ❌ 原始实现（直接操作 state）
-async function updateProfileOldWay(request: Request, env: WorkerEnv) {
+async function updateProfileOldWayExample(request: Request, env: WorkerEnv) {
   const stateRecord = await readWelfareStateRecord(env)
   const state = stateRecord.state as any
   const userId = await requestUserId(request, env)
 
   // 直接修改 state.users 数组
+  if (!userId)
+    throw new Error('请先登录')
+
   const userIndex = state.users.findIndex((u: User) => u.id === userId)
   if (userIndex < 0)
     throw new Error('用户不存在')
@@ -96,10 +100,12 @@ async function updateProfileOldWay(request: Request, env: WorkerEnv) {
 }
 
 // ✅ Repository 实现（自动双写）
-async function updateProfileNewWay(request: Request, env: WorkerEnv) {
+async function updateProfileNewWayExample(request: Request, env: WorkerEnv) {
   const stateRecord = await readWelfareStateRecord(env)
   const state = stateRecord.state as any
   const userId = await requestUserId(request, env)
+  if (!userId)
+    throw new Error('请先登录')
 
   const pool = getPool(env)
   const repos = createRepositories(env, pool)
@@ -231,7 +237,7 @@ export async function getUserApplicationsAction(
   const applications = (state.applications || [])
     .filter((app: any) => app.userId === userId)
     .sort((a: any, b: any) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     )
     .slice(0, 100)
 
@@ -244,12 +250,15 @@ export async function getUserApplicationsAction(
 }
 
 // 辅助函数（从 core.ts 导入）
-async function requestUserId(request: Request, env: WorkerEnv): Promise<string | null> {
+async function requestUserId(_request: Request, _env: WorkerEnv): Promise<string | null> {
   // 实现省略...
   return null
 }
 
-function isAdminUser(state: any, userId: string): boolean {
+void updateProfileOldWayExample
+void updateProfileNewWayExample
+
+function isAdminUser(state: any, userId: string | null): boolean {
   const user = state.users?.find((u: User) => u.id === userId)
   return user?.role === 'admin'
 }
@@ -268,7 +277,7 @@ function getMigrationConfig() {
   return { readMode: { source: 'state' } }
 }
 
-function shouldReadFromTable(userId: string): boolean {
+function shouldReadFromTable(_userId: string): boolean {
   // 从 repository/base.ts 导入
   return false
 }

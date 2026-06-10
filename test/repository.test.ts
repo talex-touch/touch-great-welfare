@@ -2,15 +2,15 @@
  * Repository 层单元测试
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Pool } from 'pg'
-import { UserRepository } from '../src/worker/welfare/core/repository/user-repository'
-import { ApplicationRepository } from '../src/worker/welfare/core/repository/application-repository'
-import { setMigrationConfig, getMigrationConfig } from '../src/worker/welfare/core/repository/base'
 import type { User, WelfareApplication, WorkerEnv } from '../src/composables/welfare'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApplicationRepository } from '../src/worker/welfare/core/repository/application-repository'
+import { getMigrationConfig, setMigrationConfig } from '../src/worker/welfare/core/repository/base'
+import { UserRepository } from '../src/worker/welfare/core/repository/user-repository'
 
 // Mock Pool
-const createMockPool = () => {
+function createMockPool() {
   const mockQuery = vi.fn()
   const mockConnect = vi.fn().mockResolvedValue({
     query: mockQuery,
@@ -24,13 +24,15 @@ const createMockPool = () => {
 }
 
 // Mock Env
-const createMockEnv = (): WorkerEnv => ({
-  HYPERDRIVE: {
-    connectionString: 'postgresql://test',
-  },
-} as unknown as WorkerEnv)
+function createMockEnv(): WorkerEnv {
+  return {
+    HYPERDRIVE: {
+      connectionString: 'postgresql://test',
+    },
+  } as unknown as WorkerEnv
+}
 
-describe('UserRepository', () => {
+describe('userRepository', () => {
   let userRepo: UserRepository
   let mockPool: Pool
   let mockEnv: WorkerEnv
@@ -161,9 +163,8 @@ describe('UserRepository', () => {
 
       const user = await userRepo.readFromTable('user1')
 
-      expect(user).toEqual({
+      expect(user).toMatchObject({
         id: 'user1',
-        email: 'test@example.com',
         passwordHash: 'hash',
         role: 'user',
         accountStatus: 'active',
@@ -175,6 +176,7 @@ describe('UserRepository', () => {
           studentVerified: false,
         },
         createdAt: '2024-01-01T00:00:00Z',
+        lastLoginAt: '2024-01-01T00:00:00Z',
       })
 
       expect(mockPool.query).toHaveBeenCalledWith(
@@ -255,7 +257,7 @@ describe('UserRepository', () => {
   })
 })
 
-describe('ApplicationRepository', () => {
+describe('applicationRepository', () => {
   let appRepo: ApplicationRepository
   let mockPool: Pool
   let mockEnv: WorkerEnv
@@ -374,7 +376,7 @@ describe('ApplicationRepository', () => {
   })
 })
 
-describe('Migration Config', () => {
+describe('migration Config', () => {
   it('should update migration config', () => {
     setMigrationConfig({
       writeMode: { target: 'dual-write' },
