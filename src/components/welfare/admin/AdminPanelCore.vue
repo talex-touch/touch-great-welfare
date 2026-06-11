@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
-import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
+import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -34,6 +34,9 @@ const {
   totalAdminStudentVerificationBytes,
   aiConfigForm,
   sub2ApiConfigForm,
+  sub2ApiKeyForm,
+  sub2ApiKeys,
+  generatedSub2ApiKey,
   databaseProvisionConfigForm,
   educationMailConfigForm,
   notificationProviderConfigForm,
@@ -64,6 +67,9 @@ const {
   refreshSub2ApiConfig,
   persistSub2ApiConfig,
   verifySub2ApiConfig,
+  refreshSub2ApiKeys,
+  generateSub2ApiKey,
+  revokeSub2ApiKey,
   refreshDatabaseProvisionConfig,
   persistDatabaseProvisionConfig,
   verifyDatabaseProvisionConfig,
@@ -1852,6 +1858,29 @@ function testSub2ApiProviderConfig() {
   }, 'Sub2API 连接测试通过')
 }
 
+const adminTestSub2ApiKeys = computed(() => sub2ApiKeys.value.filter(key => key.name.startsWith('Sub2API 测试 Key')))
+
+function generateSub2ApiTestKey() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    if (!sub2ApiConfigForm.baseUrl.trim())
+      throw new Error('请先填写 Sub2API 基础地址')
+    if (!sub2ApiConfigForm.adminApiKey.trim() && !sub2ApiConfigForm.adminApiKeyMasked)
+      throw new Error('请先填写 Admin API Key')
+    await persistSub2ApiConfig()
+    await generateSub2ApiKey({ name: `Sub2API 测试 Key ${new Date().toLocaleString('zh-CN')}` })
+  }, 'Sub2API 测试 Key 已生成')
+}
+
+function removeSub2ApiTestKey(keyId: string) {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    await revokeSub2ApiKey(keyId)
+  }, 'Sub2API 测试 Key 已删除')
+}
+
 function saveDatabaseProvisionProviderConfig() {
   runSafely(async () => {
     if (!isAdmin.value)
@@ -2062,6 +2091,7 @@ onMounted(() => {
   refreshOAuthProviderConfigs().catch(() => {})
   refreshAiConfig().catch(() => {})
   refreshSub2ApiConfig().catch(() => {})
+  refreshSub2ApiKeys().catch(() => {})
   refreshDatabaseProvisionConfig().catch(() => {})
   refreshEducationMailConfig().catch(() => {})
   refreshNotificationProviderConfig().then(handleFeishuMailAuthCallbackMessage).catch(() => {})
@@ -2826,30 +2856,23 @@ onMounted(() => {
                   Sub2API 直连配置
                 </div>
                 <div class="text-sm mb-5 p-3 rounded-2xl" :class="sub2ApiConfigForm.configured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-                  {{ sub2ApiConfigForm.mockEnabled ? 'Sub2API 模拟分配已启用，资源申请通过后会自动生成 sk-mock-* 测试 API Key。' : sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在资源申请通过后自动发放 API Key。' : '尚未配置 Sub2API 基础地址或 Admin API Key。' }}
+                  {{ sub2ApiConfigForm.configured ? 'Sub2API 已配置，用户可在资源申请通过后自动发放 API Key。' : '尚未配置 Sub2API 基础地址或 Admin API Key。' }}
                 </div>
                 <div class="gap-5 grid lg:grid-cols-2">
                   <label class="gap-2 grid lg:col-span-2">
                     <span class="field-label">Sub2API 基础地址</span>
-                    <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading || sub2ApiConfigForm.mockEnabled" placeholder="https://sub2api.example.com" />
-                    <span v-if="sub2ApiConfigForm.mockEnabled" class="field-hint">模拟分配模式不调用真实 Sub2API，可留空基础地址和 Admin API Key。</span>
+                    <TxInput v-model="sub2ApiConfigForm.baseUrl" :disabled="!isAdmin || sub2ApiConfigForm.loading" placeholder="https://sub2api.example.com" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">Admin API Key</span>
-                    <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading || sub2ApiConfigForm.mockEnabled" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
-                    <span class="field-hint">用于测试连接、拉取分组、查询/创建 Sub2API 用户，并通过 Admin API 创建/删除 API Key；服务端加密保存。</span>
+                    <TxInput v-model="sub2ApiConfigForm.adminApiKey" :disabled="!isAdmin || sub2ApiConfigForm.loading" type="password" :placeholder="sub2ApiConfigForm.adminApiKeyMasked || 'admin-...' " />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">默认分组</span>
-                    <select v-model="sub2ApiConfigForm.defaultGroupId" class="form-select" :disabled="!isAdmin || sub2ApiConfigForm.loading || !sub2ApiConfigForm.groups.length">
-                      <option value="">
-                        {{ sub2ApiConfigForm.groups.length ? '不指定分组' : '请先测试连接拉取分组' }}
-                      </option>
-                      <option v-for="group in sub2ApiConfigForm.groups" :key="group.id" :value="group.id">
-                        {{ group.name }}（{{ group.id }}）
-                      </option>
-                    </select>
-                    <span class="field-hint">点击“测试连接”后自动拉取 Sub2API 分组；额度、有效期和限额以资源申请表单为准。</span>
+                    <TxSelect v-model="sub2ApiConfigForm.defaultGroupId" panel-background="pure" :disabled="!isAdmin || sub2ApiConfigForm.loading || !sub2ApiConfigForm.groups.length" :placeholder="sub2ApiConfigForm.groups.length ? '不指定分组' : '请先测试连接拉取分组'">
+                      <TxSelectItem value="" :label="sub2ApiConfigForm.groups.length ? '不指定分组' : '请先测试连接拉取分组'" />
+                      <TxSelectItem v-for="group in sub2ApiConfigForm.groups" :key="group.id" :value="group.id" :label="`${group.name}（${group.id}）`" />
+                    </TxSelect>
                   </label>
                 </div>
                 <div class="mt-5 flex flex-wrap gap-3 items-center">
@@ -2857,22 +2880,47 @@ onMounted(() => {
                     <TxCheckbox v-model="sub2ApiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用 Sub2API" />
                     启用 Sub2API
                   </label>
-                  <label class="text-sm flex gap-2 items-center">
-                    <TxCheckbox v-model="sub2ApiConfigForm.mockEnabled" variant="checkmark" :disabled="!isAdmin || sub2ApiConfigForm.loading" aria-label="启用模拟分配 API Key" />
-                    模拟分配 API Key
-                  </label>
                   <TxButton variant="primary" :disabled="!isAdmin || sub2ApiConfigForm.loading" @click="saveSub2ApiProviderConfig">
                     {{ sub2ApiConfigForm.loading ? '读取 / 保存中...' : '保存 Sub2API 配置' }}
                   </TxButton>
                   <TxButton variant="secondary" :disabled="!isAdmin || sub2ApiConfigForm.testing || sub2ApiConfigForm.loading" @click="testSub2ApiProviderConfig">
                     {{ sub2ApiConfigForm.testing ? '测试中...' : '测试连接并拉取分组' }}
                   </TxButton>
+                  <TxButton variant="secondary" :disabled="!isAdmin || sub2ApiKeyForm.loading || sub2ApiConfigForm.loading" @click="generateSub2ApiTestKey">
+                    {{ sub2ApiKeyForm.loading || sub2ApiConfigForm.loading ? '生成中...' : '生成测试 Key' }}
+                  </TxButton>
                 </div>
                 <div v-if="sub2ApiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
-                  {{ sub2ApiConfigForm.message }}
+                  <div>{{ sub2ApiConfigForm.message }}</div>
+                  <div v-if="sub2ApiConfigForm.attempts.length" class="mt-2 space-y-1 text-slate-500 dark:text-slate-400">
+                    <div v-for="attempt in sub2ApiConfigForm.attempts" :key="attempt" class="break-all">
+                      {{ attempt }}
+                    </div>
+                  </div>
                 </div>
-                <div class="text-xs text-slate-500 leading-5 mt-4 dark:text-slate-400">
-                  用户 API Key 生成后只展示一次明文；本项目仅保存哈希、脱敏值和 Sub2API Key ID。模拟分配仅用于联调/演示，生成的 sk-mock-* 不会写入真实 Sub2API。
+                <div v-if="sub2ApiKeyForm.message || generatedSub2ApiKey || adminTestSub2ApiKeys.length" class="mt-5 space-y-3">
+                  <div v-if="sub2ApiKeyForm.message" class="text-xs leading-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                    {{ sub2ApiKeyForm.message }}
+                  </div>
+                  <div v-if="generatedSub2ApiKey" class="text-xs leading-5 p-3 rounded-2xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
+                    <div class="fw-900 mb-1">
+                      新生成的测试 Key（仅显示一次，可真实调用）
+                    </div>
+                    <code class="break-all">{{ generatedSub2ApiKey }}</code>
+                  </div>
+                  <div v-for="key in adminTestSub2ApiKeys" :key="key.id" class="p-3 rounded-2xl bg-slate-50 flex flex-wrap gap-3 items-center justify-between dark:bg-white/5">
+                    <div class="text-xs leading-5">
+                      <div class="fw-900">
+                        {{ key.name }}
+                      </div>
+                      <div class="text-slate-500 break-all dark:text-slate-400">
+                        {{ key.keyMasked }} · {{ key.status === 'active' ? '可用' : '已删除' }} · {{ formatOptionalDate(key.expiresAt) }}
+                      </div>
+                    </div>
+                    <TxButton variant="danger" size="sm" :disabled="!isAdmin || sub2ApiKeyForm.loading || key.status !== 'active'" @click="removeSub2ApiTestKey(key.id)">
+                      删除
+                    </TxButton>
+                  </div>
                 </div>
               </div>
             </TxTabItem>

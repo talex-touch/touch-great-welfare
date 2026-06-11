@@ -1,6 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
 import type { User } from '~/composables/welfare'
-import { Pool } from 'pg'
 import {
   assertAdminRequest,
   assertSafeExternalUrl,
@@ -100,6 +99,11 @@ interface UpstreamUser {
   username?: string
 }
 
+interface Sub2ApiUserSession {
+  token: string
+  userId: string
+}
+
 interface UpstreamApiKey {
   id?: number | string
   key?: string
@@ -123,9 +127,16 @@ const RESOURCE_LOCK_TTL_SECONDS = 60
 let sub2ApiSchemaPromise: Promise<void> | undefined
 
 class Sub2ApiHttpError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly path: string, readonly method: string, readonly url: string) {
     super(message)
     this.name = 'Sub2ApiHttpError'
+  }
+}
+
+class Sub2ApiAdminAttemptsError extends Error {
+  constructor(action: string, readonly attempts: string[]) {
+    super(`${action}失败，已尝试：${attempts.join('；')}`)
+    this.name = 'Sub2ApiAdminAttemptsError'
   }
 }
 
@@ -431,22 +442,21 @@ async function saveSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
   return getEffectiveSub2ApiConfig(env)
 }
 
-async function callSub2Api<T>(
+async function callSub2ApiRaw<T>(
   config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
   path: string,
   init?: RequestInit,
 ): Promise<T> {
   if (!config.baseUrl)
     throw new Error('Sub2API 地址未配置')
-  if (!config.adminApiKey)
-    throw new Error('Sub2API Admin API Key 未配置')
 
   const baseUrl = assertSafeExternalUrl(config.baseUrl, { allowHttp: true, allowLocalhost: true }).toString().replace(/\/+$/, '')
-  const response = await fetchWithTimeout(`${baseUrl}${path}`, {
+  const requestUrl = `${baseUrl}${path}`
+  const method = init?.method || 'GET'
+  const response = await fetchWithTimeout(requestUrl, {
     ...init,
     headers: {
       'content-type': 'application/json',
-      'x-api-key': config.adminApiKey,
       ...init?.headers,
     },
   }, 20000)
@@ -464,13 +474,28 @@ async function callSub2Api<T>(
     const message = payload && typeof payload === 'object' && 'message' in payload
       ? String((payload as UpstreamEnvelope<T>).message)
       : `Sub2API 请求失败：${response.status}`
-    throw new Sub2ApiHttpError(message, response.status)
+    throw new Sub2ApiHttpError(message, response.status, path, method, requestUrl)
   }
   return normalizeResponseData(payload)
 }
 
-function isUnsupportedAdminKeyEndpoint(error: unknown) {
-  return error instanceof Sub2ApiHttpError && [404, 405].includes(error.status)
+async function callSub2Api<T>(
+  config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  if (!config.adminApiKey)
+    throw new Error('Sub2API Admin API Key 未配置')
+
+  return await callSub2ApiRaw<T>(config, path, {
+    ...init,
+    headers: {
+      'authorization': config.adminApiKey.startsWith('Bearer ') ? config.adminApiKey : `Bearer ${config.adminApiKey}`,
+      'x-api-key': config.adminApiKey,
+      'X-API-Key': config.adminApiKey,
+      ...init?.headers,
+    },
+  })
 }
 
 async function findSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
@@ -483,9 +508,12 @@ async function findSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub
   return users.find(item => item.email === buildUserEmail(user)) ?? null
 }
 
-async function createSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
-  const password = `TGW-${crypto.randomUUID()}-${Date.now()}`
-  const payload = {
+function createSub2ApiSessionPassword() {
+  return `TGW-${crypto.randomUUID()}-${Date.now()}`
+}
+
+function sub2ApiUserPayload(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, password: string) {
+  return {
     email: buildUserEmail(user),
     password,
     username: buildUserName(user),
@@ -495,79 +523,61 @@ async function createSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveS
     rpm_limit: 0,
     allowed_groups: config.defaultGroupId ? [config.defaultGroupId] : [],
   }
+}
+
+async function createSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, password: string) {
   return await callSub2Api<UpstreamUser>(config, '/api/v1/admin/users', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(sub2ApiUserPayload(config, user, password)),
   })
 }
 
-async function withSub2ApiDatabase<T>(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, callback: (pool: Pool) => Promise<T>) {
-  if (!config.databaseUrl)
-    throw new Error('Sub2API 数据库连接未配置')
-
-  const pool = new Pool({ connectionString: config.databaseUrl })
-  try {
-    return await callback(pool)
-  }
-  finally {
-    await pool.end()
-  }
-}
-
-async function findSub2ApiUserByDatabase(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
-  return await withSub2ApiDatabase(config, async (pool) => {
-    const result = await pool.query<{ id: number | string }>(
-      'select id from users where email = $1 and deleted_at is null limit 1',
-      [buildUserEmail(user)],
-    )
-    return result.rows[0]?.id ? String(result.rows[0].id) : ''
+async function updateSub2ApiUserPassword(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, sub2apiUserId: string, password: string) {
+  return await callSub2Api<UpstreamUser>(config, `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      email: buildUserEmail(user),
+      username: buildUserName(user),
+      password,
+    }),
   })
 }
 
-async function createSub2ApiUserByDatabase(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
-  return await withSub2ApiDatabase(config, async (pool) => {
-    const result = await pool.query<{ id: number | string }>(`
-      insert into users (
-        email, password_hash, role, balance, concurrency, status,
-        username, notes, signup_source, created_at, updated_at
-      )
-      values ($1, $2, 'user', 0, 5, 'active', $3, $4, 'email', now(), now())
-      returning id
-    `, [
-      buildUserEmail(user),
-      `disabled-password-${crypto.randomUUID()}`,
-      buildUserName(user),
-      `Touch Great Welfare user ${user.id}`,
-    ])
-    const id = result.rows[0]?.id
-    if (!id)
-      throw new Error('Sub2API 数据库未返回用户 ID')
-    return String(id)
+async function loginSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, email: string, password: string): Promise<Sub2ApiUserSession> {
+  const result = await callSub2ApiRaw<Record<string, unknown>>(config, '/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
   })
+  const token = String(result.access_token ?? result.token ?? result.jwt ?? '')
+  const nestedUser = result.user && typeof result.user === 'object' ? result.user as Record<string, unknown> : undefined
+  const userId = String(nestedUser?.id ?? result.user_id ?? result.userId ?? '')
+  if (!token)
+    throw new Error('Sub2API 登录未返回用户 Token')
+  return { token, userId }
 }
 
-async function ensureSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
-  if (config.adminApiKey) {
-    try {
-      const existing = await findSub2ApiUser(config, user)
-      if (existing?.id)
-        return String(existing.id)
+async function ensureSub2ApiUserSession(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
+  if (!config.adminApiKey)
+    throw new Error('Sub2API Admin API Key 未配置')
 
-      const created = await createSub2ApiUser(config, user)
-      if (!created.id)
-        throw new Error('Sub2API 未返回用户 ID')
-      return String(created.id)
-    }
-    catch (error) {
-      if (!config.databaseUrl)
-        throw error
+  const password = createSub2ApiSessionPassword()
+  const existing = await findSub2ApiUser(config, user)
+  if (existing?.id) {
+    const sub2apiUserId = String(existing.id)
+    await updateSub2ApiUserPassword(config, user, sub2apiUserId, password)
+    return {
+      sub2apiUserId,
+      session: await loginSub2ApiUser(config, buildUserEmail(user), password),
     }
   }
 
-  const existing = await findSub2ApiUserByDatabase(config, user)
-  if (existing)
-    return existing
-  return await createSub2ApiUserByDatabase(config, user)
+  const created = await createSub2ApiUser(config, user, password)
+  if (!created.id)
+    throw new Error('Sub2API 未返回用户 ID')
+  return {
+    sub2apiUserId: String(created.id),
+    session: await loginSub2ApiUser(config, buildUserEmail(user), password),
+  }
 }
 
 function buildSub2ApiKeyPayload(
@@ -609,113 +619,35 @@ function isMockSub2ApiKeyId(value: string | null | undefined) {
   return !!value?.startsWith(MOCK_SUB2API_KEY_ID_PREFIX)
 }
 
-async function createSub2ApiKeyByDatabase(
-  config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
-  sub2apiUserId: string,
-  payload: CreateSub2ApiKeyPayload,
-) {
-  const key = `sk-${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`
-  const request = buildSub2ApiKeyPayload(config, payload)
-  const expiresAt = new Date(Date.now() + Number(request.expires_in_days) * 24 * 60 * 60 * 1000).toISOString()
-  const id = await withSub2ApiDatabase(config, async (pool) => {
-    const result = await pool.query<{ id: number | string }>(`
-      insert into api_keys (
-        user_id, key, name, group_id, status, ip_whitelist, ip_blacklist,
-        quota, quota_used, expires_at, rate_limit_5h, rate_limit_1d, rate_limit_7d,
-        usage_5h, usage_1d, usage_7d, max_active_ips, ip_idle_timeout_seconds,
-        max_concurrency, created_at, updated_at
-      )
-      values (
-        $1, $2, $3, $4, 'active', $10::jsonb, $11::jsonb,
-        $5, 0, $6, $7, $8, $9,
-        0, 0, 0, $12, $13,
-        $14, now(), now()
-      )
-      returning id
-    `, [
-      Number(sub2apiUserId),
-      key,
-      request.name,
-      request.group_id || null,
-      request.quota,
-      expiresAt,
-      request.rate_limit_5h,
-      request.rate_limit_1d,
-      request.rate_limit_7d,
-      JSON.stringify(request.ip_whitelist),
-      JSON.stringify(request.ip_blacklist),
-      request.max_active_ips,
-      request.ip_idle_timeout_seconds,
-      request.max_concurrency,
-    ])
-    const createdId = result.rows[0]?.id
-    if (!createdId)
-      throw new Error('Sub2API 数据库未返回 API Key ID')
-    return createdId
-  })
-  return {
-    id,
-    key,
-    name: request.name,
-    status: 'active',
-    quota: request.quota,
-    expires_at: expiresAt,
-  } satisfies UpstreamApiKey
-}
-
 function normalizeUpstreamApiKey(value: unknown): UpstreamApiKey {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Record<string, unknown>
     const nested = record.key || record.api_key || record.apiKey
     if (nested && typeof nested === 'object' && !Array.isArray(nested))
       return normalizeUpstreamApiKey(nested)
-    return record as UpstreamApiKey
+    return {
+      ...record,
+      id: record.id ?? record.key_id ?? record.keyId ?? record.api_key_id ?? record.apiKeyId,
+      key: record.key ?? record.api_key ?? record.apiKey,
+      expires_at: record.expires_at ?? record.expiresAt,
+    } as UpstreamApiKey
   }
   return {}
 }
 
-async function createSub2ApiKeyByAdminApi(
+async function createSub2ApiKeyByUserApi(
   config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
-  sub2apiUserId: string,
+  session: Sub2ApiUserSession,
   payload: CreateSub2ApiKeyPayload,
 ) {
-  const request = buildSub2ApiKeyPayload(config, payload)
-  const userId = optionalInt(sub2apiUserId) ?? sub2apiUserId
-  const attempts = [
-    {
-      path: `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}/api-keys`,
-      body: request,
+  const result = await callSub2ApiRaw<unknown>(config, '/api/v1/keys', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${session.token}`,
     },
-    {
-      path: '/api/v1/admin/api-keys',
-      body: { ...request, user_id: userId },
-    },
-    {
-      path: `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}/keys`,
-      body: request,
-    },
-    {
-      path: '/api/v1/admin/keys',
-      body: { ...request, user_id: userId },
-    },
-  ]
-
-  let unsupportedError: unknown
-  for (const attempt of attempts) {
-    try {
-      const result = await callSub2Api<unknown>(config, attempt.path, {
-        method: 'POST',
-        body: JSON.stringify(attempt.body),
-      })
-      return normalizeUpstreamApiKey(result)
-    }
-    catch (error) {
-      if (!isUnsupportedAdminKeyEndpoint(error))
-        throw error
-      unsupportedError = error
-    }
-  }
-  throw unsupportedError instanceof Error ? unsupportedError : new Error('Sub2API Admin API 不支持创建 API Key')
+    body: JSON.stringify(buildSub2ApiKeyPayload(config, payload)),
+  })
+  return normalizeUpstreamApiKey(result)
 }
 
 async function insertBinding(
@@ -951,15 +883,16 @@ async function revokeBinding(env: WorkerEnv, bindingId: string) {
   )
 }
 
-async function deleteSub2ApiKeyByDatabase(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, sub2apiKeyId: string) {
-  await withSub2ApiDatabase(config, async (pool) => {
-    await pool.query('update api_keys set deleted_at = now(), status = $2, updated_at = now() where id = $1', [Number(sub2apiKeyId), 'inactive'])
-  })
-}
-
-async function deleteSub2ApiKeyByAdminApi(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, sub2apiKeyId: string) {
-  await callSub2Api(config, `/api/v1/admin/api-keys/${encodeURIComponent(sub2apiKeyId)}`, {
+async function deleteSub2ApiKeyByUserApi(
+  config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>,
+  session: Sub2ApiUserSession,
+  sub2apiKeyId: string,
+) {
+  await callSub2ApiRaw(config, `/api/v1/keys/${encodeURIComponent(sub2apiKeyId)}`, {
     method: 'DELETE',
+    headers: {
+      authorization: `Bearer ${session.token}`,
+    },
   })
 }
 
@@ -984,23 +917,8 @@ async function createSub2ApiKey(env: WorkerEnv, user: User, payload: CreateSub2A
   if (config.mockEnabled)
     return await insertBinding(env, user.id, `mock-${user.id}`, createMockSub2ApiKey(config, payload), quotaUsd, resourceRef)
 
-  const sub2apiUserId = await ensureSub2ApiUser(config, user)
-  let upstreamKey: UpstreamApiKey
-  if (config.adminApiKey) {
-    try {
-      upstreamKey = await createSub2ApiKeyByAdminApi(config, sub2apiUserId, payload)
-    }
-    catch (error) {
-      if (!isUnsupportedAdminKeyEndpoint(error))
-        throw error
-      if (!config.databaseUrl)
-        throw new Error('Sub2API Admin API 不支持创建 API Key，且数据库连接未配置')
-      upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
-    }
-  }
-  else {
-    upstreamKey = await createSub2ApiKeyByDatabase(config, sub2apiUserId, payload)
-  }
+  const { sub2apiUserId, session } = await ensureSub2ApiUserSession(config, user)
+  const upstreamKey = await createSub2ApiKeyByUserApi(config, session, payload)
 
   return await insertBinding(env, user.id, sub2apiUserId, upstreamKey, quotaUsd, resourceRef)
 }
@@ -1032,21 +950,8 @@ async function deleteKey(request: Request, env: WorkerEnv) {
 
   const config = await getEffectiveSub2ApiConfig(env)
   if (binding.sub2api_key_id && !isMockSub2ApiKeyId(binding.sub2api_key_id)) {
-    if (config.adminApiKey) {
-      try {
-        await deleteSub2ApiKeyByAdminApi(config, binding.sub2api_key_id)
-      }
-      catch (error) {
-        if (!isUnsupportedAdminKeyEndpoint(error))
-          throw error
-        if (!config.databaseUrl)
-          throw new Error('Sub2API Admin API 不支持删除 API Key，且数据库连接未配置')
-        await deleteSub2ApiKeyByDatabase(config, binding.sub2api_key_id)
-      }
-    }
-    else {
-      await deleteSub2ApiKeyByDatabase(config, binding.sub2api_key_id)
-    }
+    const { session } = await ensureSub2ApiUserSession(config, auth.user)
+    await deleteSub2ApiKeyByUserApi(config, session, binding.sub2api_key_id)
   }
 
   await revokeBinding(env, binding.id)
@@ -1106,8 +1011,21 @@ async function testSub2ApiConfig(env: WorkerEnv, payload: SaveSub2ApiConfigPaylo
   if (config.mockEnabled)
     return { ok: true, adminApiReachable: false, mock: true, groups: [] }
 
-  await callSub2Api(config, '/api/v1/admin/users?page=1&page_size=1')
-  return { ok: true, adminApiReachable: true, groups: await listSub2ApiGroups(config) }
+  const attempts: string[] = []
+  try {
+    await callSub2Api(config, '/api/v1/admin/users?page=1&page_size=1')
+    attempts.push('GET /api/v1/admin/users?page=1&page_size=1 -> 200 OK')
+    const groups = await listSub2ApiGroups(config)
+    attempts.push('GET /api/v1/admin/groups?page=1&page_size=200 -> 200 OK')
+    return { ok: true, adminApiReachable: true, groups, attempts }
+  }
+  catch (error) {
+    if (error instanceof Sub2ApiHttpError) {
+      attempts.push(`${error.method} ${error.path} -> ${error.status} ${error.message}`)
+      throw new Sub2ApiAdminAttemptsError('Sub2API Admin API 测试连接', attempts)
+    }
+    throw error
+  }
 }
 
 export async function handleSub2ApiRequest(request: Request, env: WorkerEnv) {

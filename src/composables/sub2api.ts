@@ -115,7 +115,7 @@ export function saveSub2ApiConfig(adminUserId: string, payload: SaveSub2ApiConfi
 }
 
 export function testSub2ApiConfig(adminUserId: string, payload?: Partial<SaveSub2ApiConfigPayload>) {
-  return requestSub2Api<{ ok: boolean, adminApiReachable?: boolean, mock?: boolean, groups: Sub2ApiGroupView[] }>('/api/sub2api/test', adminUserId, {
+  return requestSub2Api<{ ok: boolean, adminApiReachable?: boolean, mock?: boolean, groups: Sub2ApiGroupView[], attempts?: string[] }>('/api/sub2api/test', adminUserId, {
     method: 'POST',
     body: JSON.stringify(payload ?? {}),
   })

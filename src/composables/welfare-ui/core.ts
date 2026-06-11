@@ -401,6 +401,7 @@ export const sub2ApiConfigForm = reactive({
   loading: false,
   testing: false,
   message: '',
+  attempts: [] as string[],
 })
 
 export const databaseProvisionConfigForm = reactive({
@@ -2267,7 +2268,7 @@ export function useWelfareUiState() {
     try {
       const result = await saveSub2ApiConfig(welfare.currentUser.value.id, {
         enabled: sub2ApiConfigForm.enabled,
-        mockEnabled: sub2ApiConfigForm.mockEnabled,
+        mockEnabled: false,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
@@ -2295,7 +2296,7 @@ export function useWelfareUiState() {
     try {
       const result = await testSub2ApiConfig(welfare.currentUser.value.id, {
         enabled: sub2ApiConfigForm.enabled,
-        mockEnabled: sub2ApiConfigForm.mockEnabled,
+        mockEnabled: false,
         baseUrl: sub2ApiConfigForm.baseUrl,
         adminApiKey: sub2ApiConfigForm.adminApiKey,
         defaultGroupId: sub2ApiConfigForm.defaultGroupId,
@@ -2306,9 +2307,8 @@ export function useWelfareUiState() {
         defaultRateLimit7d: Number(sub2ApiConfigForm.defaultRateLimit7d),
       })
       sub2ApiConfigForm.groups = result.groups
-      sub2ApiConfigForm.message = result.mock
-        ? 'Sub2API 模拟分配可用：自动申请会生成 sk-mock-* 测试 Key，不调用真实 Sub2API。'
-        : result.groups.length ? `Sub2API 连接测试通过，已拉取 ${result.groups.length} 个分组` : 'Sub2API 连接测试通过，未返回可选分组'
+      sub2ApiConfigForm.attempts = result.attempts ?? []
+      sub2ApiConfigForm.message = result.groups.length ? `Sub2API 连接测试通过，已拉取 ${result.groups.length} 个分组` : 'Sub2API 连接测试通过，未返回可选分组'
     }
     finally {
       sub2ApiConfigForm.testing = false
@@ -2502,7 +2502,7 @@ export function useWelfareUiState() {
     }
   }
 
-  async function generateSub2ApiKey() {
+  async function generateSub2ApiKey(options: { name?: string } = {}) {
     welfare.assertPersistenceReady()
     if (!welfare.currentUser.value)
       throw new Error('请先登录')
@@ -2512,7 +2512,7 @@ export function useWelfareUiState() {
     sub2ApiKeyForm.message = ''
     try {
       const result = await createSub2ApiKey(welfare.currentUser.value.id, {
-        name: sub2ApiKeyForm.name,
+        name: options.name ?? sub2ApiKeyForm.name,
         quotaUsd: Number(sub2ApiKeyForm.quotaUsd),
         expiresInDays: Number(sub2ApiKeyForm.expiresInDays),
         groupId: sub2ApiKeyForm.groupId,
