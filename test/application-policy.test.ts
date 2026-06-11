@@ -140,6 +140,34 @@ describe('application policy', () => {
     })).toThrow('Pro 今日维护')
   })
 
+  it('blocks disabled resource types', () => {
+    const store = useWelfareStore()
+    store.state.applicationPolicy.submitCooldownSeconds = 0
+    store.state.applicationPolicy.resourceTypes.database.enabled = false
+    store.state.applicationPolicy.resourceTypes.database.closedReason = '数据库资源维护中'
+
+    expect(() => store.submitResourceApplication({
+      title: '数据库资源申请',
+      reason: longRichText('数据库资源申请'),
+      businessBackground: '公益数据看板项目',
+      urgency: 'normal',
+      duration: RESOURCE_DEFAULT_DURATION,
+      selectedResourceTypes: ['database'],
+      resourceItems: [{
+        resourceType: 'database',
+        resourceSubtype: 'mysql',
+        payload: {
+          name: 'welfare_read_model',
+          environment: 'prod',
+          permission: 'readonly',
+          reason: '只读公益报表分析',
+          operationScope: '查询公益统计报表',
+        },
+      }],
+      acceptedTermIds: ['general_resource_terms', 'database_security_terms'],
+    })).toThrow('数据库资源维护中')
+  })
+
   it('requires and accepts valid PoW when enabled', () => {
     const store = useWelfareStore()
     const title = 'PoW 申请'

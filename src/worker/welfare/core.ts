@@ -75,6 +75,7 @@ import {
   RESOURCE_TYPE_CONFIGS,
   resourceActivityPromotionName,
   resourceApprovalStatusText,
+  resourceTypeConfigForPolicy,
   resourceTypeLabel,
   rollDailyCheckInPoints,
   SQUARE_BOOST_REPORT_COOLDOWN_DAYS,
@@ -1326,7 +1327,8 @@ export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfar
   logWelfarePerf('read state record', readStartedAt, shouldUseD1(env) ? 'store=d1' : 'store=postgres')
 
   const decodeStartedAt = Date.now()
-  const state = await decodeStoredState(env, record.state)
+  const state = await decodeStoredState(env, record.state) as Partial<WelfareState>
+  state.applicationPolicy = normalizeApplicationPolicy(state.applicationPolicy)
   logWelfarePerf('decode state', decodeStartedAt)
 
   if (options.syncPointBalances === 'all') {
@@ -1354,7 +1356,9 @@ export async function readWelfareState(env: WorkerEnv, options: ReadWelfareState
   // 🚀 新特性：从规范化表读取（通过环境变量控制）
   if (env.USE_NORMALIZED_TABLES === 'true') {
     const { readWelfareStateFromTables } = await import('./hybrid-read')
-    return readWelfareStateFromTables(env)
+    const state = await readWelfareStateFromTables(env) as unknown as Partial<WelfareState>
+    state.applicationPolicy = normalizeApplicationPolicy(state.applicationPolicy)
+    return state
   }
 
   return (await readWelfareStateRecord(env, options)).state
@@ -2189,7 +2193,7 @@ function resourceCheckoutSnapshotForState(state: Partial<WelfareState>, userId: 
 }
 
 function assertResourceTypeCanApplyForState(state: Partial<WelfareState>, resourceType: ResourceType, user: User) {
-  const config = RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === resourceType)
+  const config = resourceTypeConfigForPolicy(resourceType, state.applicationPolicy)
   if (!config)
     throw new Error('资源类型无效')
   const userLevel = buildUserLevelCard(user, {
@@ -2197,7 +2201,7 @@ function assertResourceTypeCanApplyForState(state: Partial<WelfareState>, resour
     studentVerifications: state.studentVerifications ?? [],
   })
   if (!canApplyResourceType(config, userLevel.priority))
-    throw new Error(`${config.displayName} 暂不可申请`)
+    throw new Error(config.unavailableReason || `${config.displayName} 暂不可申请`)
 }
 
 function buildResourceDescription(payload: SubmitResourceApplicationPayload) {

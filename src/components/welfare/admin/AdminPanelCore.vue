@@ -5,7 +5,7 @@ import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumber
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
-import { buildResourceGovernanceSnapshot, formatBytes, formatDate, formatPoints, isGptProModel, MAX_ATTACHMENT_BYTES, normalizeVerificationType, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
+import { buildResourceGovernanceSnapshot, formatBytes, formatDate, formatPoints, isGptProModel, MAX_ATTACHMENT_BYTES, normalizeVerificationType, RESOURCE_TYPE_CONFIGS, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
 import RichTextEditor from '../RichTextEditor.vue'
@@ -160,6 +160,7 @@ const USER_DETAIL_LIMIT = 6
 const USER_DRAWER_Z_INDEX = 120
 const REQUEST_TYPE_ORDER: RequestKind[] = ['code', 'image', 'pro', 'resource']
 const APPLICATION_POLICY_TYPES = REQUEST_TYPE_ORDER
+const RESOURCE_POLICY_TYPES = RESOURCE_TYPE_CONFIGS
 const DAY_MS = 24 * 60 * 60 * 1000
 const DASHBOARD_TREND_DAY_COUNT = 7
 const DASHBOARD_TREND_WIDTH = 320
@@ -327,6 +328,8 @@ const applicationStatusFilterOptions = [
   { value: 'completed', label: applicationStatusText.completed },
   { value: 'rejected', label: applicationStatusText.rejected },
 ]
+
+const enabledResourcePolicyCount = computed(() => RESOURCE_POLICY_TYPES.filter(config => state.applicationPolicy.resourceTypes[config.resourceType]?.enabled).length)
 
 const studentStatusFilterOptions = [
   { value: ALL_FILTER, label: '全部状态' },
@@ -2528,6 +2531,46 @@ onMounted(() => {
             </div>
           </div>
 
+          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <div class="text-base fw-900 flex gap-2 items-center">
+                  <span class="i-carbon-settings-adjust" />
+                  资源类型开放管理
+                </div>
+                <p class="field-hint mt-1">
+                  控制用户可申请的资源类型；关闭后前台不再展示，接口提交也会被拒绝。
+                </p>
+              </div>
+              <span class="admin-pill text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30">
+                已开放 {{ enabledResourcePolicyCount }}/{{ RESOURCE_POLICY_TYPES.length }} 类
+              </span>
+            </div>
+            <div class="mt-4 gap-4 grid md:grid-cols-2 xl:grid-cols-3">
+              <div v-for="config in RESOURCE_POLICY_TYPES" :key="config.resourceType" class="p-4 border border-black/8 rounded-2xl bg-slate-50 dark:border-white/10 dark:bg-black/20">
+                <div class="flex gap-3 items-start justify-between">
+                  <div class="min-w-0">
+                    <div class="fw-900 flex gap-2 items-center">
+                      <span :class="config.icon" />
+                      {{ config.displayName }}
+                    </div>
+                    <p class="field-hint mt-1">
+                      {{ config.description }}
+                    </p>
+                  </div>
+                  <label class="option-check compact shrink-0">
+                    <TxCheckbox v-model="state.applicationPolicy.resourceTypes[config.resourceType].enabled" variant="checkmark" :disabled="!isAdmin || applicationPolicyConfigForm.loading" />
+                    <span><b>{{ state.applicationPolicy.resourceTypes[config.resourceType].enabled ? '开放' : '关闭' }}</b></span>
+                  </label>
+                </div>
+                <label class="mt-3 gap-2 grid">
+                  <span class="field-label">关闭提示</span>
+                  <TxInput v-model="state.applicationPolicy.resourceTypes[config.resourceType].closedReason" :disabled="!isAdmin || applicationPolicyConfigForm.loading" :placeholder="config.unavailableReason || '该资源暂未开放申请'" />
+                </label>
+              </div>
+            </div>
+          </div>
+
           <div v-if="applicationPolicyConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
             {{ applicationPolicyConfigForm.message }}
           </div>
@@ -2892,7 +2935,7 @@ onMounted(() => {
                 </div>
                 <div v-if="sub2ApiConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
                   <div>{{ sub2ApiConfigForm.message }}</div>
-                  <div v-if="sub2ApiConfigForm.attempts.length" class="mt-2 space-y-1 text-slate-500 dark:text-slate-400">
+                  <div v-if="sub2ApiConfigForm.attempts.length" class="text-slate-500 mt-2 space-y-1 dark:text-slate-400">
                     <div v-for="attempt in sub2ApiConfigForm.attempts" :key="attempt" class="break-all">
                       {{ attempt }}
                     </div>
@@ -2902,7 +2945,7 @@ onMounted(() => {
                   <div v-if="sub2ApiKeyForm.message" class="text-xs leading-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
                     {{ sub2ApiKeyForm.message }}
                   </div>
-                  <div v-if="generatedSub2ApiKey" class="text-xs leading-5 p-3 rounded-2xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
+                  <div v-if="generatedSub2ApiKey" class="text-xs text-emerald-700 leading-5 p-3 rounded-2xl bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30">
                     <div class="fw-900 mb-1">
                       新生成的测试 Key（仅显示一次，可真实调用）
                     </div>

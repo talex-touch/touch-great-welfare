@@ -554,6 +554,11 @@ export interface ApplicationKindPolicy {
   closedReason?: string
 }
 
+export interface ResourceTypePolicy {
+  enabled: boolean
+  closedReason?: string
+}
+
 export interface ApplicationPolicyConfig {
   minDescriptionChars: number
   submitCooldownSeconds: number
@@ -563,6 +568,7 @@ export interface ApplicationPolicyConfig {
   turnstileSiteKey: string
   turnstileSecretKey: string
   categories: Record<RequestKind, ApplicationKindPolicy>
+  resourceTypes: Record<ResourceType, ResourceTypePolicy>
 }
 
 export interface SiteBannerConfig {
@@ -1492,6 +1498,16 @@ const DEFAULT_KIND_POLICY: ApplicationKindPolicy = {
   closedReason: '',
 }
 
+function defaultResourceTypePolicies(): Record<ResourceType, ResourceTypePolicy> {
+  return Object.fromEntries(RESOURCE_TYPE_CONFIGS.map(config => [
+    config.resourceType,
+    {
+      enabled: config.enabled,
+      closedReason: config.unavailableReason ?? '',
+    },
+  ])) as Record<ResourceType, ResourceTypePolicy>
+}
+
 export function defaultApplicationPolicy(): ApplicationPolicyConfig {
   return {
     minDescriptionChars: DEFAULT_MIN_APPLICATION_DESCRIPTION_CHARS,
@@ -1507,6 +1523,7 @@ export function defaultApplicationPolicy(): ApplicationPolicyConfig {
       pro: { ...DEFAULT_KIND_POLICY, dailyLimit: 30, perUserDailyLimit: 2 },
       resource: { ...DEFAULT_KIND_POLICY, dailyLimit: 30, perUserDailyLimit: 2 },
     },
+    resourceTypes: defaultResourceTypePolicies(),
   }
 }
 
@@ -1920,6 +1937,20 @@ function normalizeApplicationKindPolicy(input: Partial<ApplicationKindPolicy> | 
   }
 }
 
+function normalizeResourceTypePolicy(input: Partial<ResourceTypePolicy> | undefined, fallback: ResourceTypePolicy): ResourceTypePolicy {
+  return {
+    enabled: input?.enabled ?? fallback.enabled,
+    closedReason: input?.closedReason?.trim() ?? fallback.closedReason,
+  }
+}
+
+function normalizeResourceTypePolicies(input: Partial<Record<ResourceType, ResourceTypePolicy>> | undefined, fallback: Record<ResourceType, ResourceTypePolicy>) {
+  return Object.fromEntries(RESOURCE_TYPE_CONFIGS.map(config => [
+    config.resourceType,
+    normalizeResourceTypePolicy(input?.[config.resourceType], fallback[config.resourceType]),
+  ])) as Record<ResourceType, ResourceTypePolicy>
+}
+
 export function normalizeApplicationPolicy(input?: Partial<ApplicationPolicyConfig>): ApplicationPolicyConfig {
   const fallback = defaultApplicationPolicy()
   return {
@@ -1936,6 +1967,7 @@ export function normalizeApplicationPolicy(input?: Partial<ApplicationPolicyConf
       pro: normalizeApplicationKindPolicy(input?.categories?.pro, fallback.categories.pro),
       resource: normalizeApplicationKindPolicy(input?.categories?.resource, fallback.categories.resource),
     },
+    resourceTypes: normalizeResourceTypePolicies(input?.resourceTypes, fallback.resourceTypes),
   }
 }
 
@@ -2476,6 +2508,23 @@ export function resourceTypeConfig(resourceType: ResourceType) {
   return RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === resourceType)
 }
 
+export function resourceTypeConfigsForPolicy(policy?: Partial<ApplicationPolicyConfig>) {
+  const normalizedPolicy = normalizeApplicationPolicy(policy)
+  return RESOURCE_TYPE_CONFIGS.map((config) => {
+    const typePolicy = normalizedPolicy.resourceTypes[config.resourceType]
+    return {
+      ...config,
+      enabled: config.enabled && typePolicy.enabled,
+      availability: !typePolicy.enabled ? 'unavailable' as const : config.availability,
+      unavailableReason: !typePolicy.enabled ? (typePolicy.closedReason || '该资源暂未开放申请') : config.unavailableReason,
+    }
+  })
+}
+
+export function resourceTypeConfigForPolicy(resourceType: ResourceType, policy?: Partial<ApplicationPolicyConfig>) {
+  return resourceTypeConfigsForPolicy(policy).find(item => item.resourceType === resourceType)
+}
+
 export function resourceTypeLabel(resourceType: ResourceType) {
   return resourceTypeConfig(resourceType)?.displayName ?? resourceType
 }
@@ -2732,10 +2781,12 @@ function readString(payload: Record<string, unknown>, key: string) {
   return typeof payload[key] === 'string' ? payload[key].trim() : ''
 }
 
-function assertKnownResourceType(resourceType: ResourceType) {
-  const config = resourceTypeConfig(resourceType)
-  if (!config || !config.enabled)
+function assertKnownResourceType(resourceType: ResourceType, policy?: Partial<ApplicationPolicyConfig>) {
+  const config = policy ? resourceTypeConfigForPolicy(resourceType, policy) : resourceTypeConfig(resourceType)
+  if (!config)
     throw new Error(`资源类型不可用：${resourceType}`)
+  if (!config.enabled)
+    throw new Error(config.unavailableReason || `资源类型不可用：${resourceType}`)
   return config
 }
 
@@ -2911,13 +2962,13 @@ const isHydrated = ref(false)
 const isFullStateLoaded = ref(false)
 
 function assertResourceTypeCanApply(resourceType: ResourceType, userId: string) {
-  const config = assertKnownResourceType(resourceType)
+  const config = assertKnownResourceType(resourceType, state.applicationPolicy)
   const user = state.users.find(item => item.id === userId)
   if (!user)
     throw new Error('用户不存在')
   const userLevel = buildUserLevelCard(user, state)
   if (!canApplyResourceType(config, userLevel.priority))
-    throw new Error(`${config.displayName} ${resourceAvailabilityLabel(config, userLevel.priority)}`)
+    throw new Error(config.unavailableReason || `${config.displayName} ${resourceAvailabilityLabel(config, userLevel.priority)}`)
   return config
 }
 const persistenceError = ref('')

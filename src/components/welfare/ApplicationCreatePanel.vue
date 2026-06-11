@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { clearLocalDraft, persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
-import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, calculateRejectionReviewFee, canApplyResourceType, defaultLlmApiDuration, formatBytes, formatDate, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, REJECTION_FEE_WAIVER_BLOCK_DAYS, REJECTION_FRAUD_COOLDOWN_DAYS, REJECTION_REVIEW_FEE_MAX, REJECTION_REVIEW_FEE_MIN, REJECTION_REVIEW_FEE_RATE, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, RESOURCE_POOL_CATEGORIES, RESOURCE_TERMS, RESOURCE_TYPE_CONFIGS, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
+import { ACTIVITY_NAME, calculateActivityPrice, calculateLlmApiBudgetActivityPrice, calculateLlmApiCostPoints, calculateLlmApiRateLimitChangeCost, calculateRejectionReviewFee, canApplyResourceType, defaultLlmApiDuration, formatBytes, formatDate, GPT_PRO_ACTIVITY_NAME, GPT_PRO_DEFAULT_DURATION, GPT_PRO_DEFAULT_ROUNDS, GPT_PRO_MAX_ROUNDS, GPT_PRO_MIN_ROUNDS, isGptProModel, LLM_API_MODEL_COST_MULTIPLIERS, llmApiBudgetActivityDiscountRate, llmApiDurationExtensionCost, MAX_ACTIVE_USER_REQUESTS, MAX_ATTACHMENT_BYTES, REJECTION_FEE_WAIVER_BLOCK_DAYS, REJECTION_FRAUD_COOLDOWN_DAYS, REJECTION_REVIEW_FEE_MAX, REJECTION_REVIEW_FEE_MIN, REJECTION_REVIEW_FEE_RATE, RESOURCE_DEFAULT_DURATION, RESOURCE_DURATION_EXTENSION_COST, RESOURCE_POOL_CATEGORIES, RESOURCE_TERMS, SQUARE_SHARE_DISCOUNT_RATE } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import DataNotice from './DataNotice.vue'
 import RichTextEditor from './RichTextEditor.vue'
@@ -56,20 +56,12 @@ const isRejectionFeeDetailsOpen = ref(false)
 const activeResourceTermTab = ref<ResourceTermId | ''>('')
 const submitReadyMessage = ref('')
 const resourcePoolSearch = ref('')
-const expandedResourcePoolCategoryIds = ref<ResourcePoolCategoryId[]>(defaultExpandedResourcePoolCategoryIds())
+const expandedResourcePoolCategoryIds = ref<ResourcePoolCategoryId[]>([])
 const expectedEffectivePreset = ref('after_approval')
 const applicationDraftKey = 'welfare:resource-application-draft'
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
 let stopPersistLocalDraft: (() => void) | undefined
-function defaultExpandedResourcePoolCategoryIds() {
-  return RESOURCE_POOL_CATEGORIES
-    .filter(category => category.items.some((item) => {
-      const config = RESOURCE_TYPE_CONFIGS.find(candidate => candidate.resourceType === item.resourceType)
-      return config?.availability === 'available'
-    }))
-    .map(category => category.id)
-}
 
 const draftApplicationId = computed(() => {
   const raw = route.query.draft
@@ -191,6 +183,15 @@ const groupedResourceItems = computed(() => resourceApplicationForm.selectedReso
 })).filter(group => group.config))
 const normalizedResourcePoolSearch = computed(() => resourcePoolSearch.value.trim().toLowerCase())
 const selectedResourcePoolItemIds = computed(() => new Set(resourceApplicationItems.value.map(item => `${item.resourceType}:${item.resourceSubtype}`)))
+function defaultExpandedResourcePoolCategoryIds() {
+  return RESOURCE_POOL_CATEGORIES
+    .filter(category => category.items.some((item) => {
+      const config = resourceTypeConfigs.value.find(candidate => candidate.resourceType === item.resourceType)
+      return config?.availability === 'available'
+    }))
+    .map(category => category.id)
+}
+
 const resourcePoolCategories = computed(() => RESOURCE_POOL_CATEGORIES.map((category) => {
   const items = category.items
     .map((item) => {
@@ -208,13 +209,13 @@ const resourcePoolCategories = computed(() => RESOURCE_POOL_CATEGORIES.map((cate
         available: !!config && canApplyResourceType(config, currentUserLevelPriority.value),
       }
     })
-    .filter(item => item.matchesSearch)
+    .filter(item => item.config && item.matchesSearch)
 
   return {
     ...category,
     items,
-    selectedCount: category.items.filter(item => selectedResourcePoolItemIds.value.has(item.id)).length,
-    totalCount: category.items.length,
+    selectedCount: items.filter(item => selectedResourcePoolItemIds.value.has(item.id)).length,
+    totalCount: items.length,
   }
 }).filter(category => category.items.length))
 
@@ -998,6 +999,7 @@ onMounted(() => {
   else {
     restoreLocalDraft(applicationDraftKey, resourceApplicationForm)
   }
+  expandedResourcePoolCategoryIds.value = defaultExpandedResourcePoolCategoryIds()
   sanitizeDefaultFormChoices()
   sanitizeSelectedResourceTypes()
   sanitizeResourceDurations()

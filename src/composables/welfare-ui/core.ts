@@ -71,7 +71,7 @@ import {
   resolveSelectableLlmApiModel,
   RESOURCE_DEFAULT_DURATION,
   RESOURCE_TERMS,
-  RESOURCE_TYPE_CONFIGS,
+  resourceTypeConfigsForPolicy,
   solveApplicationPow,
   STORAGE_EXTENSION_COST,
   STUDENT_REVIEW_FEE,
@@ -916,7 +916,7 @@ export function useWelfareUiState() {
   })
   const selectedLlmApiRequiresExtendedReview = computed(() => applicationForm.type === 'code' && llmApiRequiresExtendedReview(selectedLlmApiBudgetUsd.value, selectedLlmApiModel.value))
   const selectedCodexRequiresExtendedReview = selectedLlmApiRequiresExtendedReview
-  const resourceTypeConfigs = computed(() => RESOURCE_TYPE_CONFIGS.filter(item => item.enabled))
+  const resourceTypeConfigs = computed(() => resourceTypeConfigsForPolicy(welfare.state.applicationPolicy).filter(item => item.enabled))
   const selectedResourceTerms = computed(() => termsForResourceTypes(resourceApplicationForm.selectedResourceTypes))
   const heroProgress = computed(() => Math.min(100, Math.round((welfare.state.users.length / 12) * 100) + 24))
   const pendingCount = computed(() => welfare.pendingApplications.value.length + welfare.pendingStudentVerifications.value.length)
@@ -1272,7 +1272,7 @@ export function useWelfareUiState() {
   }
 
   function addResourceApplicationItem(resourceType: ResourceType, options: { resourceSubtype?: string } = {}) {
-    const config = RESOURCE_TYPE_CONFIGS.find(item => item.resourceType === resourceType)
+    const config = resourceTypeConfigs.value.find(item => item.resourceType === resourceType)
     if (!config)
       throw new Error('资源类型不存在')
     if (!resourceApplicationForm.selectedResourceTypes.includes(resourceType))
