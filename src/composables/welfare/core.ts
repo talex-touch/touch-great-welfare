@@ -991,9 +991,9 @@ export const BASE_REQUEST_COST: Record<RequestKind, number> = {
 }
 
 export const ACTIVITY_DISCOUNT_RATE = 0.01
-export const ACTIVITY_DAYS = 8
+export const ACTIVITY_DAYS = 15
 export const ACTIVITY_START_AT = '2026-06-01T00:00:00+08:00'
-export const ACTIVITY_END_AT = '2026-06-09T00:00:00+08:00'
+export const ACTIVITY_END_AT = '2026-06-15T23:59:59.999+08:00'
 export const ACTIVITY_NAME = '限时 0.1 折'
 export const LLM_API_BUDGET_ACTIVITY_TIERS = [
   { minBudgetUsd: 500, discountRate: 1 },
@@ -1635,7 +1635,7 @@ function isPromotionActive(referenceTime = now()) {
   const time = new Date(referenceTime).getTime()
   const start = new Date(ACTIVITY_START_AT).getTime()
   const end = new Date(ACTIVITY_END_AT).getTime()
-  return Number.isFinite(time) && time >= start && time < end
+  return Number.isFinite(time) && time >= start && time <= end
 }
 
 export function calculateActivityPrice(cost: number, referenceTime = now()) {

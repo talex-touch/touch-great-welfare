@@ -800,21 +800,32 @@
 }
 
 .dark .resource-form-section {
-  border-color: rgba(52, 211, 153, 0.16);
-  background: #000;
+  border: 0;
+  background: transparent;
 }
 
-.dark .resource-section-heading h3 {
+.dark .resource-section-divider.tx-divider {
+  --tx-divider-color: rgba(255, 255, 255, 0.16);
   color: #e2e8f0;
 }
 
-.dark .resource-section-heading p {
+.dark .resource-section-title b {
+  color: #86efac;
+  background: rgba(16, 185, 129, 0.18);
+}
+
+.dark .resource-section-note,
+.dark .resource-detail-divider.tx-divider {
   color: #94a3b8;
 }
 
-.dark .resource-section-heading > span {
-  color: #86efac;
-  background: rgba(16, 185, 129, 0.18);
+.dark .resource-item-group + .resource-item-group,
+.dark .resource-detail-row + .resource-detail-row {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dark .resource-item-group__head h3 {
+  color: #e2e8f0;
 }
 
 .dark .resource-consent-card {

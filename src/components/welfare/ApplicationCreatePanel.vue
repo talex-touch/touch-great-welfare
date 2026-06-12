@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RequestKind, ResourcePoolCategoryId, ResourcePoolItemConfig, ResourceTermId, ResourceType } from '~/composables/welfare'
-import { TxButton, TxCheckbox, TxDatePicker, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
+import { TxButton, TxCheckbox, TxDatePicker, TxDivider, TxFileUploader, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxSlider } from '@talex-touch/tuffex'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -1151,29 +1151,6 @@ onBeforeUnmount(() => {
 
       <div v-else class="resource-workbench">
         <aside class="resource-workbench-sidebar">
-          <div
-            class="resource-consent-card"
-            :class="{ 'is-accepted': hasAcceptedAllResourceTerms }"
-            role="checkbox"
-            tabindex="0"
-            :aria-checked="hasAcceptedAllResourceTerms"
-            @click="toggleRequiredResourceTerms"
-            @keydown.enter.prevent="toggleRequiredResourceTerms"
-            @keydown.space.prevent="toggleRequiredResourceTerms"
-          >
-            <DataNotice mode="compact" title="申请提交与免责确认" timing="before" />
-            <span class="resource-consent-action">
-              <TxCheckbox :model-value="hasAcceptedAllResourceTerms" variant="checkmark" />
-              <span>
-                <b>我已阅读并同意本申请所需协议</b>
-                <small>当前资源类型将合并 {{ selectedResourceTerms.length }} 份协议。</small>
-              </span>
-              <TxButton class="resource-terms-open" size="sm" variant="secondary" @click.stop="openTermsDialog">
-                展开协议
-              </TxButton>
-            </span>
-          </div>
-
           <div class="resource-pool-card">
             <div class="resource-pool-card__head">
               <div>
@@ -1230,15 +1207,14 @@ onBeforeUnmount(() => {
         <main class="resource-workbench-main">
           <div class="resource-workbench-scroll">
             <section class="resource-form-section">
-              <div class="resource-section-heading">
-                <span>01</span>
-                <div>
-                  <h3>申请信息</h3>
-                  <p>填写申请背景、紧急程度与期望生效时间。</p>
-                </div>
-              </div>
+              <TxDivider class="resource-section-divider" text-placement="left" gradient="end">
+                <span class="resource-section-title"><b>01</b>申请信息</span>
+              </TxDivider>
+              <p class="resource-section-note">
+                填写申请背景、紧急程度与期望生效时间。
+              </p>
 
-              <div class="gap-5 grid md:grid-cols-2">
+              <div class="resource-form-grid">
                 <label class="gap-2 grid md:col-span-2">
                   <span class="field-label">申请标题</span>
                   <TxInput v-model="resourceApplicationForm.title" placeholder="例如：客服 Agent 数据库 + 大模型 + GPU 申请" />
@@ -1272,22 +1248,19 @@ onBeforeUnmount(() => {
             </section>
 
             <section class="resource-form-section">
-              <div class="resource-section-heading">
-                <span>02</span>
-                <div>
-                  <h3>资源明细</h3>
-                  <p>按资源类型分组填写规格、额度、用途和预估成本。</p>
-                </div>
-              </div>
+              <TxDivider class="resource-section-divider" text-placement="left" gradient="end">
+                <span class="resource-section-title"><b>02</b>资源明细</span>
+              </TxDivider>
+              <p class="resource-section-note">
+                按资源类型分组填写规格、额度、用途和预估成本。
+              </p>
 
-              <div class="space-y-5">
-                <div v-for="group in groupedResourceItems" :key="group.config!.resourceType" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-black">
-                  <div class="flex flex-wrap gap-3 items-center justify-between">
+              <div class="resource-group-list">
+                <div v-for="group in groupedResourceItems" :key="group.config!.resourceType" class="resource-item-group">
+                  <div class="resource-item-group__head">
                     <div>
-                      <h3 class="text-xl fw-900">
-                        {{ group.config!.displayName }}
-                      </h3>
-                      <p class="field-hint mt-1">
+                      <h3>{{ group.config!.displayName }}</h3>
+                      <p class="field-hint">
                         审批组：{{ group.config!.approverGroup }}
                       </p>
                     </div>
@@ -1296,16 +1269,18 @@ onBeforeUnmount(() => {
                     </TxButton>
                   </div>
 
-                  <div class="mt-4 space-y-4">
-                    <div v-for="item in group.items" :key="item.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-black">
-                      <div class="flex flex-wrap gap-3 items-center justify-between">
-                        <b>资源明细</b>
+                  <div class="resource-item-list">
+                    <div v-for="item in group.items" :key="item.id" class="resource-detail-row">
+                      <TxDivider class="resource-detail-divider" text-placement="left" dashed>
+                        <span>资源明细</span>
+                      </TxDivider>
+                      <div class="resource-detail-head">
                         <TxButton size="sm" variant="danger" @click="removeResourceApplicationItem(item.id)">
                           删除
                         </TxButton>
                       </div>
 
-                      <div class="mt-4 gap-4 grid md:grid-cols-2">
+                      <div class="resource-detail-grid">
                         <label v-if="item.resourceType !== 'llm_api_quota'" class="gap-2 grid">
                           <span class="field-label">子类型</span>
                           <TxSelect v-model="item.resourceSubtype" panel-background="pure">
@@ -1375,14 +1350,14 @@ onBeforeUnmount(() => {
                           <label class="gap-2 grid md:col-span-2"><span class="field-label">{{ genericResourcePurposeLabel(item.resourceType) }}</span><RichTextEditor v-model="item.payload.purpose" :min-height="120" :placeholder="genericResourcePurposePlaceholder(item.resourceType)" /></label>
                         </template>
                       </div>
-                      <div class="resource-item-attachments mt-4">
+                      <div class="resource-item-attachments">
                         <div class="mb-2 flex gap-3 items-center justify-between">
                           <span class="field-label">明细附件 / 图片</span>
                           <span class="field-hint">{{ formatBytes(resourceItemAttachmentBytes(item)) }} / {{ formatBytes(MAX_ATTACHMENT_BYTES) }}</span>
                         </div>
                         <TxFileUploader v-model="item.payload.attachments" :max="20" button-text="上传明细附件" drop-text="把本条明细的图片和补充材料拖拽到这里" hint-text="仅用于当前资源明细；所有明细附件总大小不超过 200MB。" />
                       </div>
-                      <div class="resource-estimate-card mt-4">
+                      <div class="resource-estimate-card">
                         <div class="flex flex-wrap gap-2 items-center justify-between">
                           <b>本项预估资源</b>
                           <span>{{ formatPoints(itemEstimateParts(item).discounted) }}</span>
@@ -1413,13 +1388,12 @@ onBeforeUnmount(() => {
             </section>
 
             <section class="resource-form-section">
-              <div class="resource-section-heading">
-                <span>03</span>
-                <div>
-                  <h3>结算与提交</h3>
-                  <p>核对资源成本、优惠与安全校验后直接提交。</p>
-                </div>
-              </div>
+              <TxDivider class="resource-section-divider" text-placement="left" gradient="end">
+                <span class="resource-section-title"><b>03</b>结算与提交</span>
+              </TxDivider>
+              <p class="resource-section-note">
+                核对资源成本、优惠与安全校验后直接提交。
+              </p>
 
               <div v-if="(resourceApplicationPolicyStatus.turnstileEnabled && resourceApplicationPolicyStatus.turnstileSiteKey) || applicationSecurityForm.message" class="resource-confirm-card resource-security-card">
                 <TurnstileChallenge
@@ -1551,6 +1525,29 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </section>
+          </div>
+
+          <div
+            class="resource-consent-card"
+            :class="{ 'is-accepted': hasAcceptedAllResourceTerms }"
+            role="checkbox"
+            tabindex="0"
+            :aria-checked="hasAcceptedAllResourceTerms"
+            @click="toggleRequiredResourceTerms"
+            @keydown.enter.prevent="toggleRequiredResourceTerms"
+            @keydown.space.prevent="toggleRequiredResourceTerms"
+          >
+            <DataNotice mode="compact" title="申请提交与免责确认" timing="before" />
+            <span class="resource-consent-action">
+              <TxCheckbox :model-value="hasAcceptedAllResourceTerms" variant="checkmark" />
+              <span>
+                <b>我已阅读并同意本申请所需协议</b>
+                <small>当前资源类型将合并 {{ selectedResourceTerms.length }} 份协议。</small>
+              </span>
+              <TxButton class="resource-terms-open" size="sm" variant="secondary" @click.stop="openTermsDialog">
+                展开协议
+              </TxButton>
+            </span>
           </div>
 
           <div class="resource-action-bar">

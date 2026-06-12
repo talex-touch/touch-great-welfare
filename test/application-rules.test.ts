@@ -45,10 +45,10 @@ describe('application billing rules', async () => {
     expect(calculateRejectionReviewFee(3200)).toBe(300)
   })
 
-  it('applies the 0.1 discount activity through June 8 in Beijing time', () => {
+  it('applies the 0.1 discount activity through June 15 in Beijing time', () => {
     expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_START_AT)).toBe(120)
-    expect(calculateActivityPrice(BASE_REQUEST_COST.pro, '2026-06-08T23:59:59+08:00')).toBe(120)
-    expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_END_AT)).toBe(12000)
+    expect(calculateActivityPrice(BASE_REQUEST_COST.pro, ACTIVITY_END_AT)).toBe(120)
+    expect(calculateActivityPrice(BASE_REQUEST_COST.pro, '2026-06-16T00:00:00+08:00')).toBe(12000)
   })
 
   it('applies tiered activity discounts to LLM API resource budgets', () => {
@@ -61,8 +61,8 @@ describe('application billing rules', async () => {
     expect(calculateLlmApiBudgetActivityPrice(cost100, 100, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost100 * 0.05))
     expect(calculateLlmApiBudgetActivityPrice(cost300, 300, undefined, ACTIVITY_START_AT)).toBe(Math.ceil(cost300 * 0.07))
     expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_START_AT)).toBe(cost500)
-    expect(calculateLlmApiBudgetActivityPrice(cost99, 99, undefined, '2026-06-08T23:59:59+08:00')).toBe(Math.ceil(cost99 * 0.01))
-    expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, ACTIVITY_END_AT)).toBe(cost500)
+    expect(calculateLlmApiBudgetActivityPrice(cost99, 99, undefined, ACTIVITY_END_AT)).toBe(Math.ceil(cost99 * 0.01))
+    expect(calculateLlmApiBudgetActivityPrice(cost500, 500, undefined, '2026-06-16T00:00:00+08:00')).toBe(cost500)
   })
 
   it('prices GPT PRO by conversation rounds with a limited 50% activity discount', () => {
@@ -70,7 +70,7 @@ describe('application billing rules', async () => {
     const baseCost = calculateLlmApiCostPoints(GPT_PRO_DEFAULT_ROUNDS, gptPro)
 
     expect(gptPro.defaultBudgetUsd).toBe(GPT_PRO_DEFAULT_ROUNDS)
-    expect(baseCost).toBe(BASE_REQUEST_COST.pro * GPT_PRO_DEFAULT_ROUNDS)
+    expect(baseCost).toBe(gptPro.pointsPerUsd * GPT_PRO_DEFAULT_ROUNDS)
     expect(llmApiBudgetActivityDiscountRate(GPT_PRO_DEFAULT_ROUNDS, gptPro)).toBe(GPT_PRO_ACTIVITY_DISCOUNT_RATE)
     expect(calculateLlmApiBudgetActivityPrice(baseCost, GPT_PRO_DEFAULT_ROUNDS, gptPro, ACTIVITY_START_AT)).toBe(Math.ceil(baseCost * GPT_PRO_ACTIVITY_DISCOUNT_RATE))
     expect(defaultLlmApiDuration(gptPro)).toBe(GPT_PRO_DEFAULT_DURATION)

@@ -295,7 +295,12 @@
   backdrop-filter: blur(18px);
 }
 
+.resource-workbench-main > .resource-consent-card {
+  margin-top: 1rem;
+}
+
 .resource-workbench-main > .resource-action-bar {
+  margin-top: 1rem;
   margin-bottom: 5rem;
 }
 
@@ -335,52 +340,122 @@
 
 .resource-form-section {
   display: grid;
-  gap: 1rem;
-  padding: 1rem;
-  border: 1px solid rgba(16, 185, 129, 0.14);
-  border-radius: 18px;
-  background: rgba(240, 253, 244, 0.68);
+  gap: 0.78rem;
+  padding: 0.35rem 0 0.9rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
-.resource-section-heading {
-  display: flex;
-  gap: 0.85rem;
-  align-items: flex-start;
+.resource-form-section + .resource-form-section {
+  padding-top: 0.1rem;
 }
 
-.resource-section-heading > span {
+.resource-section-divider.tx-divider {
+  --tx-divider-color: rgba(15, 23, 42, 0.14);
+  --tx-divider-gap: 0.65rem;
+  margin: 0.15rem 0 0;
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.resource-section-title {
   display: inline-flex;
-  min-width: 2rem;
-  height: 2rem;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: 950;
+}
+
+.resource-section-title b {
+  display: inline-flex;
+  min-width: 1.65rem;
+  height: 1.65rem;
   border-radius: 999px;
   color: #047857;
   background: rgba(16, 185, 129, 0.12);
   align-items: center;
   justify-content: center;
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   font-weight: 950;
 }
 
-.resource-section-heading h3 {
+.resource-section-note {
+  margin: -0.3rem 0 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1.42;
+}
+
+.resource-form-grid,
+.resource-detail-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.resource-group-list,
+.resource-item-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.resource-item-group {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.15rem 0 0;
+}
+
+.resource-item-group + .resource-item-group {
+  padding-top: 0.25rem;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.resource-item-group__head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.resource-item-group__head h3 {
   margin: 0;
   color: #0f172a;
   font-size: 1rem;
   font-weight: 950;
 }
 
-.resource-section-heading p {
-  margin: 0.2rem 0 0;
+.resource-detail-row {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.2rem 0 0.65rem;
+}
+
+.resource-detail-row + .resource-detail-row {
+  padding-top: 0.35rem;
+  border-top: 1px dashed rgba(15, 23, 42, 0.12);
+}
+
+.resource-detail-divider.tx-divider {
+  --tx-divider-color: rgba(15, 23, 42, 0.1);
+  --tx-divider-gap: 0.55rem;
+  margin: 0;
   color: #64748b;
-  font-size: 0.82rem;
-  font-weight: 780;
-  line-height: 1.45;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.resource-detail-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -0.45rem;
 }
 
 .resource-workbench {
   display: grid;
   margin-top: 1rem;
   padding-bottom: 6rem;
-  grid-template-columns: minmax(0, 1fr) minmax(17rem, 0.36fr);
+  grid-template-columns: minmax(0, 1fr) minmax(15.5rem, 0.31fr);
   gap: 1rem;
   align-items: start;
   overflow: visible;
@@ -395,15 +470,14 @@
   position: sticky;
   top: 1rem;
   display: flex;
+  min-height: 0;
   max-height: calc(100vh - var(--cms-header-height, 72px) - 2rem);
   max-height: calc(100dvh - var(--cms-header-height, 72px) - 2rem);
   flex-direction: column;
-  gap: 0.85rem;
   grid-column: 2;
   grid-row: 1;
-  overflow: hidden auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: visible;
+  align-self: start;
 }
 
 .resource-workbench-main {
@@ -434,41 +508,43 @@
   --tx-color-primary: #000;
   --tx-color-primary-light-9: rgba(0, 0, 0, 0.08);
   display: grid;
-  gap: 0.8rem;
-  overflow: visible;
+  max-height: 100%;
+  overflow: hidden auto;
   padding: 0;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .resource-pool-card__head {
-  padding: 1rem 1rem 0.2rem;
+  padding: 0.8rem 0.85rem 0.15rem;
 }
 
 .resource-pool-card__head h3 {
   margin: 0;
   color: #0f172a;
-  font-size: 1.18rem;
+  font-size: 1.04rem;
   font-weight: 950;
 }
 
 .resource-pool-card__head p {
-  margin: 0.25rem 0 0;
+  margin: 0.18rem 0 0;
   color: #64748b;
-  font-size: 0.82rem;
-  line-height: 1.35;
+  font-size: 0.74rem;
+  line-height: 1.3;
 }
 
 .resource-pool-search.tx-input {
   display: flex;
-  gap: 0.65rem;
+  gap: 0.5rem;
   align-items: center;
-  width: calc(100% - 2rem);
-  max-width: calc(100% - 2rem);
-  margin: 0 1rem 0.1rem;
-  min-height: 2.75rem;
-  padding: 0 0.75rem;
+  width: calc(100% - 1.7rem);
+  max-width: calc(100% - 1.7rem);
+  margin: 0 0.85rem 0.75rem;
+  min-height: 2.35rem;
+  padding: 0 0.62rem;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 10px;
   background: rgba(248, 250, 252, 0.88);
@@ -484,7 +560,7 @@
 
 .resource-pool-search .tx-input__icon--prefix {
   color: #64748b;
-  font-size: 1.1rem;
+  font-size: 0.98rem;
 }
 
 .resource-pool-search .tx-input__inner {
@@ -496,7 +572,7 @@
 }
 
 .resource-pool-search .tx-input__inner {
-  height: 2.4rem !important;
+  height: 2.05rem !important;
   width: 100% !important;
   padding: 0 !important;
   border-color: transparent !important;
@@ -524,12 +600,12 @@
 
 .resource-pool-group__header {
   display: flex;
-  gap: 0.7rem;
+  gap: 0.55rem;
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  min-height: 3rem;
-  padding: 0.58rem 1rem;
+  min-height: 2.55rem;
+  padding: 0.45rem 0.85rem;
   border: 0;
   color: inherit;
   background: transparent;
@@ -545,14 +621,14 @@
 
 .resource-pool-group__title {
   display: flex;
-  gap: 0.6rem;
+  gap: 0.48rem;
   align-items: center;
   min-width: 0;
 }
 
 .resource-pool-group__title b {
   color: #0f172a;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
   font-weight: 950;
 }
 
@@ -560,18 +636,18 @@
 .resource-pool-group__icon {
   flex: 0 0 auto;
   color: #475569;
-  font-size: 0.98rem;
+  font-size: 0.86rem;
 }
 
 .resource-pool-group__count {
   flex: 0 0 auto;
-  min-width: 1.82rem;
-  padding: 0.12rem 0.34rem;
+  min-width: 1.6rem;
+  padding: 0.08rem 0.28rem;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 6px;
   color: #475569;
   background: rgba(248, 250, 252, 0.82);
-  font-size: 0.7rem;
+  font-size: 0.64rem;
   font-weight: 900;
   text-align: center;
 }
@@ -579,17 +655,17 @@
 .resource-pool-items {
   display: grid;
   gap: 0;
-  padding: 0 1rem 0.65rem 2.9rem;
+  padding: 0 0.85rem 0.5rem 2.45rem;
 }
 
 .resource-pool-item {
   position: relative;
   display: flex;
-  gap: 0.6rem;
+  gap: 0.46rem;
   align-items: center;
   width: 100%;
-  min-height: 2.05rem;
-  padding: 0.26rem 0;
+  min-height: 1.74rem;
+  padding: 0.18rem 0;
   border: 0;
   color: inherit;
   background: transparent;
@@ -603,18 +679,18 @@
 .resource-pool-item::before {
   content: '';
   position: absolute;
-  top: -0.2rem;
-  bottom: -0.2rem;
-  left: -1.36rem;
+  top: -0.18rem;
+  bottom: -0.18rem;
+  left: -1.08rem;
   border-left: 1px solid rgba(203, 213, 225, 0.8);
 }
 
 .resource-pool-item::after {
   content: '';
   position: absolute;
-  top: 1.02rem;
-  left: -1.36rem;
-  width: 0.72rem;
+  top: 0.87rem;
+  left: -1.08rem;
+  width: 0.58rem;
   border-top: 1px solid rgba(203, 213, 225, 0.8);
 }
 
@@ -652,6 +728,8 @@
 }
 
 .resource-pool-item .tx-checkbox__box {
+  width: 1.02rem !important;
+  height: 1.02rem !important;
   border-color: #000 !important;
   background: transparent !important;
 }
@@ -668,7 +746,7 @@
 .resource-pool-item__content {
   display: inline-flex;
   flex: 1 1 auto;
-  gap: 0.35rem;
+  gap: 0.28rem;
   align-items: center;
   min-width: 0;
   max-width: 100%;
@@ -678,7 +756,7 @@
   color: #0f172a;
   overflow: hidden;
   min-width: 0;
-  font-size: 0.88rem;
+  font-size: 0.78rem;
   font-weight: 820;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -694,12 +772,12 @@
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
-  width: 1rem;
-  height: 1rem;
+  width: 0.86rem;
+  height: 0.86rem;
   color: #64748b;
   align-items: center;
   justify-content: center;
-  font-size: 0.86rem;
+  font-size: 0.76rem;
   cursor: help;
 }
 
@@ -1109,6 +1187,11 @@
     grid-column: 1;
     grid-row: auto;
     order: 2;
+    overflow: visible;
+  }
+
+  .resource-pool-card {
+    max-height: none;
     overflow: visible;
   }
 
