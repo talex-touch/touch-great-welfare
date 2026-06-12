@@ -382,6 +382,62 @@ describe('notification dispatch', () => {
     expect(d1.data.queries.some(item => item.query.includes('select state') && item.query.includes('welfare_app_state'))).toBe(false)
   })
 
+  it('does not send a separate approval notification before auto provisioning resource items', async () => {
+    const stored = state()
+    const d1 = createMemoryD1()
+    const previous = {
+      ...stored,
+      applications: [{
+        id: 'app_1',
+        userId: 'user_1',
+        type: 'resource' as const,
+        title: 'LLM 额度申请',
+        description: '请支持自动发放资源',
+        hasOpenSourceBadge: false,
+        attachments: [],
+        status: 'in_review' as const,
+        cost: 0,
+        costCharged: true,
+        createdAt: '2026-06-01T00:00:00.000Z',
+        selectedResourceTypes: ['llm_api_quota' as const],
+        resourceItems: [{
+          id: 'item_1',
+          applicationId: 'app_1',
+          resourceType: 'llm_api_quota' as const,
+          resourceSubtype: 'codex',
+          payload: { model: 'codex' },
+          approverGroup: 'AI 平台/成本负责人',
+          approvalStatus: 'pending' as const,
+          provisionStatus: 'not_required' as const,
+          createdAt: '2026-06-01T00:00:00.000Z',
+          updatedAt: '2026-06-01T00:00:00.000Z',
+        }],
+      }],
+    }
+    const next = {
+      ...stored,
+      applications: [{
+        ...previous.applications[0],
+        status: 'pending_allocation' as const,
+        answer: '<p>资源申请审批已更新：LLM API 额度 / codex / 已通过。</p>',
+        resourceItems: [{
+          ...previous.applications[0].resourceItems[0],
+          approvalStatus: 'approved' as const,
+          provisionStatus: 'pending' as const,
+        }],
+      }],
+    }
+    d1.setState(next)
+
+    vi.stubGlobal('crypto', globalThis.crypto)
+    await notifications.dispatchWelfareStateChangeNotifications({
+      LOCAL_DB: d1 as unknown as D1Database,
+    }, previous, next)
+
+    expect(d1.data.notifications).toHaveLength(0)
+    expect(d1.data.deliveries).toHaveLength(0)
+  })
+
   it('enqueues state-change notifications when async jobs are configured', async () => {
     const stored = state()
     const d1 = createMemoryD1()
