@@ -1598,6 +1598,13 @@ export function useWelfareUiState() {
     await welfare.reloadWelfareState()
   }
 
+  async function retryResourceProvision(applicationId: string, itemId: string) {
+    const result = await provisionApplicationReward(welfare.currentUser.value!.id, applicationId, itemId)
+    applyAutoProvisionMessage(result)
+    await welfare.reloadWelfareState()
+    return result
+  }
+
   async function completeApplicationAllocation(applicationId: string) {
     await completeApplicationAllocationAction({
       applicationId,
@@ -3631,6 +3638,7 @@ export function useWelfareUiState() {
     allocationDraftFor,
     approveResourceItem,
     completeResourceProvision,
+    retryResourceProvision,
     completeApplicationAllocation,
     requestResourceLifecycle,
     updateResourceLifecycle,

@@ -49,10 +49,11 @@ const {
   allocationDraftFor,
   approveResourceItem,
   completeResourceProvision,
+  retryResourceProvision,
   completeApplicationAllocation,
 } = useWelfareUiState()
 
-const { runSafely } = useWelfareFeedback()
+const { notify, runSafely } = useWelfareFeedback()
 const showPro = computed(() => props.kind === 'all' || props.kind === 'pro')
 const showStudent = computed(() => props.kind === 'all' || props.kind === 'student')
 const canShowReviewQueues = computed(() => (isAdmin.value && (showPro.value || showStudent.value)) || (canCrowdReview.value && showPro.value))
@@ -66,6 +67,8 @@ const visibleReviewApplications = computed(() => {
 const selectedReviewApplicationId = ref<string | undefined>()
 const isReviewApplicationDialogOpen = ref(false)
 const selectedReviewApplication = computed(() => state.applications.find(item => item.id === selectedReviewApplicationId.value))
+const retryingResourceProvisionItems = ref<Record<string, boolean>>({})
+const autoProvisionResourceTypes = new Set(['llm_api_quota', 'database'])
 const reviewDraftKey = 'welfare:review-drafts'
 const crowdReviewDraftKey = 'welfare:crowd-review-drafts'
 
@@ -139,6 +142,39 @@ function onReviewResourceItem(applicationId: string, itemId: string) {
 
 function onCompleteProvision(applicationId: string, itemId: string) {
   runSafely(() => completeResourceProvision(applicationId, itemId), '人工开通结果已记录并已通知用户')
+}
+
+function canRetryResourceProvision(item: { approvalStatus: string, provisionStatus?: string, resourceType: string }) {
+  return isAdmin.value
+    && ['approved', 'adjusted_approved'].includes(item.approvalStatus)
+    && item.provisionStatus !== 'completed'
+    && autoProvisionResourceTypes.has(item.resourceType)
+}
+
+async function onRetryResourceProvision(applicationId: string, item: { id: string, approvalStatus: string, provisionStatus?: string, resourceType: string }) {
+  if (!canRetryResourceProvision(item) || retryingResourceProvisionItems.value[item.id])
+    return
+
+  retryingResourceProvisionItems.value = { ...retryingResourceProvisionItems.value, [item.id]: true }
+  try {
+    const result = await retryResourceProvision(applicationId, item.id)
+    if (result.status === 'pending')
+      notify('已重新进入后台自动发放队列')
+    else if (result.status === 'pending_manual')
+      notify(`自动发放失败，已转入待人工分配：${result.error}`)
+    else if (result.status === 'skipped')
+      notify(result.reason ? `已进入待人工分配：${result.reason}` : '已进入待人工分配')
+    else
+      notify('自动发放重试已完成')
+  }
+  catch (error) {
+    notify(error instanceof Error ? error.message : '自动发放重试失败')
+  }
+  finally {
+    const next = { ...retryingResourceProvisionItems.value }
+    delete next[item.id]
+    retryingResourceProvisionItems.value = next
+  }
 }
 
 function onCompleteApplicationAllocation(applicationId: string) {
@@ -393,8 +429,19 @@ onMounted(() => {
               </div>
 
               <div v-else-if="['approved', 'adjusted_approved'].includes(resourceItem.approvalStatus)" class="mt-3 p-3 rounded-2xl bg-white dark:bg-black/20">
-                <div class="text-xs fw-900">
-                  发放状态：{{ resourceProvisionStatusText(resourceItem.provisionStatus) }}
+                <div class="flex flex-wrap gap-2 items-center justify-between">
+                  <div class="text-xs fw-900">
+                    发放状态：{{ resourceProvisionStatusText(resourceItem.provisionStatus) }}
+                  </div>
+                  <TxButton
+                    v-if="canRetryResourceProvision(resourceItem)"
+                    size="sm"
+                    variant="secondary"
+                    :disabled="retryingResourceProvisionItems[resourceItem.id]"
+                    @click="onRetryResourceProvision(item.id, resourceItem)"
+                  >
+                    {{ retryingResourceProvisionItems[resourceItem.id] ? '重试中...' : '重试自动发放' }}
+                  </TxButton>
                 </div>
                 <div v-if="resourceItemApprovedFields(resourceItem).length" class="mt-2 gap-2 grid md:grid-cols-2">
                   <div v-for="field in resourceItemApprovedFields(resourceItem)" :key="`${resourceItem.id}-approved-${field.label}`" class="application-detail-stat">
