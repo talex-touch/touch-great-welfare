@@ -76,8 +76,8 @@ catalogs:
       version: 3.2.5
   frontend:
     '@talex-touch/tuffex':
-      specifier: ^0.3.8
-      version: 0.3.8
+      specifier: ^0.3.9
+      version: 0.3.9
     '@vueuse/core':
       specifier: ^14.2.1
       version: 14.2.1
@@ -98,7 +98,7 @@ importers:
     dependencies:
       '@talex-touch/tuffex':
         specifier: catalog:frontend
-        version: 0.3.8(vue@3.5.29(typescript@5.9.3))
+        version: 0.3.9(vue@3.5.29(typescript@5.9.3))
       '@vueuse/core':
         specifier: catalog:frontend
         version: 14.2.1(vue@3.5.29(typescript@5.9.3))
@@ -1269,8 +1269,8 @@ packages:
     peerDependencies:
       eslint: ^9.0.0 || ^10.0.0
 
-  '@talex-touch/tuffex@0.3.8':
-    resolution: {integrity: sha512-UsB22/4rjimUCYqywVC1muUj+psRoZwfP+DxPoqvznq9YkdoSZ1eXyxjxh8niiF4G5Xrxub56G/8I0g24L0BnQ==}
+  '@talex-touch/tuffex@0.3.9':
+    resolution: {integrity: sha512-JN+qrq0dJGZbx+CgxrDL1GsuEHZEA2u/VLcpBel6E71qSKyzy9UpRMpE3qswz2Khi6ZJbQtA+tV2CLj2HEaXaA==}
     peerDependencies:
       vue: ^3.5.27
 
@@ -4664,7 +4664,7 @@ snapshots:
       estraverse: 5.3.0
       picomatch: 4.0.3
 
-  '@talex-touch/tuffex@0.3.8(vue@3.5.29(typescript@5.9.3))':
+  '@talex-touch/tuffex@0.3.9(vue@3.5.29(typescript@5.9.3))':
     dependencies:
       '@better-scroll/core': 2.5.1
       '@better-scroll/pull-down': 2.5.1

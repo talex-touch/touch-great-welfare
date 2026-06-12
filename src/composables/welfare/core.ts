@@ -1000,9 +1000,9 @@ export const LLM_API_BUDGET_ACTIVITY_TIERS = [
   { minBudgetUsd: 300, discountRate: 0.07 },
   { minBudgetUsd: 100, discountRate: 0.05 },
 ] as const
-export const PRO_BASE_COST = 10880
-export const PRO_PUBLIC_COST = BASE_REQUEST_COST.pro
-export const PRO_CONTEXT_APPEND_COST = 10880
+export const PRO_BASE_COST = 600
+export const PRO_PUBLIC_COST = 120
+export const PRO_CONTEXT_APPEND_COST = 600
 export const PRO_STANDARD_PROCESSING_HOURS = 72
 export const PRO_EXPEDITED_PROCESSING_HOURS = 48
 export const PRO_EXPEDITE_COST = 1100
@@ -1010,8 +1010,8 @@ export const GPT_PRO_MODEL_KEY = 'gpt-pro'
 export const GPT_PRO_DEFAULT_ROUNDS = 5
 export const GPT_PRO_MIN_ROUNDS = 1
 export const GPT_PRO_MAX_ROUNDS = 50
-export const GPT_PRO_ACTIVITY_DISCOUNT_RATE = 0.5
-export const GPT_PRO_ACTIVITY_NAME = 'GPT PRO 限量五折'
+export const GPT_PRO_ACTIVITY_DISCOUNT_RATE = 1
+export const GPT_PRO_ACTIVITY_NAME = 'GPT PRO 轮次套餐'
 export const GPT_PRO_DEFAULT_DURATION = '7 天'
 export const LLM_API_DEFAULT_MODEL_KEY = 'codex'
 export const LLM_API_ALLOWED_MODEL_KEYS = ['codex', 'gpt-pro', 'gpt-models', 'claude-code', 'deepseek', 'openai-image', 'seedance', 'gemini-image', 'mimo'] as const

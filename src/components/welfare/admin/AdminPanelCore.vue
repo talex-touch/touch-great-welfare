@@ -5,6 +5,7 @@ import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumber
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
+import { sendProviderEmailTest } from '~/composables/notifications'
 import { buildResourceGovernanceSnapshot, formatBytes, formatDate, formatPoints, isGptProModel, MAX_ATTACHMENT_BYTES, normalizeVerificationType, RESOURCE_TYPE_CONFIGS, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
@@ -15,6 +16,7 @@ import VerificationAttachmentGrid from '../VerificationAttachmentGrid.vue'
 
 const {
   state,
+  currentUser,
   isAdmin,
   reloadWelfareState,
   pointDrafts,
@@ -370,7 +372,27 @@ const announcementChannelOptions = [
 ] as const
 
 const notificationTemplateOptions = NOTIFICATION_TEMPLATE_OPTIONS
+type NotificationConfigSectionId = 'providers' | 'templates' | 'banner' | 'announcements' | 'logs'
+const activeNotificationConfigSection = ref<NotificationConfigSectionId>('providers')
+const activeEmailTemplateId = ref(notificationTemplateOptions[0].id)
+const emailTemplateDrafts = reactive(Object.fromEntries(notificationTemplateOptions.map(template => [template.id, defaultEmailTemplateDraft(template)])) as Record<string, { subjectTemplate: string, bodyTemplate: string }>)
+const emailTemplateTestForm = reactive({
+  emailAddress: '',
+  provider: 'feishu_mail' as 'auto' | 'feishu_mail' | 'resend' | 'smtp',
+  variablesJson: JSON.stringify({
+    title: '模板测试通知',
+    body: '这里是根据变量渲染出的测试正文。',
+    recipientName: '测试用户',
+    siteName: 'Touch Great Welfare',
+    actionUrl: 'https://example.com/dashboard/notifications',
+    createdAt: '2026/06/12 12:00',
+  }, null, 2),
+  sending: false,
+  message: '',
+})
 const selectedAnnouncementTemplate = computed(() => notificationTemplateOption(adminAnnouncementForm.templateId))
+const selectedEmailTemplate = computed(() => notificationTemplateOption(activeEmailTemplateId.value))
+const selectedEmailTemplateDraft = computed(() => emailTemplateDrafts[activeEmailTemplateId.value])
 
 const auditAreaFilterOptions = [
   { value: ALL_FILTER, label: '全部模块' },
@@ -2074,6 +2096,152 @@ function notificationVariableToken(key: string) {
   return `{{${key}}}`
 }
 
+function formatEmailTemplateDeliveryAttempt(attempt: { providerLabel: string, status: string, message: string }) {
+  const statusText = attempt.status === 'sent' ? '成功' : attempt.status === 'skipped' ? '跳过' : '失败'
+  return `${attempt.providerLabel} ${statusText}（${attempt.message || '未返回详情'}）`
+}
+
+function parseEmailTemplateVariables() {
+  try {
+    const parsed = JSON.parse(emailTemplateTestForm.variablesJson || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('变量 JSON 必须是对象')
+    return {
+      ok: true as const,
+      variables: Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key, String(value ?? '')])),
+      error: '',
+    }
+  }
+  catch (error) {
+    return {
+      ok: false as const,
+      variables: {} as Record<string, string>,
+      error: error instanceof Error ? error.message : '变量 JSON 格式错误',
+    }
+  }
+}
+
+function renderEmailTemplateText(value: string, variables: Record<string, string>) {
+  return value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => variables[key] ?? '')
+}
+
+function defaultEmailTemplateDraft(template: { subjectExample: string, bodyExample: string }) {
+  return {
+    subjectTemplate: template.subjectExample,
+    bodyTemplate: templateExampleToHtml(template.bodyExample),
+  }
+}
+
+function templateExampleToHtml(value: string) {
+  if (/<\/?[a-z][\s\S]*>/i.test(value))
+    return value
+  return value
+    .split(/\n{2,}/)
+    .map(paragraph => `<p>${escapeEmailPreviewText(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('\n')
+}
+
+function isFullEmailHtml(value: string) {
+  return /<!doctype\s+html|<html[\s>]/i.test(value)
+}
+
+function escapeEmailPreviewText(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function emailPreviewHtml(subject: string, body: string) {
+  const safeSubject = escapeEmailPreviewText(subject || '（标题为空）')
+  const templateName = escapeEmailPreviewText(selectedEmailTemplate.value.name)
+  const bodyHtml = body.trim()
+    ? /<\/?[a-z][\s\S]*>/i.test(body) ? body : escapeEmailPreviewText(body).replace(/\n/g, '<br>')
+    : '<p>（正文为空）</p>'
+  if (isFullEmailHtml(bodyHtml))
+    return bodyHtml
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#f4f3ef;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:#141414}.shell{max-width:684px;margin:0 auto;padding:30px 18px}.brand{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;color:#9a9388;font-size:11px;text-transform:uppercase;letter-spacing:.14em}.brand b{color:#151515;font-size:12px;font-weight:800;letter-spacing:.16em}.paper{background:#fbfaf7;border:1px solid rgba(20,20,20,.08);border-radius:14px;box-shadow:0 24px 70px rgba(41,37,30,.12)}.inner{padding:30px 32px 32px}.meta{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:20px;border-bottom:1px solid rgba(20,20,20,.08)}.eyebrow{display:inline-flex;align-items:center;gap:8px;color:#6b645a;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.eyebrow:before{content:'';width:6px;height:6px;border-radius:999px;background:#0f8f62;box-shadow:0 0 0 5px rgba(15,143,98,.1)}.type{color:#a19a90;font-size:12px}h1{margin:22px 0 18px;color:#111;font-family:Georgia,'Times New Roman',serif;font-size:31px;font-weight:500;line-height:1.18;letter-spacing:-.035em}.body{max-width:560px;color:#38342e;font-size:15px;line-height:1.86}.body p{margin:0 0 14px}.body a{color:#0f7654;text-decoration:none;border-bottom:1px solid rgba(15,118,84,.35)}.body strong,.body b{color:#111}.body blockquote{margin:18px 0;padding:12px 16px;border-left:2px solid #111;background:rgba(20,20,20,.035);color:#4b463e}.body ul,.body ol{margin:12px 0 16px;padding-left:22px}.body li{margin:7px 0}.body img{max-width:100%;height:auto;border-radius:10px;border:1px solid rgba(20,20,20,.08)}.foot{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;color:#9a9388;font-size:11px;line-height:1.6}.seal{width:34px;height:34px;border:1px solid rgba(20,20,20,.1);border-radius:50%;display:grid;place-items:center;color:#0f8f62;font-size:16px;background:#fbfaf7}</style></head><body><div class="shell"><div class="brand"><b>Touch Great Welfare</b><span>System Notification</span></div><div class="paper"><div class="inner"><div class="meta"><div class="eyebrow">${templateName}</div><div class="type">Email Notice</div></div><h1>${safeSubject}</h1><div class="body">${bodyHtml}</div></div></div><div class="foot"><span>这是一封系统通知，请勿直接回复。<br>© Touch Great Welfare</span><span class="seal">✦</span></div></div></body></html>`
+}
+
+function notificationProviderPayloadFromForm() {
+  return {
+    resendApiKey: notificationProviderConfigForm.resendApiKey,
+    resendFromEmail: notificationProviderConfigForm.resendFromEmail,
+    vapidPublicKey: notificationProviderConfigForm.vapidPublicKey,
+    vapidPrivateKey: notificationProviderConfigForm.vapidPrivateKey,
+    vapidSubject: notificationProviderConfigForm.vapidSubject,
+    feishuMailEnabled: notificationProviderConfigForm.feishuMailEnabled,
+    feishuAppId: notificationProviderConfigForm.feishuAppId,
+    feishuAppSecret: notificationProviderConfigForm.feishuAppSecret,
+    feishuUserMailboxId: notificationProviderConfigForm.feishuUserMailboxId,
+    feishuSiteBaseUrl: notificationProviderConfigForm.feishuSiteBaseUrl,
+    feishuDailyLimit: Number(notificationProviderConfigForm.feishuDailyLimit),
+    smtpEnabled: notificationProviderConfigForm.smtpEnabled,
+    smtpHost: notificationProviderConfigForm.smtpHost,
+    smtpPort: Number(notificationProviderConfigForm.smtpPort),
+    smtpUsername: notificationProviderConfigForm.smtpUsername,
+    smtpPassword: notificationProviderConfigForm.smtpPassword,
+    smtpFromEmail: notificationProviderConfigForm.smtpFromEmail,
+    smtpFromName: notificationProviderConfigForm.smtpFromName,
+  }
+}
+
+const emailTemplateVariablesState = computed(() => parseEmailTemplateVariables())
+const emailTemplatePreview = computed(() => {
+  const variablesState = emailTemplateVariablesState.value
+  const variables = variablesState.ok ? variablesState.variables : {}
+  const subject = renderEmailTemplateText(selectedEmailTemplateDraft.value.subjectTemplate, variables).trim()
+  const body = renderEmailTemplateText(selectedEmailTemplateDraft.value.bodyTemplate, variables).trim()
+  return {
+    subject,
+    body,
+    html: emailPreviewHtml(subject, body),
+  }
+})
+
+function resetSelectedEmailTemplateDraft() {
+  const template = selectedEmailTemplate.value
+  emailTemplateDrafts[template.id] = defaultEmailTemplateDraft(template)
+}
+
+function sendSelectedEmailTemplateTest() {
+  runSafely(async () => {
+    if (!isAdmin.value)
+      throw new Error('需要管理员权限')
+    const user = currentUser.value
+    if (!user)
+      throw new Error('需要登录')
+    const variablesState = emailTemplateVariablesState.value
+    if (!variablesState.ok)
+      throw new Error(variablesState.error)
+
+    emailTemplateTestForm.sending = true
+    emailTemplateTestForm.message = ''
+    try {
+      const result = await sendProviderEmailTest(user.id, {
+        emailAddress: emailTemplateTestForm.emailAddress,
+        provider: emailTemplateTestForm.provider,
+        free: true,
+        providerConfig: notificationProviderPayloadFromForm(),
+        template: {
+          templateId: selectedEmailTemplate.value.id,
+          subjectTemplate: selectedEmailTemplateDraft.value.subjectTemplate,
+          bodyTemplate: selectedEmailTemplateDraft.value.bodyTemplate,
+          variables: variablesState.variables,
+        },
+      })
+      emailTemplateTestForm.emailAddress = result.emailAddress
+      emailTemplateTestForm.message = `模板测试已发送到 ${result.emailAddress}：${result.deliveryAttempts.map(formatEmailTemplateDeliveryAttempt).join('；')}`
+      await refreshSystemLogs()
+    }
+    finally {
+      emailTemplateTestForm.sending = false
+    }
+  }, '邮件模板测试已发送')
+}
+
 function handleFeishuMailAuthCallbackMessage() {
   const status = typeof route.query.feishu_mail_auth === 'string' ? route.query.feishu_mail_auth : ''
   if (!status)
@@ -2761,7 +2929,7 @@ onMounted(() => {
                       </div>
                       <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-7">
                         <label class="gap-2 grid">
-                          <span class="field-label">价格（积分/USD）</span>
+                          <span class="field-label">{{ model.key === 'gpt-pro' ? '价格（积分/轮）' : '价格（积分/USD）' }}</span>
                           <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
                         </label>
                         <label class="gap-2 grid">
@@ -3048,371 +3216,524 @@ onMounted(() => {
             通知配置
           </template>
 
-          <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
-              <span class="i-carbon-notification" />
-              通知供应商
-            </div>
-            <div class="text-sm mb-5 p-3 rounded-2xl" :class="notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
-              邮件：{{ notificationProviderConfigForm.emailConfigured ? '已配置' : '未配置' }}；飞书邮件：{{ notificationProviderConfigForm.feishuMailConfigured ? '已配置' : '未配置' }}；浏览器推送：{{ notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置' }}。
-            </div>
-            <div class="gap-5 grid lg:grid-cols-2">
-              <label class="gap-2 grid">
-                <span class="field-label">Resend API Key</span>
-                <TxInput v-model="notificationProviderConfigForm.resendApiKey" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.resendApiKeyMasked || '保存到服务端加密配置'" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">Resend 发件人</span>
-                <TxInput v-model="notificationProviderConfigForm.resendFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="Touch Great Welfare <notice@example.com>" />
-              </label>
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">Resend 测试收件邮箱</span>
-                <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
-                  <TxInput v-model="notificationProviderConfigForm.testResendEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingResendEmail" placeholder="user@example.com" />
-                  <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingResendEmail || !notificationProviderConfigForm.testResendEmailAddress" @click="sendResendProviderTest">
-                    {{ notificationProviderConfigForm.testingResendEmail ? '发送中...' : '测试 Resend 邮件' }}
-                  </TxButton>
-                </div>
-              </label>
-              <div class="p-4 border border-emerald-200 rounded-3xl bg-emerald-50/70 dark:border-emerald-400/20 dark:bg-emerald-950/10 lg:col-span-2">
-                <div class="flex flex-wrap gap-3 items-start justify-between">
-                  <div>
-                    <div class="text-base fw-900 flex gap-2 items-center">
-                      <span class="i-carbon-notification" />
-                      浏览器 Push
-                    </div>
-                    <p class="text-xs text-slate-600 leading-5 mt-1 dark:text-slate-300">
-                      VAPID 密钥由服务端自动生成并加密保存，无需手动填写。重新生成后，已订阅用户可能需要重新启用 Push。
-                    </p>
-                  </div>
-                  <TxStatusBadge :text="notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置'" :status="notificationProviderConfigForm.pushConfigured ? 'success' : 'warning'" size="sm" />
-                </div>
-                <div class="mt-4 p-3 rounded-2xl bg-white/75 dark:bg-white/8">
-                  <div class="text-xs text-slate-500 fw-900 dark:text-slate-400">
-                    Public Key
-                  </div>
-                  <div class="text-xs leading-5 mt-1 break-all dark:text-slate-200">
-                    {{ notificationProviderConfigForm.vapidPublicKey || '生成后自动显示公钥，私钥不会暴露在页面。' }}
-                  </div>
-                </div>
-                <div class="mt-4 flex flex-wrap gap-3 items-center">
-                  <TxButton v-if="!notificationProviderConfigForm.pushConfigured" size="sm" variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.generatingVapid" @click="generateVapidKeys(false)">
-                    {{ notificationProviderConfigForm.generatingVapid ? '生成中...' : '生成 Push 密钥' }}
-                  </TxButton>
-                  <TxButton v-else size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.generatingVapid" @click="openVapidRegenerateDialog">
-                    {{ notificationProviderConfigForm.generatingVapid ? '重新生成中...' : '重新生成密钥' }}
-                  </TxButton>
-                </div>
-              </div>
-              <label class="text-sm flex gap-2 items-center lg:col-span-2">
-                <TxCheckbox v-model="notificationProviderConfigForm.feishuMailEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用飞书邮件通知" />
-                启用飞书邮件通知
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">飞书 App ID</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuAppId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="cli_xxxxxx" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">飞书 App Secret</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuAppSecret" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuAppSecretMasked || '保存到服务端加密配置'" />
-              </label>
-              <div class="lg:col-span-2">
-                <div class="flex flex-wrap gap-3 items-center">
-                  <TxButton size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.authorizingFeishu || !notificationProviderConfigForm.feishuAppId" @click="authorizeFeishuProvider">
-                    {{ notificationProviderConfigForm.authorizingFeishu ? '跳转中...' : '授权飞书邮箱' }}
-                  </TxButton>
-                  <span v-if="notificationProviderConfigForm.feishuRefreshTokenMasked" class="text-emerald-700 fw-800 dark:text-emerald-300">已保存飞书邮箱授权</span>
-                  <span v-else class="text-amber-700 fw-800 dark:text-amber-300">尚未授权邮箱账号</span>
-                </div>
-              </div>
-              <label class="gap-2 grid">
-                <span class="field-label">飞书发信邮箱</span>
-                <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
-                  <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />
-                  <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.feishuMailboxesLoading || !notificationProviderConfigForm.feishuRefreshTokenMasked" @click="loadFeishuSenderMailboxes">
-                    {{ notificationProviderConfigForm.feishuMailboxesLoading ? '读取中...' : '读取飞书邮箱' }}
-                  </TxButton>
-                </div>
-                <div v-if="notificationProviderConfigForm.feishuMailboxOptions.length" class="flex flex-wrap gap-2">
-                  <TxButton
-                    v-for="mailbox in notificationProviderConfigForm.feishuMailboxOptions"
-                    :key="mailbox.id"
-                    size="sm"
-                    variant="secondary"
-                    :disabled="!isAdmin || notificationProviderConfigForm.loading"
-                    @click="notificationProviderConfigForm.feishuUserMailboxId = mailbox.id"
-                  >
-                    {{ mailbox.type ? `${feishuMailboxTypeLabel(mailbox.type)}：` : '' }}{{ mailbox.label }}{{ mailbox.email && mailbox.email !== mailbox.label ? `（${mailbox.email}）` : '' }}
-                  </TxButton>
-                </div>
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">站点根地址</span>
-                <TxInput v-model="notificationProviderConfigForm.feishuSiteBaseUrl" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="https://example.com" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">飞书每日限额</span>
-                <TxNumberInput v-model="notificationProviderConfigForm.feishuDailyLimit" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="400" />
-              </label>
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">飞书测试收件邮箱</span>
-                <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
-                  <TxInput v-model="notificationProviderConfigForm.testEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingEmail" placeholder="user@example.com" />
-                  <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingEmail || !notificationProviderConfigForm.testEmailAddress" @click="sendFeishuProviderTest">
-                    {{ notificationProviderConfigForm.testingEmail ? '发送中...' : '测试飞书邮件' }}
-                  </TxButton>
-                </div>
-              </label>
-            </div>
-            <div class="mt-8 pt-8 border-t border-black/8 dark:border-white/10">
-              <label class="text-sm mb-5 flex gap-2 items-center lg:col-span-2">
-                <TxCheckbox v-model="notificationProviderConfigForm.smtpEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用 SMTP 邮件通知" />
-                启用 SMTP 邮件通知
-              </label>
-              <div class="gap-5 grid lg:grid-cols-2">
-                <label class="gap-2 grid">
-                  <span class="field-label">SMTP 服务器</span>
-                  <TxInput v-model="notificationProviderConfigForm.smtpHost" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="smtp.feishu.cn" />
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">SMTP 端口</span>
-                  <TxNumberInput v-model="notificationProviderConfigForm.smtpPort" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="65535" placeholder="465" />
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">SMTP 用户名</span>
-                  <TxInput v-model="notificationProviderConfigForm.smtpUsername" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="username" />
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">SMTP 密码</span>
-                  <TxInput v-model="notificationProviderConfigForm.smtpPassword" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.smtpPasswordMasked || '保存到服务端加密配置'" />
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">发件邮箱</span>
-                  <TxInput v-model="notificationProviderConfigForm.smtpFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="noreply@example.com" />
-                </label>
-                <label class="gap-2 grid">
-                  <span class="field-label">发件人名称</span>
-                  <TxInput v-model="notificationProviderConfigForm.smtpFromName" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="通知中心" />
-                </label>
-                <label class="gap-2 grid lg:col-span-2">
-                  <span class="field-label">SMTP 测试收件邮箱</span>
-                  <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
-                    <TxInput v-model="notificationProviderConfigForm.testSmtpEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingSmtpEmail" placeholder="user@example.com" />
-                    <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingSmtpEmail || !notificationProviderConfigForm.testSmtpEmailAddress" @click="sendSmtpProviderTest">
-                      {{ notificationProviderConfigForm.testingSmtpEmail ? '发送中...' : '测试 SMTP 邮件' }}
-                    </TxButton>
-                  </div>
-                </label>
-              </div>
-            </div>
-            <div class="mt-5 flex flex-wrap gap-3 items-center">
-              <TxButton variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.loading" @click="saveNotificationProviderConfig">
-                {{ notificationProviderConfigForm.loading ? '读取 / 保存中...' : '保存通知配置' }}
-              </TxButton>
-            </div>
-            <div v-if="notificationProviderConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
-              {{ notificationProviderConfigForm.message }}
-            </div>
-          </div>
-
-          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-            <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
-              <span class="i-carbon-information" />
-              顶部 Banner
-            </div>
-            <div class="gap-5 grid lg:grid-cols-2">
-              <label class="gap-2 grid">
-                <span class="field-label">标题</span>
-                <TxInput v-model="siteBannerConfigForm.title" :disabled="!isAdmin || siteBannerConfigForm.loading" placeholder="内测公告 / 推广宣传" />
-              </label>
-              <label class="gap-2 grid">
-                <span class="field-label">展示样式</span>
-                <select v-model="siteBannerConfigForm.tone" class="form-select admin-page-size" :disabled="!isAdmin || siteBannerConfigForm.loading">
-                  <option v-for="option in bannerToneOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">内容</span>
-                <textarea v-model="siteBannerConfigForm.body" class="form-textarea min-h-24" :disabled="!isAdmin || siteBannerConfigForm.loading" placeholder="当前处于内测阶段，部分资源按批次开放。" />
-              </label>
-            </div>
-            <div class="mt-5 flex flex-wrap gap-3 items-center">
-              <label class="text-sm flex gap-2 items-center">
-                <TxCheckbox v-model="siteBannerConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || siteBannerConfigForm.loading" aria-label="启用顶部 Banner" />
-                启用顶部 Banner
-              </label>
-              <TxButton variant="primary" :disabled="!isAdmin || siteBannerConfigForm.loading" @click="saveSiteBannerConfig">
-                {{ siteBannerConfigForm.loading ? '保存中...' : '保存 Banner' }}
-              </TxButton>
-            </div>
-            <div v-if="siteBannerConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
-              {{ siteBannerConfigForm.message }}
-            </div>
-          </div>
-
-          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-            <div class="flex flex-wrap gap-3 items-start justify-between">
-              <div>
-                <div class="text-lg fw-900 flex gap-2 items-center">
-                  <span class="i-carbon-notification-new" />
+          <div class="notification-config-workbench">
+            <TxTabs
+              v-model="activeNotificationConfigSection"
+              class="admin-config-tabs notification-config-tabs"
+              :default-value="activeNotificationConfigSection"
+              placement="top"
+              indicator-variant="block"
+              indicator-motion="glide"
+              :content-padding="0"
+              :content-scrollable="false"
+              borderless
+            >
+              <TxTabItem name="providers" icon-class="i-carbon-notification">
+                <template #name>
+                  通知供应商
+                </template>
+              </TxTabItem>
+              <TxTabItem name="templates" icon-class="i-carbon-template">
+                <template #name>
+                  邮件模板
+                </template>
+              </TxTabItem>
+              <TxTabItem name="banner" icon-class="i-carbon-information">
+                <template #name>
+                  顶部 Banner
+                </template>
+              </TxTabItem>
+              <TxTabItem name="announcements" icon-class="i-carbon-notification-new">
+                <template #name>
                   管理员通告
-                </div>
-                <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
-                  面向用户批量发送站内通告，可查看每个用户的已读状态。
-                </p>
-              </div>
-              <TxButton variant="secondary" :disabled="!isAdmin || adminAnnouncementForm.loading" @click="reloadAdminAnnouncements">
-                刷新统计
-              </TxButton>
-            </div>
-            <div class="mt-5 gap-5 grid lg:grid-cols-2">
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">推送模板</span>
-                <TxSelect v-model="adminAnnouncementForm.templateId" panel-background="pure" :disabled="!isAdmin || adminAnnouncementForm.loading">
-                  <TxSelectItem v-for="template in notificationTemplateOptions" :key="template.id" :value="template.id" :label="template.name" />
-                </TxSelect>
-                <span class="field-hint">{{ selectedAnnouncementTemplate.description }}</span>
-              </label>
-              <div class="p-4 border border-black/6 rounded-2xl bg-slate-50 dark:border-white/10 dark:bg-white/6 lg:col-span-2">
-                <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
-                  可用变量
-                </div>
-                <div class="flex flex-wrap gap-2">
-                  <span v-for="variable in selectedAnnouncementTemplate.variables" :key="variable.key" class="admin-pill bg-white dark:bg-white/8" :title="variable.description">
-                    {{ variable.label }} · {{ notificationVariableToken(variable.key) }}
-                  </span>
-                </div>
-                <div class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
-                  标题示例：{{ selectedAnnouncementTemplate.subjectExample }}<br>
-                  正文示例：{{ selectedAnnouncementTemplate.bodyExample }}
-                </div>
-              </div>
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">通告标题</span>
-                <TxInput v-model="adminAnnouncementForm.title" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="维护通知 / 资源开放提醒" />
-              </label>
-              <label class="gap-2 grid lg:col-span-2">
-                <span class="field-label">通告内容</span>
-                <textarea v-model="adminAnnouncementForm.body" class="form-textarea min-h-28" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="请输入要推送给所有用户的内容。" />
-              </label>
-            </div>
-            <div class="mt-5 flex flex-wrap gap-4 items-center">
-              <label v-for="option in announcementChannelOptions" :key="option.value" class="text-sm flex gap-2 items-center">
-                <TxCheckbox v-model="adminAnnouncementForm.channels[option.value]" variant="checkmark" :disabled="option.value === 'in_app' || !isAdmin || adminAnnouncementForm.loading" :aria-label="option.label" />
-                {{ option.label }}
-              </label>
-            </div>
-            <div class="mt-4 flex flex-wrap gap-4 items-center">
-              <label class="text-sm flex gap-2 items-center">
-                <TxCheckbox v-model="adminAnnouncementForm.forcePopup" variant="checkmark" :disabled="!isAdmin || adminAnnouncementForm.loading" aria-label="强制弹窗" />
-                强制弹窗
-              </label>
-              <label class="text-sm flex gap-2 items-center">
-                <TxCheckbox v-model="adminAnnouncementForm.forcePush" variant="checkmark" :disabled="!isAdmin || adminAnnouncementForm.loading" aria-label="强制推送" />
-                强制推送
-              </label>
-              <TxButton variant="primary" :disabled="!isAdmin || adminAnnouncementForm.loading" @click="publishAdminAnnouncement">
-                {{ adminAnnouncementForm.loading ? '发送中...' : '发送通告' }}
-              </TxButton>
-            </div>
-            <div v-if="adminAnnouncementForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
-              {{ adminAnnouncementForm.message }}
-            </div>
+                </template>
+              </TxTabItem>
+              <TxTabItem name="logs" icon-class="i-carbon-data-vis-4">
+                <template #name>
+                  系统日志
+                </template>
+              </TxTabItem>
+            </TxTabs>
 
-            <div class="admin-table mt-5">
-              <div class="admin-table-row admin-announcement-grid admin-table-head">
-                <span>通告</span>
-                <span>渠道</span>
-                <span>已读</span>
-                <span>发送时间</span>
-              </div>
-              <div v-if="!adminAnnouncements.length" class="admin-empty">
-                暂无管理员通告。
-              </div>
-              <div v-for="announcement in adminAnnouncements" :key="announcement.id" class="admin-table-row admin-announcement-grid">
-                <div class="min-w-0">
-                  <b class="block truncate">{{ announcement.title }}</b>
-                  <span class="text-xs text-slate-500 line-clamp-2 dark:text-slate-400">{{ announcement.body }}</span>
-                  <div class="mt-2 flex flex-wrap gap-2">
-                    <span class="admin-pill text-indigo-700 bg-indigo-50 dark:text-indigo-200 dark:bg-indigo-950/30">{{ notificationTemplateLabel(announcement.templateId) }}</span>
-                    <span v-if="announcement.forcePopup" class="admin-pill text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30">强制弹窗</span>
-                    <span v-if="announcement.forcePush" class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">强制推送</span>
-                  </div>
-                  <details class="mt-3">
-                    <summary class="text-xs text-slate-500 cursor-pointer dark:text-slate-400">
-                      查看用户已读明细
-                    </summary>
-                    <div class="admin-detail-list mt-2">
-                      <div v-for="recipient in announcement.recipients" :key="recipient.notificationId">
-                        <span>
-                          {{ recipient.displayName }}
-                          <small class="text-slate-400">· {{ recipient.email || recipient.userId }}</small>
-                        </span>
-                        <b :class="recipient.readAt ? 'text-emerald-600' : 'text-amber-600'">
-                          {{ recipient.readAt ? `已读 ${formatDate(recipient.readAt)}` : '未读' }}
-                        </b>
+            <main class="notification-config-content">
+              <div v-show="activeNotificationConfigSection === 'providers'" class="notification-config-panel p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+                  <span class="i-carbon-notification" />
+                  通知供应商
+                </div>
+                <div class="text-sm mb-5 p-3 rounded-2xl" :class="notificationProviderConfigForm.emailConfigured || notificationProviderConfigForm.pushConfigured ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30' : 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'">
+                  邮件：{{ notificationProviderConfigForm.emailConfigured ? '已配置' : '未配置' }}；飞书邮件：{{ notificationProviderConfigForm.feishuMailConfigured ? '已配置' : '未配置' }}；浏览器推送：{{ notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置' }}。
+                </div>
+                <div class="gap-5 grid lg:grid-cols-2">
+                  <label class="gap-2 grid">
+                    <span class="field-label">Resend API Key</span>
+                    <TxInput v-model="notificationProviderConfigForm.resendApiKey" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.resendApiKeyMasked || '保存到服务端加密配置'" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">Resend 发件人</span>
+                    <TxInput v-model="notificationProviderConfigForm.resendFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="Touch Great Welfare <notice@example.com>" />
+                  </label>
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">Resend 测试收件邮箱</span>
+                    <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                      <TxInput v-model="notificationProviderConfigForm.testResendEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingResendEmail" placeholder="user@example.com" />
+                      <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingResendEmail || !notificationProviderConfigForm.testResendEmailAddress" @click="sendResendProviderTest">
+                        {{ notificationProviderConfigForm.testingResendEmail ? '发送中...' : '测试 Resend 邮件' }}
+                      </TxButton>
+                    </div>
+                  </label>
+                  <div class="p-4 border border-emerald-200 rounded-3xl bg-emerald-50/70 dark:border-emerald-400/20 dark:bg-emerald-950/10 lg:col-span-2">
+                    <div class="flex flex-wrap gap-3 items-start justify-between">
+                      <div>
+                        <div class="text-base fw-900 flex gap-2 items-center">
+                          <span class="i-carbon-notification" />
+                          浏览器 Push
+                        </div>
+                        <p class="text-xs text-slate-600 leading-5 mt-1 dark:text-slate-300">
+                          VAPID 密钥由服务端自动生成并加密保存，无需手动填写。重新生成后，已订阅用户可能需要重新启用 Push。
+                        </p>
+                      </div>
+                      <TxStatusBadge :text="notificationProviderConfigForm.pushConfigured ? '已配置' : '未配置'" :status="notificationProviderConfigForm.pushConfigured ? 'success' : 'warning'" size="sm" />
+                    </div>
+                    <div class="mt-4 p-3 rounded-2xl bg-white/75 dark:bg-white/8">
+                      <div class="text-xs text-slate-500 fw-900 dark:text-slate-400">
+                        Public Key
+                      </div>
+                      <div class="text-xs leading-5 mt-1 break-all dark:text-slate-200">
+                        {{ notificationProviderConfigForm.vapidPublicKey || '生成后自动显示公钥，私钥不会暴露在页面。' }}
                       </div>
                     </div>
-                  </details>
-                </div>
-                <span>{{ announcement.channels.map(notificationChannelLabel).join(' / ') }}</span>
-                <span>{{ announcement.readCount }} / {{ announcement.totalCount }}</span>
-                <span>{{ formatDate(announcement.createdAt) }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-5 p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
-            <div class="flex flex-wrap gap-3 items-start justify-between">
-              <div>
-                <div class="text-lg fw-900 flex gap-2 items-center">
-                  <span class="i-carbon-data-vis-4" />
-                  系统日志
-                </div>
-                <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
-                  展示通知发送、通道投递、错误原因和耗时，便于排查发送慢或失败。
-                </p>
-              </div>
-              <TxButton variant="secondary" :disabled="!isAdmin" @click="reloadSystemLogs">
-                刷新日志
-              </TxButton>
-            </div>
-
-            <div class="admin-table mt-5">
-              <div class="admin-table-row admin-table-head grid-cols-[110px_130px_minmax(0,1fr)_110px_160px]">
-                <span>级别</span>
-                <span>模块 / 动作</span>
-                <span>消息</span>
-                <span>耗时</span>
-                <span>时间</span>
-              </div>
-              <div v-if="!systemLogs.length" class="admin-empty">
-                暂无系统日志。
-              </div>
-              <div v-for="log in systemLogs" :key="log.id" class="admin-table-row grid-cols-[110px_130px_minmax(0,1fr)_110px_160px]">
-                <span class="admin-pill" :class="statusPillClass(log.level)">
-                  {{ systemLogLevelText(log.level) }}
-                </span>
-                <span class="text-xs text-slate-500 dark:text-slate-400">
-                  {{ log.module }}<br>{{ log.action }}
-                </span>
-                <div class="min-w-0">
-                  <div class="fw-800">
-                    {{ log.message }}
+                    <div class="mt-4 flex flex-wrap gap-3 items-center">
+                      <TxButton v-if="!notificationProviderConfigForm.pushConfigured" size="sm" variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.generatingVapid" @click="generateVapidKeys(false)">
+                        {{ notificationProviderConfigForm.generatingVapid ? '生成中...' : '生成 Push 密钥' }}
+                      </TxButton>
+                      <TxButton v-else size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.generatingVapid" @click="openVapidRegenerateDialog">
+                        {{ notificationProviderConfigForm.generatingVapid ? '重新生成中...' : '重新生成密钥' }}
+                      </TxButton>
+                    </div>
                   </div>
-                  <details class="mt-2">
-                    <summary class="text-xs text-slate-500 cursor-pointer dark:text-slate-400">
-                      查看详情
-                    </summary>
-                    <pre class="text-xs mt-2 p-3 rounded-xl bg-slate-100 overflow-auto dark:bg-black/20">{{ systemLogDetailsText(log.details) }}</pre>
-                  </details>
+                  <label class="text-sm flex gap-2 items-center lg:col-span-2">
+                    <TxCheckbox v-model="notificationProviderConfigForm.feishuMailEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用飞书邮件通知" />
+                    启用飞书邮件通知
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">飞书 App ID</span>
+                    <TxInput v-model="notificationProviderConfigForm.feishuAppId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="cli_xxxxxx" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">飞书 App Secret</span>
+                    <TxInput v-model="notificationProviderConfigForm.feishuAppSecret" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.feishuAppSecretMasked || '保存到服务端加密配置'" />
+                  </label>
+                  <div class="lg:col-span-2">
+                    <div class="flex flex-wrap gap-3 items-center">
+                      <TxButton size="sm" variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.authorizingFeishu || !notificationProviderConfigForm.feishuAppId" @click="authorizeFeishuProvider">
+                        {{ notificationProviderConfigForm.authorizingFeishu ? '跳转中...' : '授权飞书邮箱' }}
+                      </TxButton>
+                      <span v-if="notificationProviderConfigForm.feishuRefreshTokenMasked" class="text-emerald-700 fw-800 dark:text-emerald-300">已保存飞书邮箱授权</span>
+                      <span v-else class="text-amber-700 fw-800 dark:text-amber-300">尚未授权邮箱账号</span>
+                    </div>
+                  </div>
+                  <label class="gap-2 grid">
+                    <span class="field-label">飞书发信邮箱</span>
+                    <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                      <TxInput v-model="notificationProviderConfigForm.feishuUserMailboxId" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="me 或 notice@example.com" />
+                      <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.feishuMailboxesLoading || !notificationProviderConfigForm.feishuRefreshTokenMasked" @click="loadFeishuSenderMailboxes">
+                        {{ notificationProviderConfigForm.feishuMailboxesLoading ? '读取中...' : '读取飞书邮箱' }}
+                      </TxButton>
+                    </div>
+                    <div v-if="notificationProviderConfigForm.feishuMailboxOptions.length" class="flex flex-wrap gap-2">
+                      <TxButton
+                        v-for="mailbox in notificationProviderConfigForm.feishuMailboxOptions"
+                        :key="mailbox.id"
+                        size="sm"
+                        variant="secondary"
+                        :disabled="!isAdmin || notificationProviderConfigForm.loading"
+                        @click="notificationProviderConfigForm.feishuUserMailboxId = mailbox.id"
+                      >
+                        {{ mailbox.type ? `${feishuMailboxTypeLabel(mailbox.type)}：` : '' }}{{ mailbox.label }}{{ mailbox.email && mailbox.email !== mailbox.label ? `（${mailbox.email}）` : '' }}
+                      </TxButton>
+                    </div>
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">站点根地址</span>
+                    <TxInput v-model="notificationProviderConfigForm.feishuSiteBaseUrl" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="https://example.com" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">飞书每日限额</span>
+                    <TxNumberInput v-model="notificationProviderConfigForm.feishuDailyLimit" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="400" />
+                  </label>
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">飞书测试收件邮箱</span>
+                    <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                      <TxInput v-model="notificationProviderConfigForm.testEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingEmail" placeholder="user@example.com" />
+                      <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingEmail || !notificationProviderConfigForm.testEmailAddress" @click="sendFeishuProviderTest">
+                        {{ notificationProviderConfigForm.testingEmail ? '发送中...' : '测试飞书邮件' }}
+                      </TxButton>
+                    </div>
+                  </label>
                 </div>
-                <span>{{ log.durationMs === undefined ? '-' : `${log.durationMs} ms` }}</span>
-                <span>{{ formatDate(log.createdAt) }}</span>
+                <div class="mt-8 pt-8 border-t border-black/8 dark:border-white/10">
+                  <label class="text-sm mb-5 flex gap-2 items-center lg:col-span-2">
+                    <TxCheckbox v-model="notificationProviderConfigForm.smtpEnabled" variant="checkmark" :disabled="!isAdmin || notificationProviderConfigForm.loading" aria-label="启用 SMTP 邮件通知" />
+                    启用 SMTP 邮件通知
+                  </label>
+                  <div class="gap-5 grid lg:grid-cols-2">
+                    <label class="gap-2 grid">
+                      <span class="field-label">SMTP 服务器</span>
+                      <TxInput v-model="notificationProviderConfigForm.smtpHost" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="smtp.feishu.cn" />
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">SMTP 端口</span>
+                      <TxNumberInput v-model="notificationProviderConfigForm.smtpPort" :disabled="!isAdmin || notificationProviderConfigForm.loading" :min="1" :max="65535" placeholder="465" />
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">SMTP 用户名</span>
+                      <TxInput v-model="notificationProviderConfigForm.smtpUsername" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="username" />
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">SMTP 密码</span>
+                      <TxInput v-model="notificationProviderConfigForm.smtpPassword" :disabled="!isAdmin || notificationProviderConfigForm.loading" type="password" :placeholder="notificationProviderConfigForm.smtpPasswordMasked || '保存到服务端加密配置'" />
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">发件邮箱</span>
+                      <TxInput v-model="notificationProviderConfigForm.smtpFromEmail" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="noreply@example.com" />
+                    </label>
+                    <label class="gap-2 grid">
+                      <span class="field-label">发件人名称</span>
+                      <TxInput v-model="notificationProviderConfigForm.smtpFromName" :disabled="!isAdmin || notificationProviderConfigForm.loading" placeholder="通知中心" />
+                    </label>
+                    <label class="gap-2 grid lg:col-span-2">
+                      <span class="field-label">SMTP 测试收件邮箱</span>
+                      <div class="gap-3 grid md:grid-cols-[minmax(0,1fr)_auto]">
+                        <TxInput v-model="notificationProviderConfigForm.testSmtpEmailAddress" :disabled="!isAdmin || notificationProviderConfigForm.testingSmtpEmail" placeholder="user@example.com" />
+                        <TxButton variant="secondary" :disabled="!isAdmin || notificationProviderConfigForm.testingSmtpEmail || !notificationProviderConfigForm.testSmtpEmailAddress" @click="sendSmtpProviderTest">
+                          {{ notificationProviderConfigForm.testingSmtpEmail ? '发送中...' : '测试 SMTP 邮件' }}
+                        </TxButton>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-3 items-center">
+                  <TxButton variant="primary" :disabled="!isAdmin || notificationProviderConfigForm.loading" @click="saveNotificationProviderConfig">
+                    {{ notificationProviderConfigForm.loading ? '读取 / 保存中...' : '保存通知配置' }}
+                  </TxButton>
+                </div>
+                <div v-if="notificationProviderConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                  {{ notificationProviderConfigForm.message }}
+                </div>
               </div>
-            </div>
+
+              <div v-show="activeNotificationConfigSection === 'templates'" class="notification-config-panel p-3 border border-black/8 rounded-xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-lg fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-template" />
+                      邮件模板
+                    </div>
+                  </div>
+                  <TxStatusBadge text="内置模板" status="info" size="sm" />
+                </div>
+                <div class="notification-template-tip">
+                  当前编辑内容用于预览和测试发送；如需永久保存自定义模板，需要新增服务端模板存储与渲染配置。
+                </div>
+                <div class="notification-template-workbench mt-5">
+                  <aside class="notification-template-list" aria-label="邮件模板类型">
+                    <button
+                      v-for="template in notificationTemplateOptions"
+                      :key="template.id"
+                      type="button"
+                      class="notification-template-list-item"
+                      :class="{ 'is-active': activeEmailTemplateId === template.id }"
+                      @click="activeEmailTemplateId = template.id"
+                    >
+                      <span>
+                        <b>{{ template.name }}</b>
+                        <small>{{ template.description }}</small>
+                      </span>
+                      <em>{{ template.id }}</em>
+                    </button>
+                  </aside>
+
+                  <section class="notification-template-editor-split">
+                    <div class="notification-template-editor-pane">
+                      <div class="flex flex-wrap gap-3 items-start justify-between">
+                        <div>
+                          <h3>{{ selectedEmailTemplate.name }}</h3>
+                          <p>{{ selectedEmailTemplate.description }}</p>
+                        </div>
+                        <TxButton size="sm" variant="secondary" @click="resetSelectedEmailTemplateDraft">
+                          重置为内置模板
+                        </TxButton>
+                      </div>
+
+                      <label class="notification-template-html-editor">
+                        <span class="field-label">HTML 代码</span>
+                        <textarea v-model="selectedEmailTemplateDraft.bodyTemplate" class="form-textarea font-mono" spellcheck="false" placeholder="<p>你好 {{recipientName}}</p>" />
+                      </label>
+
+                      <div>
+                        <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+                          可用变量
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                          <span v-for="variable in selectedEmailTemplate.variables" :key="variable.key" class="admin-pill bg-slate-50 dark:bg-white/8" :title="variable.description">
+                            {{ variable.label }} · {{ notificationVariableToken(variable.key) }}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="notification-template-preview-pane">
+                      <div class="flex flex-wrap gap-3 items-start justify-between">
+                        <div>
+                          <h3>实时预览</h3>
+                          <p>左侧 HTML 变更会实时渲染到这里。</p>
+                        </div>
+                        <TxStatusBadge :text="emailTemplateVariablesState.ok ? '变量有效' : '变量错误'" :status="emailTemplateVariablesState.ok ? 'success' : 'danger'" size="sm" />
+                      </div>
+
+                      <div v-if="!emailTemplateVariablesState.ok" class="text-xs text-rose-700 leading-5 p-3 rounded-lg bg-rose-50 dark:text-rose-200 dark:bg-rose-950/20">
+                        {{ emailTemplateVariablesState.error }}
+                      </div>
+
+                      <div class="notification-template-html-preview">
+                        <iframe title="邮件模板 HTML 预览" sandbox="" :srcdoc="emailTemplatePreview.html" />
+                      </div>
+
+                      <label class="gap-2 grid">
+                        <span class="field-label">测试变量 JSON</span>
+                        <textarea v-model="emailTemplateTestForm.variablesJson" class="form-textarea font-mono min-h-34" placeholder="{ &quot;title&quot;: &quot;模板测试&quot;, &quot;body&quot;: &quot;测试正文&quot; }" />
+                        <span class="field-hint">测试发送和预览都会使用这里的变量。变量缺失时会渲染为空。</span>
+                      </label>
+
+                      <div class="notification-template-test-grid">
+                        <label class="gap-2 grid">
+                          <span class="field-label">测试收件邮箱</span>
+                          <TxInput v-model="emailTemplateTestForm.emailAddress" :disabled="emailTemplateTestForm.sending" placeholder="user@example.com" />
+                        </label>
+                        <label class="gap-2 grid">
+                          <span class="field-label">发送通道</span>
+                          <select v-model="emailTemplateTestForm.provider" class="form-select admin-page-size" :disabled="emailTemplateTestForm.sending">
+                            <option value="feishu_mail">飞书邮件</option>
+                            <option value="resend">Resend</option>
+                            <option value="smtp">SMTP</option>
+                            <option value="auto">自动</option>
+                          </select>
+                        </label>
+                      </div>
+                      <div class="flex flex-wrap gap-3 items-center">
+                        <TxButton variant="primary" :disabled="!isAdmin || emailTemplateTestForm.sending || !emailTemplateTestForm.emailAddress || !emailTemplateVariablesState.ok" @click="sendSelectedEmailTemplateTest">
+                          {{ emailTemplateTestForm.sending ? '发送中...' : '测试发送到邮件' }}
+                        </TxButton>
+                      </div>
+                      <div v-if="emailTemplateTestForm.message" class="text-xs leading-5 p-3 rounded-lg bg-slate-100 dark:bg-white/10">
+                        {{ emailTemplateTestForm.message }}
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+
+              <div v-show="activeNotificationConfigSection === 'banner'" class="notification-config-panel p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
+                  <span class="i-carbon-information" />
+                  顶部 Banner
+                </div>
+                <div class="gap-5 grid lg:grid-cols-2">
+                  <label class="gap-2 grid">
+                    <span class="field-label">标题</span>
+                    <TxInput v-model="siteBannerConfigForm.title" :disabled="!isAdmin || siteBannerConfigForm.loading" placeholder="内测公告 / 推广宣传" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">展示样式</span>
+                    <select v-model="siteBannerConfigForm.tone" class="form-select admin-page-size" :disabled="!isAdmin || siteBannerConfigForm.loading">
+                      <option v-for="option in bannerToneOptions" :key="option.value" :value="option.value">
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">内容</span>
+                    <textarea v-model="siteBannerConfigForm.body" class="form-textarea min-h-24" :disabled="!isAdmin || siteBannerConfigForm.loading" placeholder="当前处于内测阶段，部分资源按批次开放。" />
+                  </label>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-3 items-center">
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="siteBannerConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || siteBannerConfigForm.loading" aria-label="启用顶部 Banner" />
+                    启用顶部 Banner
+                  </label>
+                  <TxButton variant="primary" :disabled="!isAdmin || siteBannerConfigForm.loading" @click="saveSiteBannerConfig">
+                    {{ siteBannerConfigForm.loading ? '保存中...' : '保存 Banner' }}
+                  </TxButton>
+                </div>
+                <div v-if="siteBannerConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                  {{ siteBannerConfigForm.message }}
+                </div>
+              </div>
+
+              <div v-show="activeNotificationConfigSection === 'announcements'" class="notification-config-panel p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-lg fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-notification-new" />
+                      管理员通告
+                    </div>
+                    <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
+                      面向用户批量发送站内通告，可查看每个用户的已读状态。
+                    </p>
+                  </div>
+                  <TxButton variant="secondary" :disabled="!isAdmin || adminAnnouncementForm.loading" @click="reloadAdminAnnouncements">
+                    刷新统计
+                  </TxButton>
+                </div>
+                <div class="mt-5 gap-5 grid lg:grid-cols-2">
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">推送模板</span>
+                    <TxSelect v-model="adminAnnouncementForm.templateId" panel-background="pure" :disabled="!isAdmin || adminAnnouncementForm.loading">
+                      <TxSelectItem v-for="template in notificationTemplateOptions" :key="template.id" :value="template.id" :label="template.name" />
+                    </TxSelect>
+                    <span class="field-hint">{{ selectedAnnouncementTemplate.description }}</span>
+                  </label>
+                  <div class="p-4 border border-black/6 rounded-2xl bg-slate-50 dark:border-white/10 dark:bg-white/6 lg:col-span-2">
+                    <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+                      可用变量
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                      <span v-for="variable in selectedAnnouncementTemplate.variables" :key="variable.key" class="admin-pill bg-white dark:bg-white/8" :title="variable.description">
+                        {{ variable.label }} · {{ notificationVariableToken(variable.key) }}
+                      </span>
+                    </div>
+                    <div class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
+                      标题示例：{{ selectedAnnouncementTemplate.subjectExample }}<br>
+                      正文示例：{{ selectedAnnouncementTemplate.bodyExample }}
+                    </div>
+                  </div>
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">通告标题</span>
+                    <TxInput v-model="adminAnnouncementForm.title" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="维护通知 / 资源开放提醒" />
+                  </label>
+                  <label class="gap-2 grid lg:col-span-2">
+                    <span class="field-label">通告内容</span>
+                    <textarea v-model="adminAnnouncementForm.body" class="form-textarea min-h-28" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="请输入要推送给所有用户的内容。" />
+                  </label>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-4 items-center">
+                  <label v-for="option in announcementChannelOptions" :key="option.value" class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="adminAnnouncementForm.channels[option.value]" variant="checkmark" :disabled="option.value === 'in_app' || !isAdmin || adminAnnouncementForm.loading" :aria-label="option.label" />
+                    {{ option.label }}
+                  </label>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-4 items-center">
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="adminAnnouncementForm.forcePopup" variant="checkmark" :disabled="!isAdmin || adminAnnouncementForm.loading" aria-label="强制弹窗" />
+                    强制弹窗
+                  </label>
+                  <label class="text-sm flex gap-2 items-center">
+                    <TxCheckbox v-model="adminAnnouncementForm.forcePush" variant="checkmark" :disabled="!isAdmin || adminAnnouncementForm.loading" aria-label="强制推送" />
+                    强制推送
+                  </label>
+                  <TxButton variant="primary" :disabled="!isAdmin || adminAnnouncementForm.loading" @click="publishAdminAnnouncement">
+                    {{ adminAnnouncementForm.loading ? '发送中...' : '发送通告' }}
+                  </TxButton>
+                </div>
+                <div v-if="adminAnnouncementForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
+                  {{ adminAnnouncementForm.message }}
+                </div>
+
+                <div class="admin-table mt-5">
+                  <div class="admin-table-row admin-announcement-grid admin-table-head">
+                    <span>通告</span>
+                    <span>渠道</span>
+                    <span>已读</span>
+                    <span>发送时间</span>
+                  </div>
+                  <div v-if="!adminAnnouncements.length" class="admin-empty">
+                    暂无管理员通告。
+                  </div>
+                  <div v-for="announcement in adminAnnouncements" :key="announcement.id" class="admin-table-row admin-announcement-grid">
+                    <div class="min-w-0">
+                      <b class="block truncate">{{ announcement.title }}</b>
+                      <span class="text-xs text-slate-500 line-clamp-2 dark:text-slate-400">{{ announcement.body }}</span>
+                      <div class="mt-2 flex flex-wrap gap-2">
+                        <span class="admin-pill text-indigo-700 bg-indigo-50 dark:text-indigo-200 dark:bg-indigo-950/30">{{ notificationTemplateLabel(announcement.templateId) }}</span>
+                        <span v-if="announcement.forcePopup" class="admin-pill text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30">强制弹窗</span>
+                        <span v-if="announcement.forcePush" class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">强制推送</span>
+                      </div>
+                      <details class="mt-3">
+                        <summary class="text-xs text-slate-500 cursor-pointer dark:text-slate-400">
+                          查看用户已读明细
+                        </summary>
+                        <div class="admin-detail-list mt-2">
+                          <div v-for="recipient in announcement.recipients" :key="recipient.notificationId">
+                            <span>
+                              {{ recipient.displayName }}
+                              <small class="text-slate-400">· {{ recipient.email || recipient.userId }}</small>
+                            </span>
+                            <b :class="recipient.readAt ? 'text-emerald-600' : 'text-amber-600'">
+                              {{ recipient.readAt ? `已读 ${formatDate(recipient.readAt)}` : '未读' }}
+                            </b>
+                          </div>
+                        </div>
+                      </details>
+                    </div>
+                    <span>{{ announcement.channels.map(notificationChannelLabel).join(' / ') }}</span>
+                    <span>{{ announcement.readCount }} / {{ announcement.totalCount }}</span>
+                    <span>{{ formatDate(announcement.createdAt) }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-show="activeNotificationConfigSection === 'logs'" class="notification-config-panel p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-lg fw-900 flex gap-2 items-center">
+                      <span class="i-carbon-data-vis-4" />
+                      系统日志
+                    </div>
+                    <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
+                      展示通知发送、通道投递、错误原因和耗时，便于排查发送慢或失败。
+                    </p>
+                  </div>
+                  <TxButton variant="secondary" :disabled="!isAdmin" @click="reloadSystemLogs">
+                    刷新日志
+                  </TxButton>
+                </div>
+
+                <div class="admin-table mt-5">
+                  <div class="admin-table-row admin-table-head grid-cols-[110px_130px_minmax(0,1fr)_110px_160px]">
+                    <span>级别</span>
+                    <span>模块 / 动作</span>
+                    <span>消息</span>
+                    <span>耗时</span>
+                    <span>时间</span>
+                  </div>
+                  <div v-if="!systemLogs.length" class="admin-empty">
+                    暂无系统日志。
+                  </div>
+                  <div v-for="log in systemLogs" :key="log.id" class="admin-table-row grid-cols-[110px_130px_minmax(0,1fr)_110px_160px]">
+                    <span class="admin-pill" :class="statusPillClass(log.level)">
+                      {{ systemLogLevelText(log.level) }}
+                    </span>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">
+                      {{ log.module }}<br>{{ log.action }}
+                    </span>
+                    <div class="min-w-0">
+                      <div class="fw-800">
+                        {{ log.message }}
+                      </div>
+                      <details class="mt-2">
+                        <summary class="text-xs text-slate-500 cursor-pointer dark:text-slate-400">
+                          查看详情
+                        </summary>
+                        <pre class="text-xs mt-2 p-3 rounded-xl bg-slate-100 overflow-auto dark:bg-black/20">{{ systemLogDetailsText(log.details) }}</pre>
+                      </details>
+                    </div>
+                    <span>{{ log.durationMs === undefined ? '-' : `${log.durationMs} ms` }}</span>
+                    <span>{{ formatDate(log.createdAt) }}</span>
+                  </div>
+                </div>
+              </div>
+            </main>
           </div>
         </TxTabItem>
 

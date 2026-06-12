@@ -1357,7 +1357,7 @@ onBeforeUnmount(() => {
                             </div><TxSlider v-model="item.payload.budgetLimit" :min="llmQuotaMin(item)" :max="llmQuotaMax(item)" :step="llmQuotaStep(item)" :show-value="false" :format-value="llmQuotaFormatter(item)" /><div class="quota-marks">
                               <span v-for="mark in llmQuotaMarks(item)" :key="mark">{{ formatLlmQuota(mark, llmModelForItem(item)) }}</span>
                             </div><p v-if="isGptProItem(item)" class="field-hint text-amber-600 dark:text-amber-300">
-                              GPT PRO 按对话轮次计费，默认 5 轮，每轮消耗较高，本期按 {{ GPT_PRO_ACTIVITY_NAME }} 处理。
+                              GPT PRO 按对话轮次申请，默认 5 轮合计约 600 积分，本期按 {{ GPT_PRO_ACTIVITY_NAME }} 处理。
                             </p><p v-else-if="item.payload.budgetLimit > 100" class="field-hint text-amber-600 dark:text-amber-300">
                               超过 $100 的额度申请需要更长时间审核
                             </p>

@@ -1,0 +1,42 @@
+.dashboard-content__inner > .tx-card,
+.dashboard-content__inner > .solid-panel,
+.dashboard-content__inner > section > .tx-card,
+.dashboard-content__inner > section > .solid-panel,
+.dashboard-content__inner .profile-page > .tx-card,
+.dashboard-content__inner .wallet-page > .tx-card,
+.dashboard-content__inner .application-list-panel,
+.dashboard-content__inner .verification-admin-panel {
+  --tx-card-radius: 0px !important;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.dashboard-content__inner > .tx-card > .tx-card__surface,
+.dashboard-content__inner > section > .tx-card > .tx-card__surface,
+.dashboard-content__inner .profile-page > .tx-card > .tx-card__surface,
+.dashboard-content__inner .wallet-page > .tx-card > .tx-card__surface {
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+.dashboard-content__inner > .tx-card > .tx-card__surface .tx-base-surface__layer,
+.dashboard-content__inner > section > .tx-card > .tx-card__surface .tx-base-surface__layer,
+.dashboard-content__inner .profile-page > .tx-card > .tx-card__surface .tx-base-surface__layer,
+.dashboard-content__inner .wallet-page > .tx-card > .tx-card__surface .tx-base-surface__layer {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.dark .dashboard-content__inner > .tx-card,
+.dark .dashboard-content__inner > .solid-panel,
+.dark .dashboard-content__inner > section > .tx-card,
+.dark .dashboard-content__inner > section > .solid-panel,
+.dark .dashboard-content__inner .profile-page > .tx-card,
+.dark .dashboard-content__inner .wallet-page > .tx-card,
+.dark .dashboard-content__inner .application-list-panel,
+.dark .dashboard-content__inner .verification-admin-panel {
+  border-color: transparent !important;
+  background: transparent !important;
+}

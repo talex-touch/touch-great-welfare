@@ -316,6 +316,10 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;')
 }
 
+function containsHtml(value: string) {
+  return /<\/?[a-z][\s\S]*>/i.test(value)
+}
+
 function notificationText(title: string, body: string) {
   return `${title}\n\n${body}\n\nTouch Great Welfare`
 }
@@ -357,6 +361,63 @@ function inferNotificationTemplateId(event?: NotificationEvent, data?: Record<st
 
 function replaceTemplateVariables(value: string, variables: Record<string, string>) {
   return value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => variables[key] ?? '')
+}
+
+function normalizeTemplateTestVariables(value: unknown) {
+  if (!isRecord(value))
+    return {}
+
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item ?? '')]))
+}
+
+function templateTestInput(payload: SendEmailTestPayload, chargedPoints: number, emailAddress: string) {
+  const template = payload.template
+  if (!template)
+    return undefined
+
+  const subjectTemplate = template.subjectTemplate.trim()
+  const bodyTemplate = template.bodyTemplate.trim()
+  if (!subjectTemplate)
+    throw new Error('请填写邮件标题模板')
+  if (!bodyTemplate)
+    throw new Error('请填写邮件正文模板')
+
+  const variables: Record<string, string> = {
+    title: 'Touch Great Welfare 模板测试',
+    body: '这是一封邮件模板测试。',
+    recipientName: '测试用户',
+    siteName: 'Touch Great Welfare',
+    actionUrl: 'https://example.com/dashboard/notifications',
+    createdAt: new Date().toISOString(),
+    emailAddress,
+    ...normalizeTemplateTestVariables(template.variables),
+  }
+  const subject = replaceTemplateVariables(subjectTemplate, variables).trim()
+  const body = replaceTemplateVariables(bodyTemplate, variables).trim()
+  const bodyIsHtml = containsHtml(bodyTemplate)
+  if (!subject)
+    throw new Error('邮件标题模板渲染结果为空')
+  if (!body)
+    throw new Error('邮件正文模板渲染结果为空')
+
+  const templateId = normalizedTemplateId(template.templateId) ?? 'system'
+  return {
+    title: subject,
+    body,
+    templateId,
+    data: {
+      kind: 'email_template_test',
+      emailAddress,
+      chargedPoints,
+      provider: payload.provider ?? 'auto',
+      templateId,
+      templateVariables: variables,
+      subjectTemplate,
+      bodyTemplate,
+      bodyIsHtml,
+      createdAt: variables.createdAt,
+    },
+  }
 }
 
 function templateBodyOpening(templateId: NotificationTemplateId) {
@@ -515,7 +576,8 @@ export function renderNotificationEmailContent(
   const templateId = inferNotificationTemplateId(event, data)
   const template = notificationTemplateOption(templateId)
   const subject = templateSubject(title, templateId)
-  const plainBody = notificationPlainBody(body)
+  const customBodyIsHtml = data?.kind === 'email_template_test' && data.bodyIsHtml === true
+  const plainBody = customBodyIsHtml ? truncateEmailBody(richTextToPlainText(body)) : notificationPlainBody(body)
   const actionPath = notificationActionPath(event, data)
   const actionUrl = actionPath ? absoluteNotificationUrl(actionPath, siteBaseUrl) : ''
   const createdAt = typeof data?.createdAt === 'string' ? data.createdAt : ''
@@ -536,14 +598,14 @@ export function renderNotificationEmailContent(
   const actionText = actionUrl ? `\n\n查看详情：${actionUrl}` : ''
   const text = `${subject}\n\n${renderedBody}${actionText}${attachmentText}\n\n--\nTouch Great Welfare`
   const accent = notificationEmailAccent(templateId)
-  const bodyHtml = escapeHtml(renderedBody).replace(/\n/g, '<br>')
+  const bodyHtml = customBodyIsHtml ? body : escapeHtml(renderedBody).replace(/\n/g, '<br>')
   const actionHtml = actionUrl
-    ? `<a href="${escapeHtml(actionUrl)}" style="display:inline-block;margin-top:20px;padding:10px 16px;border-radius:999px;background:${accent};color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;">查看详情</a>`
+    ? `<a href="${escapeHtml(actionUrl)}" style="display:inline-block;margin-top:24px;padding:11px 16px;border-radius:8px;background:#151515;color:#fbfaf7;text-decoration:none;font-size:14px;font-weight:800;letter-spacing:.01em;">查看详情</a>`
     : ''
   const attachmentHtml = attachments.length
-    ? `<div style="margin-top:22px;padding:14px 16px;border-radius:16px;background:#f8fafc;border:1px solid #e2e8f0;"><div style="font-size:13px;font-weight:700;color:#334155;margin-bottom:8px;">附件</div><ol style="margin:0;padding-left:18px;color:#475569;">${attachments.map(item => `<li style="margin:6px 0;color:${accent};">${escapeHtml(item.name)} - <a href="${escapeHtml(item.url)}">点击下载</a></li>`).join('')}</ol></div>`
+    ? `<div style="margin-top:24px;padding:15px 16px;border-radius:10px;background:rgba(20,20,20,.035);border:1px solid rgba(20,20,20,.08);"><div style="font-size:12px;font-weight:900;color:#151515;margin-bottom:8px;letter-spacing:.08em;text-transform:uppercase;">附件</div><ol style="margin:0;padding-left:18px;color:#4b463e;">${attachments.map(item => `<li style="margin:7px 0;color:#4b463e;">${escapeHtml(item.name)} - <a href="${escapeHtml(item.url)}" style="color:${accent};text-decoration:none;border-bottom:1px solid ${accent}55;">点击下载</a></li>`).join('')}</ol></div>`
     : ''
-  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;"><div style="max-width:640px;margin:0 auto;padding:32px 18px;"><div style="font-size:13px;font-weight:800;letter-spacing:.02em;color:${accent};margin-bottom:12px;">Touch Great Welfare</div><div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:24px;padding:28px;box-shadow:0 18px 45px rgba(15,23,42,.06);"><div style="display:inline-block;padding:6px 10px;border-radius:999px;background:${accent}14;color:${accent};font-size:12px;font-weight:800;margin-bottom:14px;">${escapeHtml(template.name)}</div><h1 style="font-size:22px;line-height:1.35;margin:0 0 14px;color:#0f172a;">${escapeHtml(subject)}</h1><div style="font-size:15px;line-height:1.85;color:#334155;">${bodyHtml}</div>${actionHtml}${attachmentHtml}</div><div style="font-size:12px;line-height:1.7;color:#94a3b8;margin-top:16px;text-align:center;">这是一封系统通知，请勿直接回复。<br>© Touch Great Welfare</div></div></body></html>`
+  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f4f3ef;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sans-serif;color:#141414;"><div style="max-width:684px;margin:0 auto;padding:36px 18px;"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;color:#9a9388;font-size:11px;text-transform:uppercase;letter-spacing:.14em;"><div style="color:#151515;font-size:12px;font-weight:900;letter-spacing:.16em;">Touch Great Welfare</div><div>System Notification</div></div><div style="background:#fbfaf7;border:1px solid rgba(20,20,20,.08);border-radius:14px;box-shadow:0 24px 70px rgba(41,37,30,.12);"><div style="padding:30px 32px 32px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:20px;border-bottom:1px solid rgba(20,20,20,.08);"><div style="color:#6b645a;font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;"><span style="display:inline-block;width:6px;height:6px;border-radius:999px;background:${accent};box-shadow:0 0 0 5px ${accent}1a;margin-right:8px;vertical-align:1px;"></span>${escapeHtml(template.name)}</div><div style="color:#a19a90;font-size:12px;">Email Notice</div></div><h1 style="margin:22px 0 18px;color:#111;font-family:Georgia,'Times New Roman',serif;font-size:31px;font-weight:500;line-height:1.18;letter-spacing:-.035em;">${escapeHtml(subject)}</h1><div style="max-width:560px;color:#38342e;font-size:15px;line-height:1.86;">${bodyHtml}</div>${actionHtml}${attachmentHtml}</div></div><div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:16px;color:#9a9388;font-size:11px;line-height:1.6;"><span>这是一封系统通知，请勿直接回复。<br>© Touch Great Welfare</span><span style="width:34px;height:34px;border:1px solid rgba(20,20,20,.1);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:${accent};font-size:16px;background:#fbfaf7;">✦</span></div></div></body></html>`
   return { text, html, subject, templateId }
 }
 
@@ -2682,31 +2744,30 @@ async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestP
   if (chargedPoints && !await hasEnoughPoints(env, user.id, EMAIL_NOTIFICATION_COST))
     throw new Error('邮箱通知余额不足')
 
+  const customTemplateInput = templateTestInput(payload, chargedPoints, emailAddress)
+  const title = customTemplateInput?.title ?? 'Touch Great Welfare 邮箱测试'
+  const body = customTemplateInput?.body ?? (chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。` : '这是一封后台邮件通道测试邮件，不会扣除用户积分。')
+  const data = customTemplateInput?.data ?? {
+    kind: 'email_test',
+    emailAddress,
+    chargedPoints,
+    provider: payload.provider ?? 'auto',
+  }
   const notificationId = await insertNotification(env, {
     userId: user.id,
     event: 'email_test',
-    title: 'Touch Great Welfare 邮箱测试',
-    body: chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。` : '这是一封后台邮件通道测试邮件，不会扣除用户积分。',
-    data: {
-      kind: 'email_test',
-      emailAddress,
-      chargedPoints,
-      provider: payload.provider ?? 'auto',
-    },
+    title,
+    body,
+    data,
   })
   await recordDelivery(env, notificationId, 'in_app', 'sent')
 
   const input: CreateNotificationInput = {
     userId: user.id,
     event: 'email_test',
-    title: 'Touch Great Welfare 邮箱测试',
-    body: chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。` : '这是一封后台邮件通道测试邮件，不会扣除用户积分。',
-    data: {
-      kind: 'email_test',
-      emailAddress,
-      chargedPoints,
-      provider: payload.provider ?? 'auto',
-    },
+    title,
+    body,
+    data,
   }
   const startedAt = performance.now()
   const recipientName = user.profile.displayName || user.profile.email || user.id

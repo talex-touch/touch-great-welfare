@@ -142,11 +142,19 @@ export interface EmailProviderTestConfig {
   smtpFromName?: string
 }
 
+export interface EmailTemplateTestPayload {
+  templateId?: NotificationTemplateId
+  subjectTemplate: string
+  bodyTemplate: string
+  variables?: Record<string, string>
+}
+
 export interface SendEmailTestPayload {
   emailAddress?: string
   provider?: 'auto' | 'feishu_mail' | 'resend' | 'smtp'
   free?: boolean
   providerConfig?: EmailProviderTestConfig
+  template?: EmailTemplateTestPayload
 }
 
 export interface EmailDeliveryAttempt {

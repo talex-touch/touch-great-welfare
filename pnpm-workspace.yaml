@@ -32,7 +32,7 @@ catalogs:
     vitest: ^4.0.18
     vue-tsc: ^3.2.5
   frontend:
-    '@talex-touch/tuffex': ^0.3.8
+    '@talex-touch/tuffex': ^0.3.9
     '@vueuse/core': ^14.2.1
     vue: ^3.5.29
     vue-router: ^5.0.3
