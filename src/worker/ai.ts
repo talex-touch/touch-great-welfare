@@ -923,6 +923,8 @@ async function notifyProvisionResult(env: WorkerEnv, application: WelfareApplica
     data: {
       applicationId: application.id,
       type: application.type,
+      title: `${application.type.toUpperCase()} 资源`,
+      status: application.status,
     },
   }).catch(() => undefined)
 }
@@ -1562,7 +1564,7 @@ async function failImageGenerationJob(env: WorkerEnv, jobId: string, targetUserI
     event: 'ai_image_failed',
     title: '图片生成失败',
     body: `${message}。已退回本次图片生成积分。`,
-    data: { jobId, applicationId },
+    data: { jobId, applicationId, title: '图片生成任务' },
   })
 }
 
@@ -1609,7 +1611,7 @@ async function runImageGenerationJob(env: WorkerEnv, jobId: string, payload?: Ai
       event: 'ai_image_succeeded',
       title: '图片生成完成',
       body: '你的图片生成任务已完成，可在申请记录中查看结果。',
-      data: { jobId, applicationId },
+      data: { jobId, applicationId, title: '图片生成任务' },
     })
   }
   catch (error) {

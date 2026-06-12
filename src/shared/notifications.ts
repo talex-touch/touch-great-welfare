@@ -1,7 +1,7 @@
 export type NotificationChannel = 'in_app' | 'email' | 'feishu' | 'browser_push'
 export type NotificationEvent = 'application_answered' | 'application_rejected' | 'application_needs_supplement' | 'application_supplement_submitted' | 'student_submitted' | 'student_needs_supplement' | 'student_supplement_submitted' | 'student_approved' | 'student_rejected' | 'student_revoked' | 'ai_image_succeeded' | 'ai_image_failed' | 'admin_announcement' | 'email_test'
 export type DeliveryStatus = 'pending' | 'sent' | 'failed' | 'skipped'
-export type NotificationTemplateId = 'default' | 'announcement' | 'action_required' | 'result' | 'system'
+export type NotificationTemplateId = 'default' | 'resource_approved' | 'resource_delivered' | 'application_rejected' | 'supplement_required' | 'supplement_submitted' | 'student_approved' | 'student_rejected' | 'student_required' | 'image_succeeded' | 'image_failed' | 'announcement' | 'system'
 
 export interface NotificationTemplateVariable {
   key: string
@@ -18,73 +18,131 @@ export interface NotificationTemplateOption {
   variables: NotificationTemplateVariable[]
 }
 
+const commonVariables: NotificationTemplateVariable[] = [
+  { key: 'title', label: '标题', description: '通知标题或业务标题' },
+  { key: 'body', label: '正文', description: '审核回复、发放说明、拒绝理由或系统说明' },
+  { key: 'recipientName', label: '收件人', description: '用户显示名，缺省使用邮箱或用户 ID' },
+  { key: 'siteName', label: '站点名', description: '固定为 Touch Great Welfare' },
+  { key: 'actionUrl', label: '详情链接', description: '申请、认证、消息中心或后台通告链接' },
+]
+
+const createdAtVariable: NotificationTemplateVariable = { key: 'createdAt', label: '时间', description: '通知创建或发送时间' }
+
 export const NOTIFICATION_TEMPLATE_OPTIONS: NotificationTemplateOption[] = [
   {
-    id: 'default',
-    name: '默认通知',
-    description: '适合常规站内、邮件和飞书通知，风格克制简洁。',
+    id: 'resource_approved',
+    name: '资源申请已通过',
+    description: '用户申请的资源已审核通过，等待或进入发放流程。',
+    subjectExample: '你申请的 {{title}} 已通过',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你申请的 <strong>{{title}}</strong> 已通过审核。</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">点击这里查看申请详情</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'resource_delivered',
+    name: '资源已发放',
+    description: '资源、额度、系统账号、密钥或访问权限已完成发放。',
+    subjectExample: '你申请的 {{title}} 资源已发放',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你申请的 <strong>{{title}}</strong> 已完成资源发放。</p>\n<p>{{body}}</p>\n<blockquote>如包含系统密钥、API Key、数据库账号或访问地址，请进入申请详情查看并妥善保管。</blockquote>\n<p><a href="{{actionUrl}}">点击这里查看发放详情</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'application_rejected',
+    name: '申请被拒绝',
+    description: '申请被退回或拒绝，展示拒绝理由和后续处理说明。',
+    subjectExample: '你的 {{title}} 未通过审核',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的 <strong>{{title}}</strong> 未通过本次审核。</p>\n<p><strong>理由：</strong>{{body}}</p>\n<p>你可以根据说明调整材料后重新提交，或进入详情页查看处理记录。</p>\n<p><a href="{{actionUrl}}">查看申请详情</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'supplement_required',
+    name: '需要补充材料',
+    description: '审核人要求用户补充资料、说明或附件。',
+    subjectExample: '需要补充材料：{{title}}',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的 <strong>{{title}}</strong> 需要补充材料后继续审核。</p>\n<p>{{body}}</p>\n<p>请尽快进入申请详情按要求补充。</p>\n<p><a href="{{actionUrl}}">去补充材料</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'supplement_submitted',
+    name: '补充材料已提交',
+    description: '用户已提交补充材料，提醒管理员继续审核。',
+    subjectExample: '{{title}} 已提交补充材料',
+    bodyExample: '<p>管理员你好，</p>\n<p><strong>{{title}}</strong> 的补充材料已提交。</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">进入后台查看材料</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'student_approved',
+    name: '学生认证已通过',
+    description: '学生、教师或一线身份认证审核通过。',
+    subjectExample: '{{title}} 已通过',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的 <strong>{{title}}</strong> 已通过审核。</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">查看认证详情</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'student_rejected',
+    name: '认证未通过',
+    description: '身份认证被退回、撤销或拒绝。',
+    subjectExample: '{{title}} 未通过',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的 <strong>{{title}}</strong> 未通过审核。</p>\n<p><strong>原因：</strong>{{body}}</p>\n<p><a href="{{actionUrl}}">查看认证详情</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'student_required',
+    name: '认证需补充材料',
+    description: '认证材料需要补充或重新提交。',
+    subjectExample: '认证需要补充材料：{{title}}',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的 <strong>{{title}}</strong> 需要补充材料。</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">去补充认证材料</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'image_succeeded',
+    name: '图片生成完成',
+    description: 'AI 图片生成任务完成，可查看生成结果。',
     subjectExample: '{{title}}',
-    bodyExample: '你好 {{recipientName}}，\n\n{{body}}',
-    variables: [
-      { key: 'title', label: '标题', description: '通知标题或通告标题' },
-      { key: 'body', label: '正文', description: '通知正文，支持从富文本转为纯文本' },
-      { key: 'recipientName', label: '收件人', description: '用户显示名，缺省使用邮箱或用户 ID' },
-      { key: 'siteName', label: '站点名', description: '固定为 Touch Great Welfare' },
-      { key: 'actionUrl', label: '详情链接', description: '申请、认证、消息中心或后台通告链接' },
-    ],
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的图片生成任务已完成。</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">查看生成结果</a></p>',
+    variables: commonVariables,
+  },
+  {
+    id: 'image_failed',
+    name: '图片生成失败',
+    description: 'AI 图片生成失败，展示失败原因和积分处理。',
+    subjectExample: '{{title}}',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>你的图片生成任务未能完成。</p>\n<p><strong>失败原因：</strong>{{body}}</p>\n<p>相关积分会按规则处理，你也可以进入申请详情查看记录。</p>\n<p><a href="{{actionUrl}}">查看任务详情</a></p>',
+    variables: commonVariables,
   },
   {
     id: 'announcement',
     name: '管理员通告',
-    description: '适合批量运营通知，突出通告内容和站内查看入口。',
+    description: '批量运营通知、维护公告或资源开放提醒。',
     subjectExample: '【通告】{{title}}',
-    bodyExample: '你好 {{recipientName}}，\n\n{{body}}\n\n可在消息中心查看完整通告。',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">可在消息中心查看完整通告</a></p>',
     variables: [
       { key: 'title', label: '通告标题', description: '管理员填写的通告标题' },
       { key: 'body', label: '通告内容', description: '管理员填写的通告正文' },
       { key: 'recipientName', label: '收件人', description: '逐个收件人的显示名' },
-      { key: 'createdAt', label: '发送时间', description: '通告创建时间' },
+      createdAtVariable,
       { key: 'actionUrl', label: '消息中心', description: '跳转到站内消息入口' },
     ],
   },
   {
-    id: 'action_required',
-    name: '需要处理',
-    description: '适合补充材料、审核提醒等需要用户下一步操作的通知。',
-    subjectExample: '需要处理：{{title}}',
-    bodyExample: '你好 {{recipientName}}，\n\n{{body}}\n\n请尽快进入站内处理。',
-    variables: [
-      { key: 'title', label: '事项标题', description: '需要处理的事项' },
-      { key: 'body', label: '处理说明', description: '补充要求或审核说明' },
-      { key: 'recipientName', label: '收件人', description: '用户显示名' },
-      { key: 'actionUrl', label: '处理链接', description: '申请、认证或消息中心链接' },
-    ],
-  },
-  {
-    id: 'result',
-    name: '结果通知',
-    description: '适合申请通过、退回、认证完成、图片生成结果等状态更新。',
-    subjectExample: '结果更新：{{title}}',
-    bodyExample: '你好 {{recipientName}}，\n\n{{body}}\n\n详情可在站内查看。',
-    variables: [
-      { key: 'title', label: '结果标题', description: '结果状态标题' },
-      { key: 'body', label: '结果说明', description: '审核回复、发放说明或失败原因' },
-      { key: 'recipientName', label: '收件人', description: '用户显示名' },
-      { key: 'actionUrl', label: '详情链接', description: '相关业务详情页链接' },
-    ],
-  },
-  {
     id: 'system',
-    name: '系统简报',
-    description: '适合测试邮件、系统维护和配置验证，内容更短。',
+    name: '系统测试 / 配置验证',
+    description: '测试邮件、系统维护和配置验证。',
     subjectExample: '{{title}}',
-    bodyExample: '{{body}}',
+    bodyExample: '<p>{{body}}</p>\n<p><small>生成时间：{{createdAt}}</small></p>',
     variables: [
       { key: 'title', label: '标题', description: '系统消息标题' },
       { key: 'body', label: '正文', description: '系统消息正文' },
       { key: 'siteName', label: '站点名', description: '固定为 Touch Great Welfare' },
-      { key: 'createdAt', label: '生成时间', description: '邮件生成时间' },
+      createdAtVariable,
     ],
+  },
+  {
+    id: 'default',
+    name: '通用兜底通知',
+    description: '未匹配到具体业务场景时使用的兜底模板。',
+    subjectExample: '{{title}}',
+    bodyExample: '<p>你好 {{recipientName}}，</p>\n<p>{{body}}</p>\n<p><a href="{{actionUrl}}">查看详情</a></p>',
+    variables: commonVariables,
   },
 ]
 
@@ -180,6 +238,7 @@ export interface PushSubscriptionPayload {
     p256dh: string
     auth: string
   }
+  userAgent?: string
 }
 
 export interface NotificationListResult {
@@ -215,7 +274,17 @@ export interface AdminAnnouncementListResult {
   announcements: AdminAnnouncementSummary[]
 }
 
-export type SystemLogLevel = 'info' | 'warning' | 'error' | 'success'
+export interface CreateAdminAnnouncementPayload {
+  title: string
+  body: string
+  templateId?: NotificationTemplateId
+  channels: NotificationChannel[]
+  forcePopup: boolean
+  forcePush: boolean
+  targetUserIds?: string[]
+}
+
+export type SystemLogLevel = 'info' | 'success' | 'warning' | 'error'
 
 export interface SystemLogItem {
   id: string
@@ -225,22 +294,12 @@ export interface SystemLogItem {
   message: string
   details: Record<string, unknown>
   refId?: string
-  durationMs?: number
   createdAt: string
+  durationMs?: number
 }
 
 export interface SystemLogListResult {
   logs: SystemLogItem[]
-}
-
-export interface CreateAdminAnnouncementPayload {
-  title: string
-  body: string
-  templateId?: NotificationTemplateId
-  channels: NotificationChannel[]
-  forcePopup: boolean
-  forcePush: boolean
-  targetUserIds?: string[]
 }
 
 export const EMAIL_NOTIFICATION_COST = 5

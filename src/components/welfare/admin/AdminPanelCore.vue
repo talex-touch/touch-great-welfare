@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
 import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
+import type { NotificationTemplateId } from '~/shared/notifications'
 import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -379,14 +380,7 @@ const emailTemplateDrafts = reactive(Object.fromEntries(notificationTemplateOpti
 const emailTemplateTestForm = reactive({
   emailAddress: '',
   provider: 'feishu_mail' as 'auto' | 'feishu_mail' | 'resend' | 'smtp',
-  variablesJson: JSON.stringify({
-    title: '模板测试通知',
-    body: '这里是根据变量渲染出的测试正文。',
-    recipientName: '测试用户',
-    siteName: 'Touch Great Welfare',
-    actionUrl: 'https://example.com/dashboard/notifications',
-    createdAt: '2026/06/12 12:00',
-  }, null, 2),
+  variablesJson: JSON.stringify(defaultEmailTemplateVariables(notificationTemplateOptions[0].id), null, 2),
   sending: false,
   message: '',
 })
@@ -2125,6 +2119,42 @@ function renderEmailTemplateText(value: string, variables: Record<string, string
   return value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => variables[key] ?? '')
 }
 
+function defaultEmailTemplateVariables(templateId: string) {
+  const base = {
+    title: 'LLMApi 资源',
+    body: '你的申请已完成审核，管理员已处理相关资源。',
+    recipientName: '测试用户',
+    siteName: 'Touch Great Welfare',
+    actionUrl: 'https://example.com/dashboard/applications/app_demo',
+    createdAt: '2026/06/12 12:00',
+  }
+  if (templateId === 'resource_approved')
+    return { ...base, title: 'LLMApi 资源', body: '你的 LLMApi 额度申请已通过，系统将进入自动发放流程。' }
+  if (templateId === 'resource_delivered')
+    return { ...base, title: 'NewAPI Key', body: '系统已生成临时 API Key、额度和到期时间。为安全起见，完整密钥只在申请详情中展示一次。' }
+  if (templateId === 'application_rejected')
+    return { ...base, title: 'GPU 资源申请', body: '当前材料未说明用途、预计时长和成本归属，请补充后重新提交。' }
+  if (templateId === 'supplement_required')
+    return { ...base, title: '数据库权限申请', body: '请补充数据库名称、访问 IP、权限范围和回收时间。' }
+  if (templateId === 'supplement_submitted')
+    return { ...base, title: '数据库权限申请', body: '用户已补充访问 IP、权限范围和项目说明，请继续审核。' }
+  if (templateId === 'student_approved')
+    return { ...base, title: '学生认证', body: '你的学生认证已通过，审核积分已返还。', actionUrl: 'https://example.com/dashboard/verification' }
+  if (templateId === 'student_rejected')
+    return { ...base, title: '学生认证', body: '提交的证明材料无法确认当前学籍状态，请上传包含学校、姓名和有效期的材料。', actionUrl: 'https://example.com/dashboard/verification' }
+  if (templateId === 'student_required')
+    return { ...base, title: '学生认证', body: '请补充带有效期的学生身份证明或教育邮箱验证截图。', actionUrl: 'https://example.com/dashboard/verification' }
+  if (templateId === 'image_succeeded')
+    return { ...base, title: '图片生成任务', body: '你的海报图片已生成完成，可进入申请记录查看结果。' }
+  if (templateId === 'image_failed')
+    return { ...base, title: '图片生成任务', body: '模型服务返回超时，已退回本次图片生成积分。' }
+  if (templateId === 'announcement')
+    return { ...base, title: '资源开放提醒', body: '本周新增一批 LLMApi 和数据库资源名额，符合条件的用户可进入资源申请页提交。', actionUrl: 'https://example.com/dashboard/notifications' }
+  if (templateId === 'system')
+    return { ...base, title: '邮件通道测试', body: '这是一封系统测试邮件，用于验证当前邮件供应商配置。' }
+  return base
+}
+
 function defaultEmailTemplateDraft(template: { subjectExample: string, bodyExample: string }) {
   return {
     subjectTemplate: template.subjectExample,
@@ -2204,6 +2234,11 @@ const emailTemplatePreview = computed(() => {
 function resetSelectedEmailTemplateDraft() {
   const template = selectedEmailTemplate.value
   emailTemplateDrafts[template.id] = defaultEmailTemplateDraft(template)
+}
+
+function selectEmailTemplate(templateId: NotificationTemplateId) {
+  activeEmailTemplateId.value = templateId
+  emailTemplateTestForm.variablesJson = JSON.stringify(defaultEmailTemplateVariables(templateId), null, 2)
 }
 
 function sendSelectedEmailTemplateTest() {
@@ -3444,7 +3479,7 @@ onMounted(() => {
                       type="button"
                       class="notification-template-list-item"
                       :class="{ 'is-active': activeEmailTemplateId === template.id }"
-                      @click="activeEmailTemplateId = template.id"
+                      @click="selectEmailTemplate(template.id)"
                     >
                       <span>
                         <b>{{ template.name }}</b>

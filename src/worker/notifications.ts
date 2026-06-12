@@ -352,10 +352,26 @@ function inferNotificationTemplateId(event?: NotificationEvent, data?: Record<st
     return 'announcement'
   if (event === 'email_test')
     return 'system'
-  if (event?.includes('needs_supplement') || event?.includes('supplement_submitted'))
-    return 'action_required'
-  if (event?.includes('answered') || event?.includes('approved') || event?.includes('rejected') || event?.includes('revoked') || event?.startsWith('ai_image_'))
-    return 'result'
+  if (event === 'application_rejected')
+    return 'application_rejected'
+  if (event === 'application_needs_supplement')
+    return 'supplement_required'
+  if (event === 'application_supplement_submitted')
+    return 'supplement_submitted'
+  if (event === 'application_answered') {
+    const title = typeof data?.title === 'string' ? data.title : ''
+    return title.includes('发放') || title.includes('分配') ? 'resource_delivered' : 'resource_approved'
+  }
+  if (event === 'student_needs_supplement')
+    return 'student_required'
+  if (event === 'student_approved')
+    return 'student_approved'
+  if (event === 'student_rejected' || event === 'student_revoked')
+    return 'student_rejected'
+  if (event === 'ai_image_succeeded')
+    return 'image_succeeded'
+  if (event === 'ai_image_failed')
+    return 'image_failed'
   return 'default'
 }
 
@@ -421,25 +437,11 @@ function templateTestInput(payload: SendEmailTestPayload, chargedPoints: number,
 }
 
 function templateBodyOpening(templateId: NotificationTemplateId) {
-  if (templateId === 'system')
-    return '{{body}}'
-  if (templateId === 'announcement')
-    return '你好 {{recipientName}}，\n\n{{body}}\n\n可在消息中心查看完整通告。'
-  if (templateId === 'action_required')
-    return '你好 {{recipientName}}，\n\n{{body}}\n\n请尽快进入站内处理。'
-  if (templateId === 'result')
-    return '你好 {{recipientName}}，\n\n{{body}}\n\n详情可在站内查看。'
-  return '你好 {{recipientName}}，\n\n{{body}}'
+  return notificationTemplateOption(templateId).bodyExample
 }
 
 function templateSubject(title: string, templateId: NotificationTemplateId) {
-  if (templateId === 'announcement' && !title.startsWith('【通告】'))
-    return `【通告】${title}`
-  if (templateId === 'action_required' && !title.startsWith('需要处理：'))
-    return `需要处理：${title}`
-  if (templateId === 'result' && !title.startsWith('结果更新：'))
-    return `结果更新：${title}`
-  return title
+  return replaceTemplateVariables(notificationTemplateOption(templateId).subjectExample, { title }).trim() || title
 }
 
 function normalizeSiteBaseUrl(value?: string | null) {
@@ -556,9 +558,11 @@ function notificationActionPath(event: NotificationEvent | undefined, data: Reco
 function notificationEmailAccent(templateId: NotificationTemplateId) {
   if (templateId === 'announcement')
     return '#2563eb'
-  if (templateId === 'action_required')
+  if (templateId === 'supplement_required' || templateId === 'student_required')
     return '#d97706'
-  if (templateId === 'result')
+  if (templateId === 'application_rejected' || templateId === 'student_rejected' || templateId === 'image_failed')
+    return '#dc2626'
+  if (templateId === 'resource_delivered' || templateId === 'resource_approved' || templateId === 'student_approved' || templateId === 'image_succeeded')
     return '#059669'
   if (templateId === 'system')
     return '#64748b'
@@ -575,14 +579,15 @@ export function renderNotificationEmailContent(
 ) {
   const templateId = inferNotificationTemplateId(event, data)
   const template = notificationTemplateOption(templateId)
-  const subject = templateSubject(title, templateId)
+  const businessTitle = typeof data?.title === 'string' && data.title.trim() ? data.title.trim() : title
+  const subject = templateSubject(businessTitle, templateId)
   const customBodyIsHtml = data?.kind === 'email_template_test' && data.bodyIsHtml === true
   const plainBody = customBodyIsHtml ? truncateEmailBody(richTextToPlainText(body)) : notificationPlainBody(body)
   const actionPath = notificationActionPath(event, data)
   const actionUrl = actionPath ? absoluteNotificationUrl(actionPath, siteBaseUrl) : ''
   const createdAt = typeof data?.createdAt === 'string' ? data.createdAt : ''
   const variables = {
-    title,
+    title: businessTitle,
     subject,
     body: plainBody,
     recipientName: recipientName || '用户',
@@ -3200,6 +3205,8 @@ function applicationNotification(application: WelfareApplication, event: Notific
     data: {
       applicationId: application.id,
       type: application.type,
+      title: isRejected ? `${typeName} 申请` : isDelivered ? `${typeName} 资源` : `${typeName} 申请`,
+      status: application.status,
       attachments: attachmentData(message?.attachments),
     },
   }
@@ -3230,6 +3237,8 @@ function supplementRequestNotification(application: WelfareApplication) {
     data: {
       applicationId: application.id,
       type: application.type,
+      title: `${typeName} 申请`,
+      status: application.status,
     },
   }
 }
@@ -3244,6 +3253,8 @@ function supplementSubmittedNotification(application: WelfareApplication, user?:
     data: {
       applicationId: application.id,
       type: application.type,
+      title: `${typeName} 申请`,
+      status: application.status,
       userId: application.userId,
       attachments: attachmentData(message?.attachments),
     },
@@ -3268,6 +3279,7 @@ function verificationSubmittedNotification(verification: StudentVerification, us
     data: {
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
+      title: `${verification.category} 认证`,
       userId: verification.userId,
       attachments: attachmentData(verification.attachments),
     },
@@ -3281,6 +3293,7 @@ function verificationSubmittedUserNotification(verification: StudentVerification
     data: {
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
+      title: `${verification.category} 认证`,
     },
   }
 }
@@ -3293,6 +3306,7 @@ function verificationSupplementSubmittedNotification(verification: StudentVerifi
     data: {
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
+      title: `${verification.category} 认证`,
       userId: verification.userId,
       attachments: attachmentData(verification.attachments),
     },
@@ -3306,6 +3320,7 @@ function verificationSupplementSubmittedUserNotification(verification: StudentVe
     data: {
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
+      title: `${verification.category} 认证`,
     },
   }
 }
@@ -3317,6 +3332,8 @@ function verificationReviewNotification(verification: StudentVerification, suffi
     data: {
       verificationId: verification.id,
       verificationType: verification.verificationType ?? 'student',
+      title: `${verification.category} 认证`,
+      status: verification.status,
     },
   }
 }
