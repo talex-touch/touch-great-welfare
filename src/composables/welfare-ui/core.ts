@@ -5,7 +5,7 @@ import type { OAuthProviderConfigView, PublicOAuthProvider } from '../oauth'
 import type { RechargeConfigView, RechargeStatusResult, SaveRechargeConfigResult } from '../recharge'
 import type { Sub2ApiGroupView, Sub2ApiKeyView } from '../sub2api'
 import type { ApplicationMessageType, CouponDiscountType, CouponScope, CrowdReviewDecision, RejectApplicationOptions, RequestKind, ResourceApprovalStatus, ResourceLifecycleActionPayload, ResourceTermId, ResourceType, SquarePostType, StudentVerification, UserProfile, VerificationType, WelfareApplication } from '../welfare'
-import type { NotificationChannel, SystemLogItem } from '~/shared/notifications'
+import type { NotificationChannel, NotificationTemplateId, SystemLogItem } from '~/shared/notifications'
 import { computed, reactive, ref, watch } from 'vue'
 import { STUDENT_SCHOOL_SUGGESTIONS } from '~/data/student-schools'
 import { createApplicationReview, createImageJob, createTemporaryAiKey, deleteTemporaryAiKey, loadAiConfig, loadTemporaryAiKeys, provisionApplicationReward, saveAiConfig } from '../ai'
@@ -542,6 +542,7 @@ export const systemConfigForm = reactive({
 export const adminAnnouncementForm = reactive({
   title: '',
   body: '',
+  templateId: 'announcement' as NotificationTemplateId,
   channels: {
     in_app: true,
     email: false,
@@ -2905,6 +2906,7 @@ export function useWelfareUiState() {
       adminAnnouncements.value = (await createAdminAnnouncement(welfare.currentUser.value.id, {
         title: adminAnnouncementForm.title,
         body: adminAnnouncementForm.body,
+        templateId: adminAnnouncementForm.templateId,
         channels,
         forcePopup: adminAnnouncementForm.forcePopup,
         forcePush: adminAnnouncementForm.forcePush,

@@ -10,6 +10,7 @@ import type {
   NotificationEvent,
   NotificationItem,
   NotificationSettingsView,
+  NotificationTemplateId,
   PushSubscriptionPayload,
   SaveNotificationSettingsPayload,
   SendEmailTestPayload,
@@ -18,7 +19,7 @@ import type {
   SystemLogLevel,
   SystemLogListResult,
 } from '~/shared/notifications'
-import { EMAIL_NOTIFICATION_COST } from '~/shared/notifications'
+import { EMAIL_NOTIFICATION_COST, NOTIFICATION_TEMPLATE_OPTIONS, notificationTemplateOption } from '~/shared/notifications'
 import { richTextToPlainText } from '~/utils/rich-text'
 import {
   assertAdminRequest,
@@ -319,6 +320,67 @@ function notificationText(title: string, body: string) {
   return `${title}\n\n${body}\n\nTouch Great Welfare`
 }
 
+function formatNotificationDate(value?: string) {
+  const date = value ? new Date(value) : new Date()
+  if (!Number.isFinite(date.getTime()))
+    return value || ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function normalizedTemplateId(value: unknown): NotificationTemplateId | undefined {
+  return typeof value === 'string' && NOTIFICATION_TEMPLATE_OPTIONS.some(item => item.id === value)
+    ? value as NotificationTemplateId
+    : undefined
+}
+
+function inferNotificationTemplateId(event?: NotificationEvent, data?: Record<string, unknown>): NotificationTemplateId {
+  const configured = normalizedTemplateId(data?.templateId)
+  if (configured)
+    return configured
+  if (event === 'admin_announcement')
+    return 'announcement'
+  if (event === 'email_test')
+    return 'system'
+  if (event?.includes('needs_supplement') || event?.includes('supplement_submitted'))
+    return 'action_required'
+  if (event?.includes('answered') || event?.includes('approved') || event?.includes('rejected') || event?.includes('revoked') || event?.startsWith('ai_image_'))
+    return 'result'
+  return 'default'
+}
+
+function replaceTemplateVariables(value: string, variables: Record<string, string>) {
+  return value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => variables[key] ?? '')
+}
+
+function templateBodyOpening(templateId: NotificationTemplateId) {
+  if (templateId === 'system')
+    return '{{body}}'
+  if (templateId === 'announcement')
+    return '你好 {{recipientName}}，\n\n{{body}}\n\n可在消息中心查看完整通告。'
+  if (templateId === 'action_required')
+    return '你好 {{recipientName}}，\n\n{{body}}\n\n请尽快进入站内处理。'
+  if (templateId === 'result')
+    return '你好 {{recipientName}}，\n\n{{body}}\n\n详情可在站内查看。'
+  return '你好 {{recipientName}}，\n\n{{body}}'
+}
+
+function templateSubject(title: string, templateId: NotificationTemplateId) {
+  if (templateId === 'announcement' && !title.startsWith('【通告】'))
+    return `【通告】${title}`
+  if (templateId === 'action_required' && !title.startsWith('需要处理：'))
+    return `需要处理：${title}`
+  if (templateId === 'result' && !title.startsWith('结果更新：'))
+    return `结果更新：${title}`
+  return title
+}
+
 function normalizeSiteBaseUrl(value?: string | null) {
   const text = value?.trim().replace(/\/+$/, '') ?? ''
   if (!text)
@@ -418,18 +480,71 @@ function notificationAttachments(data: Record<string, unknown> | undefined, site
     .filter(item => item.url)
 }
 
-export function renderNotificationEmailContent(title: string, body: string, data: Record<string, unknown> | undefined, siteBaseUrl: string) {
+function notificationActionPath(event: NotificationEvent | undefined, data: Record<string, unknown> | undefined) {
+  if (typeof data?.actionUrl === 'string' && data.actionUrl.trim())
+    return data.actionUrl.trim()
+  if (typeof data?.applicationId === 'string' && data.applicationId.trim())
+    return `/dashboard/apply/${encodeURIComponent(data.applicationId.trim())}`
+  if (typeof data?.verificationId === 'string' && data.verificationId.trim())
+    return `/dashboard/student/${encodeURIComponent(data.verificationId.trim())}`
+  if (event === 'admin_announcement')
+    return '/dashboard/notifications'
+  return ''
+}
+
+function notificationEmailAccent(templateId: NotificationTemplateId) {
+  if (templateId === 'announcement')
+    return '#2563eb'
+  if (templateId === 'action_required')
+    return '#d97706'
+  if (templateId === 'result')
+    return '#059669'
+  if (templateId === 'system')
+    return '#64748b'
+  return '#0f172a'
+}
+
+export function renderNotificationEmailContent(
+  title: string,
+  body: string,
+  data: Record<string, unknown> | undefined,
+  siteBaseUrl: string,
+  event?: NotificationEvent,
+  recipientName = '用户',
+) {
+  const templateId = inferNotificationTemplateId(event, data)
+  const template = notificationTemplateOption(templateId)
+  const subject = templateSubject(title, templateId)
   const plainBody = notificationPlainBody(body)
+  const actionPath = notificationActionPath(event, data)
+  const actionUrl = actionPath ? absoluteNotificationUrl(actionPath, siteBaseUrl) : ''
+  const createdAt = typeof data?.createdAt === 'string' ? data.createdAt : ''
+  const variables = {
+    title,
+    subject,
+    body: plainBody,
+    recipientName: recipientName || '用户',
+    siteName: 'Touch Great Welfare',
+    actionUrl,
+    createdAt: formatNotificationDate(createdAt),
+  }
+  const renderedBody = replaceTemplateVariables(templateBodyOpening(templateId), variables).trim()
   const attachments = notificationAttachments(data, siteBaseUrl)
   const attachmentText = attachments.length
     ? `\n\n附件：\n${attachments.map((item, index) => `${index + 1}. ${item.name} - 点击下载：${item.url}`).join('\n')}`
     : ''
-  const text = `${title}\n\n${plainBody}${attachmentText}\n\nTouch Great Welfare`
-  const attachmentHtml = attachments.length
-    ? `<p><strong>附件：</strong></p><ol>${attachments.map(item => `<li>${escapeHtml(item.name)} - <a href="${escapeHtml(item.url)}">点击下载</a></li>`).join('')}</ol>`
+  const actionText = actionUrl ? `\n\n查看详情：${actionUrl}` : ''
+  const text = `${subject}\n\n${renderedBody}${actionText}${attachmentText}\n\n--\nTouch Great Welfare`
+  const accent = notificationEmailAccent(templateId)
+  const bodyHtml = escapeHtml(renderedBody).replace(/\n/g, '<br>')
+  const actionHtml = actionUrl
+    ? `<a href="${escapeHtml(actionUrl)}" style="display:inline-block;margin-top:20px;padding:10px 16px;border-radius:999px;background:${accent};color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;">查看详情</a>`
     : ''
-  const html = `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(plainBody).replace(/\n/g, '<br>')}</p>${attachmentHtml}<p style="color:#64748b">Touch Great Welfare</p>`
-  return { text, html }
+  const attachmentHtml = attachments.length
+    ? `<div style="margin-top:22px;padding:14px 16px;border-radius:16px;background:#f8fafc;border:1px solid #e2e8f0;"><div style="font-size:13px;font-weight:700;color:#334155;margin-bottom:8px;">附件</div><ol style="margin:0;padding-left:18px;color:#475569;">${attachments.map(item => `<li style="margin:6px 0;color:${accent};">${escapeHtml(item.name)} - <a href="${escapeHtml(item.url)}">点击下载</a></li>`).join('')}</ol></div>`
+    : ''
+  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;"><div style="max-width:640px;margin:0 auto;padding:32px 18px;"><div style="font-size:13px;font-weight:800;letter-spacing:.02em;color:${accent};margin-bottom:12px;">Touch Great Welfare</div><div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:24px;padding:28px;box-shadow:0 18px 45px rgba(15,23,42,.06);"><div style="display:inline-block;padding:6px 10px;border-radius:999px;background:${accent}14;color:${accent};font-size:12px;font-weight:800;margin-bottom:14px;">${escapeHtml(template.name)}</div><h1 style="font-size:22px;line-height:1.35;margin:0 0 14px;color:#0f172a;">${escapeHtml(subject)}</h1><div style="font-size:15px;line-height:1.85;color:#334155;">${bodyHtml}</div>${actionHtml}${attachmentHtml}</div><div style="font-size:12px;line-height:1.7;color:#94a3b8;margin-top:16px;text-align:center;">这是一封系统通知，请勿直接回复。<br>© Touch Great Welfare</div></div></body></html>`
+  return { text, html, subject, templateId }
 }
 
 function attachmentData(attachments?: AttachmentMeta[]) {
@@ -2270,10 +2385,12 @@ async function sendResendEmail(
   title: string,
   body: string,
   data?: Record<string, unknown>,
+  event?: NotificationEvent,
+  recipientName?: string,
 ) {
   if (!config.resendApiKey || !config.resendFromEmail)
     throw new Error('Resend 邮箱通知未配置')
-  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
+  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl, event, recipientName)
 
   const response = await fetchWithTimeout('https://api.resend.com/emails', {
     method: 'POST',
@@ -2284,7 +2401,7 @@ async function sendResendEmail(
     body: JSON.stringify({
       from: config.resendFromEmail,
       to: [to],
-      subject: title,
+      subject: content.subject,
       text: content.text,
       html: content.html,
     }),
@@ -2302,11 +2419,13 @@ async function sendSmtpMail(
   title: string,
   body: string,
   data?: Record<string, unknown>,
+  event?: NotificationEvent,
+  recipientName?: string,
 ) {
   if (!config.smtpEnabled || !config.smtpHost || !config.smtpPassword || !config.smtpFromEmail)
     throw new Error('SMTP 邮箱通知未配置')
 
-  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
+  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl, event, recipientName)
   return sendSmtpEmail({
     host: config.smtpHost,
     port: config.smtpPort,
@@ -2316,7 +2435,7 @@ async function sendSmtpMail(
     fromName: config.smtpFromName,
   }, {
     to,
-    subject: title,
+    subject: content.subject,
     text: content.text,
     html: content.html,
   })
@@ -2330,12 +2449,14 @@ async function sendFeishuMail(
   body: string,
   notificationId: string,
   data?: Record<string, unknown>,
+  event?: NotificationEvent,
+  recipientName?: string,
 ) {
   if (!isFeishuMailConfigured(config))
     throw new Error(feishuMailConfigErrorMessage(config) || '飞书邮件通知未配置')
 
   const accessToken = await feishuAccessTokenForSend(env, config)
-  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl)
+  const content = renderNotificationEmailContent(title, body, data, config.feishuSiteBaseUrl, event, recipientName)
   const response = await fetchWithTimeout(`https://open.feishu.cn/open-apis/mail/v1/user_mailboxes/${encodeURIComponent(config.feishuUserMailboxId)}/messages/send`, {
     method: 'POST',
     headers: {
@@ -2343,7 +2464,7 @@ async function sendFeishuMail(
       'content-type': 'application/json; charset=utf-8',
     },
     body: JSON.stringify({
-      subject: title,
+      subject: content.subject,
       to: [{ mail_address: to }],
       body_plain_text: content.text,
       body_html: content.html,
@@ -2367,6 +2488,7 @@ async function dispatchEmailChannel(
   notificationId: string,
   input: CreateNotificationInput,
   chargedPoints = 0,
+  recipientName?: string,
 ) {
   const config = await getEffectiveNotificationProviderConfig(env)
   const attempts: EmailDeliveryAttempt[] = []
@@ -2380,7 +2502,7 @@ async function dispatchEmailChannel(
     }
     else {
       try {
-        const providerId = await sendSmtpMail(config, address, input.title, input.body, input.data)
+        const providerId = await sendSmtpMail(config, address, input.title, input.body, input.data, input.event, recipientName)
         if (chargedPoints)
           await chargeEmailNotification(env, userId, notificationId)
         await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'smtp')
@@ -2409,7 +2531,7 @@ async function dispatchEmailChannel(
     }
     else {
       try {
-        const providerId = await sendFeishuMail(env, config, address, input.title, input.body, notificationId, input.data)
+        const providerId = await sendFeishuMail(env, config, address, input.title, input.body, notificationId, input.data, input.event, recipientName)
         if (chargedPoints)
           await chargeEmailNotification(env, userId, notificationId)
         await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'feishu_mail')
@@ -2427,7 +2549,7 @@ async function dispatchEmailChannel(
   // 最后尝试 Resend
   if (config.resendApiKey && config.resendFromEmail) {
     try {
-      const providerId = await sendResendEmail(config, address, input.title, input.body, input.data)
+      const providerId = await sendResendEmail(config, address, input.title, input.body, input.data, input.event, recipientName)
       if (chargedPoints)
         await chargeEmailNotification(env, userId, notificationId)
       await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, 'resend')
@@ -2528,15 +2650,16 @@ async function dispatchSpecificEmailProvider(
   input: CreateNotificationInput,
   provider: EmailDeliveryProvider,
   chargedPoints = 0,
+  recipientName?: string,
 ) {
   const config = await getEffectiveNotificationProviderConfig(env)
   const attempts: EmailDeliveryAttempt[] = []
   try {
     const providerId = provider === 'feishu_mail'
-      ? await sendFeishuMail(env, config, address, input.title, input.body, notificationId, input.data)
+      ? await sendFeishuMail(env, config, address, input.title, input.body, notificationId, input.data, input.event, recipientName)
       : provider === 'smtp'
-        ? await sendSmtpMail(config, address, input.title, input.body, input.data)
-        : await sendResendEmail(config, address, input.title, input.body, input.data)
+        ? await sendSmtpMail(config, address, input.title, input.body, input.data, input.event, recipientName)
+        : await sendResendEmail(config, address, input.title, input.body, input.data, input.event, recipientName)
     if (chargedPoints)
       await chargeEmailNotification(env, userId, notificationId)
     await recordDelivery(env, notificationId, 'email', 'sent', '', chargedPoints, providerId, provider)
@@ -2586,9 +2709,10 @@ async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestP
     },
   }
   const startedAt = performance.now()
+  const recipientName = user.profile.displayName || user.profile.email || user.id
   const delivery = payload.provider && payload.provider !== 'auto'
-    ? await dispatchSpecificEmailProvider(env, user.id, emailAddress, notificationId, input, payload.provider, chargedPoints)
-    : await dispatchEmailChannel(env, user.id, emailAddress, notificationId, input, chargedPoints)
+    ? await dispatchSpecificEmailProvider(env, user.id, emailAddress, notificationId, input, payload.provider, chargedPoints, recipientName)
+    : await dispatchEmailChannel(env, user.id, emailAddress, notificationId, input, chargedPoints, recipientName)
 
   if (!delivery.sent || !delivery.provider) {
     await writeSystemLog(env, {
@@ -2641,7 +2765,7 @@ async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: No
       await recordDelivery(env, notificationId, 'email', 'skipped', '邮箱通知余额不足')
     }
     else {
-      await dispatchEmailChannel(env, user.id, address, notificationId, input, EMAIL_NOTIFICATION_COST)
+      await dispatchEmailChannel(env, user.id, address, notificationId, input, EMAIL_NOTIFICATION_COST, user.profile.displayName || user.profile.email || user.id)
     }
   }
 
@@ -2699,7 +2823,7 @@ async function dispatchAdminAnnouncementChannels(
   if (channels.includes('email')) {
     const startedAt = performance.now()
     const address = settings?.email_address || user.profile.email
-    const result = await dispatchEmailChannel(env, user.id, address, notificationId, input)
+    const result = await dispatchEmailChannel(env, user.id, address, notificationId, input, 0, user.profile.displayName || user.profile.email || user.id)
     const failed = result.attempts.filter(item => item.status === 'failed')
     recordResult('email', result.sent ? 'sent' : failed.length ? 'failed' : 'skipped', result.attempts.map(formatEmailDeliveryAttempt).join('；'), startedAt)
   }
@@ -2808,6 +2932,7 @@ async function listAdminAnnouncements(env: WorkerEnv): Promise<AdminAnnouncement
       id: announcementId,
       title: row.title,
       body: row.body,
+      templateId: inferNotificationTemplateId('admin_announcement', data),
       channels,
       forcePopup: data.forcePopup === true,
       forcePush: data.forcePush === true,
@@ -2858,12 +2983,14 @@ async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: Cre
 
   const forcePush = !!payload.forcePush
   const channels = normalizeNotificationChannels(payload.channels, forcePush)
+  const templateId = normalizedTemplateId(payload.templateId) ?? 'announcement'
   const targetIds = new Set((payload.targetUserIds ?? []).map(id => id.trim()).filter(Boolean))
   const recipients = state.users.filter(user => !targetIds.size || targetIds.has(user.id))
   if (!recipients.length)
     throw new Error('没有可推送的用户')
 
   const announcementId = createId('ann')
+  const announcementCreatedAt = now()
   const startedAt = performance.now()
   await writeSystemLog(env, {
     level: 'info',
@@ -2884,10 +3011,12 @@ async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: Cre
         body,
         data: {
           announcementId,
+          templateId,
           channels,
           forcePopup: !!payload.forcePopup,
           forcePush,
           createdBy: admin.id,
+          createdAt: announcementCreatedAt,
         },
       })
       await recordDelivery(env, notificationId, 'in_app', 'sent')
@@ -2901,6 +3030,11 @@ async function createAdminAnnouncement(env: WorkerEnv, admin: User, payload: Cre
           event: 'admin_announcement',
           title,
           body,
+          data: {
+            announcementId,
+            templateId,
+            createdAt: announcementCreatedAt,
+          },
         },
         channels,
         forcePush,

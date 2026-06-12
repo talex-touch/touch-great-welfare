@@ -8,6 +8,7 @@ import { useWelfareFeedback } from '~/composables/feedback'
 import { buildResourceGovernanceSnapshot, formatBytes, formatDate, formatPoints, isGptProModel, MAX_ATTACHMENT_BYTES, normalizeVerificationType, RESOURCE_TYPE_CONFIGS, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
+import { NOTIFICATION_TEMPLATE_OPTIONS, notificationTemplateOption } from '~/shared/notifications'
 import RichTextEditor from '../RichTextEditor.vue'
 import RichTextView from '../RichTextView.vue'
 import VerificationAttachmentGrid from '../VerificationAttachmentGrid.vue'
@@ -367,6 +368,9 @@ const announcementChannelOptions = [
   { value: 'feishu', label: '飞书' },
   { value: 'browser_push', label: '浏览器推送' },
 ] as const
+
+const notificationTemplateOptions = NOTIFICATION_TEMPLATE_OPTIONS
+const selectedAnnouncementTemplate = computed(() => notificationTemplateOption(adminAnnouncementForm.templateId))
 
 const auditAreaFilterOptions = [
   { value: ALL_FILTER, label: '全部模块' },
@@ -2062,6 +2066,14 @@ function notificationChannelLabel(channel: string) {
   return announcementChannelOptions.find(item => item.value === channel)?.label ?? channel
 }
 
+function notificationTemplateLabel(templateId?: string) {
+  return notificationTemplateOption(templateId).name
+}
+
+function notificationVariableToken(key: string) {
+  return `{{${key}}}`
+}
+
 function handleFeishuMailAuthCallbackMessage() {
   const status = typeof route.query.feishu_mail_auth === 'string' ? route.query.feishu_mail_auth : ''
   if (!status)
@@ -3257,6 +3269,27 @@ onMounted(() => {
             </div>
             <div class="mt-5 gap-5 grid lg:grid-cols-2">
               <label class="gap-2 grid lg:col-span-2">
+                <span class="field-label">推送模板</span>
+                <TxSelect v-model="adminAnnouncementForm.templateId" panel-background="pure" :disabled="!isAdmin || adminAnnouncementForm.loading">
+                  <TxSelectItem v-for="template in notificationTemplateOptions" :key="template.id" :value="template.id" :label="template.name" />
+                </TxSelect>
+                <span class="field-hint">{{ selectedAnnouncementTemplate.description }}</span>
+              </label>
+              <div class="p-4 border border-black/6 rounded-2xl bg-slate-50 dark:border-white/10 dark:bg-white/6 lg:col-span-2">
+                <div class="text-xs text-slate-500 fw-900 mb-2 dark:text-slate-400">
+                  可用变量
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span v-for="variable in selectedAnnouncementTemplate.variables" :key="variable.key" class="admin-pill bg-white dark:bg-white/8" :title="variable.description">
+                    {{ variable.label }} · {{ notificationVariableToken(variable.key) }}
+                  </span>
+                </div>
+                <div class="text-xs text-slate-500 leading-5 mt-3 dark:text-slate-400">
+                  标题示例：{{ selectedAnnouncementTemplate.subjectExample }}<br>
+                  正文示例：{{ selectedAnnouncementTemplate.bodyExample }}
+                </div>
+              </div>
+              <label class="gap-2 grid lg:col-span-2">
                 <span class="field-label">通告标题</span>
                 <TxInput v-model="adminAnnouncementForm.title" :disabled="!isAdmin || adminAnnouncementForm.loading" placeholder="维护通知 / 资源开放提醒" />
               </label>
@@ -3303,6 +3336,7 @@ onMounted(() => {
                   <b class="block truncate">{{ announcement.title }}</b>
                   <span class="text-xs text-slate-500 line-clamp-2 dark:text-slate-400">{{ announcement.body }}</span>
                   <div class="mt-2 flex flex-wrap gap-2">
+                    <span class="admin-pill text-indigo-700 bg-indigo-50 dark:text-indigo-200 dark:bg-indigo-950/30">{{ notificationTemplateLabel(announcement.templateId) }}</span>
                     <span v-if="announcement.forcePopup" class="admin-pill text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30">强制弹窗</span>
                     <span v-if="announcement.forcePush" class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">强制推送</span>
                   </div>
