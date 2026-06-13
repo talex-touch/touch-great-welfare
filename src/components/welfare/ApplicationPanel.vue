@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApplicationItem, RequestKind, ResourceType, WelfareApplication } from '~/composables/welfare'
-import { TxButton, TxCard, TxDrawer, TxStatusBadge } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxCheckbox, TxDrawer, TxSearchInput, TxSelect, TxSelectItem, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -599,45 +599,21 @@ function applicationRowTags(item: WelfareApplication) {
             <span>共 {{ filteredMineApplications.length }} 条</span>
           </div>
           <div class="application-filter-bar">
-            <label class="application-search">
-              <span class="i-carbon-search" aria-hidden="true" />
-              <input v-model="mineSearch" type="search" placeholder="搜索申请标题、资源或描述">
-            </label>
-            <select v-model="mineStatus" class="application-select" aria-label="我的申请状态">
-              <option value="all">
-                全部状态
-              </option>
-              <option value="pending_review">
-                待审核
-              </option>
-              <option value="draft">
-                草稿
-              </option>
-              <option value="in_review">
-                资源审批中
-              </option>
-              <option value="answered">
-                已答复
-              </option>
-              <option value="completed">
-                已结束
-              </option>
-              <option value="rejected">
-                已退回
-              </option>
-            </select>
-            <select v-model="mineSort" class="application-select" aria-label="我的申请排序">
-              <option value="latest">
-                最新申请
-              </option>
-              <option value="oldest">
-                最早申请
-              </option>
-            </select>
-            <label class="application-checkbox">
-              <input v-model="mineOnlyUnfinished" type="checkbox">
-              <span>仅看未完成</span>
-            </label>
+            <TxSearchInput v-model="mineSearch" class="w-full max-lg:col-span-full" placeholder="搜索申请标题、资源或描述" clearable />
+            <TxSelect v-model="mineStatus" aria-label="我的申请状态" panel-background="pure">
+              <TxSelectItem value="all" label="全部状态" />
+              <TxSelectItem value="pending_review" label="待审核" />
+              <TxSelectItem value="draft" label="草稿" />
+              <TxSelectItem value="in_review" label="资源审批中" />
+              <TxSelectItem value="answered" label="已答复" />
+              <TxSelectItem value="completed" label="已结束" />
+              <TxSelectItem value="rejected" label="已退回" />
+            </TxSelect>
+            <TxSelect v-model="mineSort" aria-label="我的申请排序" panel-background="pure">
+              <TxSelectItem value="latest" label="最新申请" />
+              <TxSelectItem value="oldest" label="最早申请" />
+            </TxSelect>
+            <TxCheckbox v-model="mineOnlyUnfinished" variant="checkmark" label="仅看未完成" />
             <TxButton class="application-create-button" variant="primary" @click="goCreateApplication">
               <span class="i-carbon-add" />
               新建申请
@@ -715,48 +691,22 @@ function applicationRowTags(item: WelfareApplication) {
             <span>共 {{ filteredReviewApplications.length }} 条</span>
           </div>
           <div class="application-filter-bar">
-            <label class="application-search">
-              <span class="i-carbon-search" aria-hidden="true" />
-              <input v-model="reviewSearch" type="search" placeholder="搜索申请标题或申请人">
-            </label>
-            <select v-model="reviewStatus" class="application-select" aria-label="审核队列状态">
-              <option value="all">
-                全部状态
-              </option>
-              <option value="pending_review">
-                待审核
-              </option>
-              <option value="needs_supplement">
-                待补充资料
-              </option>
-              <option value="processing">
-                处理中
-              </option>
-              <option value="submitted">
-                已提交
-              </option>
-              <option value="in_review">
-                资源审批中
-              </option>
-            </select>
-            <select v-model="reviewPriority" class="application-select" aria-label="审核优先级">
-              <option value="all">
-                优先级
-              </option>
-              <option value="high">
-                高
-              </option>
-              <option value="medium">
-                中
-              </option>
-              <option value="low">
-                低
-              </option>
-            </select>
-            <label class="application-checkbox">
-              <input v-model="reviewOnlyUnhandled" type="checkbox">
-              <span>仅看未处理</span>
-            </label>
+            <TxSearchInput v-model="reviewSearch" class="w-full max-lg:col-span-full" placeholder="搜索申请标题或申请人" clearable />
+            <TxSelect v-model="reviewStatus" aria-label="审核队列状态" panel-background="pure">
+              <TxSelectItem value="all" label="全部状态" />
+              <TxSelectItem value="pending_review" label="待审核" />
+              <TxSelectItem value="needs_supplement" label="待补充资料" />
+              <TxSelectItem value="processing" label="处理中" />
+              <TxSelectItem value="submitted" label="已提交" />
+              <TxSelectItem value="in_review" label="资源审批中" />
+            </TxSelect>
+            <TxSelect v-model="reviewPriority" aria-label="审核优先级" panel-background="pure">
+              <TxSelectItem value="all" label="优先级" />
+              <TxSelectItem value="high" label="高" />
+              <TxSelectItem value="medium" label="中" />
+              <TxSelectItem value="low" label="低" />
+            </TxSelect>
+            <TxCheckbox v-model="reviewOnlyUnhandled" variant="checkmark" label="仅看未处理" />
             <TxButton class="application-refresh-button" variant="secondary" @click="refreshReviewQueue">
               <span class="i-carbon-renew" aria-hidden="true" />
               刷新

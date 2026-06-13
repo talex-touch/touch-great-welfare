@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import type { AttachmentMeta, ResourceType } from '~/composables/welfare'
-import { TxButton, TxCard, TxCheckbox, TxDrawer, TxSelect, TxSelectItem, TxTag } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxSelect, TxSelectItem, TxTag, TxTextarea } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
 import { persistLocalDraft, restoreLocalDraft } from '~/composables/local-draft'
 import { educationEmailAdminRecommendationLabel, educationEmailReasonText, educationEmailUserLabel, educationEmailVerificationLabel, formatDate, formatPoints, formatRetentionExpiry, isGptProModel, resourceApprovalStatusText, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { useWelfareUiState } from '~/composables/welfare-ui'
 import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText, resourceTicketStatus } from '~/composables/welfare/resource-display'
-import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
 import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
@@ -353,7 +352,7 @@ onMounted(() => {
       mask-effect="blur"
       @close="handleReviewApplicationDialogClosed"
     >
-      <div v-if="selectedReviewApplication" class="review-application-dialog">
+      <div v-if="selectedReviewApplication" class="review-application-dialog max-w-full min-w-0 break-words overflow-x-hidden">
         <template v-for="item in [selectedReviewApplication]" :key="item.id">
           <div class="flex flex-wrap gap-4 items-start justify-between">
             <div class="min-w-0">
@@ -449,11 +448,11 @@ onMounted(() => {
                 </label>
                 <label class="gap-2 grid">
                   <span class="field-label">说明 / 驳回原因</span>
-                  <RichTextEditor v-model="resourceReviewDraftFor(resourceItem.id).note" :min-height="110" placeholder="驳回时必填；通过可填写开通备注。" />
+                  <TxTextarea v-model="resourceReviewDraftFor(resourceItem.id).note" :rows="4" placeholder="驳回时必填；通过可填写开通备注。" />
                 </label>
                 <label v-if="resourceReviewDraftFor(resourceItem.id).status === 'adjusted_approved'" class="gap-2 grid md:col-span-2">
                   <span class="field-label">批准后的额度/权限 JSON</span>
-                  <textarea v-model="resourceReviewDraftFor(resourceItem.id).approvedPayloadText" class="form-textarea" rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
+                  <TxTextarea v-model="resourceReviewDraftFor(resourceItem.id).approvedPayloadText" :rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
                 </label>
                 <div class="md:col-span-2">
                   <TxButton size="sm" variant="primary" @click="onReviewResourceItem(item.id, resourceItem.id)">
@@ -491,27 +490,27 @@ onMounted(() => {
                 <div v-if="resourceItem.provisionStatus !== 'completed'" class="mt-2 gap-3 grid md:grid-cols-2">
                   <label class="gap-2 grid">
                     <span class="field-label">资源名称</span>
-                    <input v-model="provisionDraftFor(resourceItem.id).resourceName" class="form-input" placeholder="如 Codex API Key / 数据库账号">
+                    <TxInput v-model="provisionDraftFor(resourceItem.id).resourceName" placeholder="如 Codex API Key / 数据库账号" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">资源类型</span>
-                    <input v-model="provisionDraftFor(resourceItem.id).resourceType" class="form-input" placeholder="account / api_key / database / subscription">
+                    <TxInput v-model="provisionDraftFor(resourceItem.id).resourceType" placeholder="account / api_key / database / subscription" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">访问地址</span>
-                    <input v-model="provisionDraftFor(resourceItem.id).accessUrl" class="form-input" placeholder="控制台、订阅或连接地址">
+                    <TxInput v-model="provisionDraftFor(resourceItem.id).accessUrl" placeholder="控制台、订阅或连接地址" />
                   </label>
                   <label class="gap-2 grid">
                     <span class="field-label">有效期</span>
-                    <input v-model="provisionDraftFor(resourceItem.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
+                    <TxInput v-model="provisionDraftFor(resourceItem.id).expiresAt" placeholder="如 2026-07-01 或按默认配置" />
                   </label>
                   <label class="gap-2 grid md:col-span-2">
                     <span class="field-label">凭据 / 备注</span>
-                    <textarea v-model="provisionDraftFor(resourceItem.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或连接凭据；会发送给用户" />
+                    <TxTextarea v-model="provisionDraftFor(resourceItem.id).credential" :rows="3" placeholder="账号、Key、订阅链接或连接凭据；会发送给用户" />
                   </label>
                   <label class="gap-2 grid md:col-span-2">
                     <span class="field-label">补充说明</span>
-                    <textarea v-model="provisionDraftFor(resourceItem.id).note" class="form-textarea" rows="2" placeholder="使用说明、限制或交付方式" />
+                    <TxTextarea v-model="provisionDraftFor(resourceItem.id).note" :rows="2" placeholder="使用说明、限制或交付方式" />
                   </label>
                   <div class="md:col-span-2">
                     <TxButton size="sm" variant="secondary" @click="onCompleteProvision(item.id, resourceItem.id)">
@@ -572,34 +571,34 @@ onMounted(() => {
             <div class="mt-3 gap-3 grid md:grid-cols-2">
               <label class="gap-2 grid">
                 <span class="field-label">资源名称</span>
-                <input v-model="allocationDraftFor(item.id).resourceName" class="form-input" placeholder="如 Codex 订阅 / API Key">
+                <TxInput v-model="allocationDraftFor(item.id).resourceName" placeholder="如 Codex 订阅 / API Key" />
               </label>
               <label class="gap-2 grid">
                 <span class="field-label">资源类型</span>
-                <input v-model="allocationDraftFor(item.id).resourceType" class="form-input" placeholder="account / api_key / subscription">
+                <TxInput v-model="allocationDraftFor(item.id).resourceType" placeholder="account / api_key / subscription" />
               </label>
               <label class="gap-2 grid">
                 <span class="field-label">访问地址</span>
-                <input v-model="allocationDraftFor(item.id).accessUrl" class="form-input" placeholder="订阅链接、控制台或登录地址">
+                <TxInput v-model="allocationDraftFor(item.id).accessUrl" placeholder="订阅链接、控制台或登录地址" />
               </label>
               <label class="gap-2 grid">
                 <span class="field-label">有效期</span>
-                <input v-model="allocationDraftFor(item.id).expiresAt" class="form-input" placeholder="如 2026-07-01 或按默认配置">
+                <TxInput v-model="allocationDraftFor(item.id).expiresAt" placeholder="如 2026-07-01 或按默认配置" />
               </label>
               <label class="gap-2 grid md:col-span-2">
                 <span class="field-label">凭据</span>
-                <textarea v-model="allocationDraftFor(item.id).credential" class="form-textarea" rows="3" placeholder="账号、Key、订阅链接或其他交付凭据；会发送给用户" />
+                <TxTextarea v-model="allocationDraftFor(item.id).credential" :rows="3" placeholder="账号、Key、订阅链接或其他交付凭据；会发送给用户" />
               </label>
               <label class="gap-2 grid md:col-span-2">
                 <span class="field-label">使用说明</span>
-                <textarea v-model="allocationDraftFor(item.id).note" class="form-textarea" rows="2" placeholder="限制、注意事项、后续续期方式等" />
+                <TxTextarea v-model="allocationDraftFor(item.id).note" :rows="2" placeholder="限制、注意事项、后续续期方式等" />
               </label>
             </div>
             <TxButton class="mt-4" size="sm" variant="primary" @click="onCompleteApplicationAllocation(item.id)">
               完成分配并发送给用户
             </TxButton>
           </div>
-          <RichTextEditor v-else-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : item.type === 'pro' ? '给用户的审核答复，或填写需要补充的具体材料' : '给用户的审核答复'" />
+          <TxTextarea v-else-if="isAdmin && item.type !== 'resource'" v-model="reviewDrafts[item.id]" class="mt-4" :rows="5" :placeholder="item.type === 'image' ? '给用户的审核说明：通过后将生成图片' : item.type === 'pro' ? '给用户的审核答复，或填写需要补充的具体材料' : '给用户的审核答复'" />
           <label v-if="isAdmin && item.type !== 'resource' && item.status !== 'needs_supplement' && item.status !== 'pending_allocation'" class="option-check mt-4">
             <TxCheckbox v-model="rejectFraudulentDrafts[item.id]" variant="checkmark" aria-label="判定造假或不实包装" />
             <span>
@@ -625,21 +624,15 @@ onMounted(() => {
             <div class="mt-3 gap-3 grid md:grid-cols-[180px_1fr]">
               <label class="gap-2 grid">
                 <span class="field-label">建议结论</span>
-                <select v-model="crowdReviewDraftFor(item.id).decision" class="form-select">
-                  <option value="needs_admin">
-                    管理员复核
-                  </option>
-                  <option value="approve">
-                    建议通过
-                  </option>
-                  <option value="reject">
-                    建议退回
-                  </option>
-                </select>
+                <TxSelect v-model="crowdReviewDraftFor(item.id).decision" panel-background="pure">
+                  <TxSelectItem value="needs_admin" label="管理员复核" />
+                  <TxSelectItem value="approve" label="建议通过" />
+                  <TxSelectItem value="reject" label="建议退回" />
+                </TxSelect>
               </label>
               <div class="gap-2 grid">
                 <span class="field-label">建议说明</span>
-                <RichTextEditor v-model="crowdReviewDraftFor(item.id).note" :min-height="120" placeholder="仅填写审核判断依据；不要要求或记录邮箱、证件、附件原文等敏感材料。" />
+                <TxTextarea v-model="crowdReviewDraftFor(item.id).note" :rows="4" placeholder="仅填写审核判断依据；不要要求或记录邮箱、证件、附件原文等敏感材料。" />
               </div>
             </div>
             <TxButton class="mt-4" size="sm" variant="secondary" @click="onSubmitCrowdReview(item.id)">
@@ -688,7 +681,7 @@ onMounted(() => {
           </div>
           <RichTextView :content="item.notes" class="rich-text-preview mt-3" />
           <VerificationAttachmentGrid v-if="item.attachments.length" :files="item.attachments" />
-          <RichTextEditor v-model="reviewDrafts[item.id]" class="mt-4" :min-height="150" :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`" />
+          <TxTextarea v-model="reviewDrafts[item.id]" class="mt-4" :rows="5" :placeholder="`审核说明：可通过、要求补充资料或最终退回。通过会返还 ${pricingSummary.studentReviewFee} 积分，退回不返还`" />
           <div class="mt-4 flex flex-wrap gap-3">
             <TxButton variant="primary" @click="onApproveStudent(item.id)">
               通过并返还
@@ -705,37 +698,3 @@ onMounted(() => {
     </TxCard>
   </div>
 </template>
-
-<style scoped>
-:deep(.review-application-drawer-host .tx-drawer__panel),
-:deep(.review-application-drawer-host .tx-drawer__body) {
-  max-width: 92vw;
-  overflow-x: hidden;
-}
-
-.review-application-dialog {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.review-application-dialog :deep(*) {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.review-application-dialog :deep(.rich-text-view),
-.review-application-dialog :deep(.rich-text-preview),
-.review-application-dialog :deep(pre),
-.review-application-dialog input,
-.review-application-dialog textarea,
-.review-application-dialog .application-detail-stat span,
-.review-application-dialog .application-detail-stat b {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-</style>

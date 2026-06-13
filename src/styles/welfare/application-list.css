@@ -196,66 +196,6 @@
   justify-content: flex-end;
 }
 
-.application-search,
-.application-select,
-.application-checkbox {
-  min-height: 2.35rem;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 10px;
-  background: #fff;
-}
-
-.application-search {
-  display: inline-flex;
-  width: 100%;
-  padding: 0 0.9rem;
-  color: #94a3b8;
-  align-items: center;
-}
-
-.application-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  color: #0f172a;
-  background: transparent;
-  font-weight: 750;
-}
-
-.application-search input::placeholder {
-  color: #94a3b8;
-}
-
-.application-select {
-  min-width: 10rem;
-  padding: 0 2.4rem 0 1rem;
-  outline: 0;
-  color: #334155;
-  appearance: none;
-  background:
-    linear-gradient(45deg, transparent 50%, #94a3b8 50%) calc(100% - 1.12rem) 50% / 0.42rem 0.42rem no-repeat,
-    linear-gradient(135deg, #94a3b8 50%, transparent 50%) calc(100% - 0.85rem) 50% / 0.42rem 0.42rem no-repeat,
-    #fff;
-  font-weight: 900;
-}
-
-.application-checkbox {
-  display: inline-flex;
-  gap: 0.55rem;
-  padding: 0 0.8rem;
-  color: #64748b;
-  align-items: center;
-  font-weight: 900;
-  white-space: nowrap;
-}
-
-.application-checkbox input {
-  width: 1.05rem;
-  height: 1.05rem;
-  accent-color: #64748b;
-}
-
 .application-create-button,
 .application-refresh-button {
   white-space: nowrap;
@@ -1111,7 +1051,6 @@
 .dark .application-section-title span,
 .dark .application-cell-title small,
 .dark .application-empty,
-.dark .application-checkbox,
 .dark .application-table__head,
 .dark .application-table__row,
 .dark .resource-overview-card__body small,
@@ -1123,10 +1062,7 @@
 }
 
 .dark .application-dashboard__tabs,
-.dark .application-stat-card,
-.dark .application-search,
-.dark .application-select,
-.dark .application-checkbox {
+.dark .application-stat-card {
   border-color: rgba(255, 255, 255, 0.1);
   background-color: rgba(15, 23, 42, 0.72);
 }
@@ -1192,11 +1128,6 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-.dark .application-search input,
-.dark .application-select {
-  color: #e2e8f0;
-}
-
 .dark .application-section-title span {
   background: rgba(255, 255, 255, 0.06);
 }
@@ -1249,11 +1180,6 @@
     grid-template-columns: minmax(0, 1fr) repeat(2, minmax(9rem, max-content)) max-content max-content;
     justify-content: stretch;
   }
-
-  .application-search {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
 }
 
 @media (max-width: 767px) {
@@ -1274,11 +1200,6 @@
   .application-filter-bar {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .application-select,
-  .application-checkbox {
-    width: 100%;
   }
 
   .resource-overview-grid {

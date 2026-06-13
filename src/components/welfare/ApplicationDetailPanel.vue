@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ApplicationItem, AttachmentMeta } from '~/composables/welfare'
 import type { UploadLikeFile } from '~/composables/welfare-ui'
-import { TxButton, TxCard, TxSelect, TxSelectItem, TxStatusBadge, TxTag } from '@talex-touch/tuffex'
+import { TxButton, TxCard, TxSelect, TxSelectItem, TxStatusBadge, TxTag, TxTextarea } from '@talex-touch/tuffex'
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -10,7 +10,6 @@ import { useWelfareUiState } from '~/composables/welfare-ui'
 import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText, resourceTicketStatus, resourceTicketSteps } from '~/composables/welfare/resource-display'
 import ApplicationResultSubmit from './ApplicationResultSubmit.vue'
 import ApplicationThread from './ApplicationThread.vue'
-import RichTextEditor from './RichTextEditor.vue'
 import RichTextView from './RichTextView.vue'
 import VerificationAttachmentGrid from './VerificationAttachmentGrid.vue'
 
@@ -411,11 +410,11 @@ function handleComplete() {
                 </label>
                 <label class="gap-2 grid">
                   <span class="field-label">说明 / 驳回原因</span>
-                  <RichTextEditor v-model="resourceReviewDraftFor(item.id).note" :min-height="110" placeholder="驳回时必填；通过可填写开通备注。" />
+                  <TxTextarea v-model="resourceReviewDraftFor(item.id).note" :rows="4" placeholder="驳回时必填；通过可填写开通备注。" />
                 </label>
                 <label v-if="resourceReviewDraftFor(item.id).status === 'adjusted_approved'" class="gap-2 grid md:col-span-2">
                   <span class="field-label">批准后的额度/权限 JSON</span>
-                  <textarea v-model="resourceReviewDraftFor(item.id).approvedPayloadText" class="form-textarea" rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
+                  <TxTextarea v-model="resourceReviewDraftFor(item.id).approvedPayloadText" :rows="2" placeholder="{&quot;permission&quot;:&quot;readonly&quot;,&quot;duration&quot;:&quot;7 天&quot;}" />
                 </label>
                 <div class="md:col-span-2">
                   <TxButton size="sm" variant="primary" @click="handleReviewResourceItem(item.id)">
