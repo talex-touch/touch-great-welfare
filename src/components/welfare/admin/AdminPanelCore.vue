@@ -677,6 +677,45 @@ function resourceModelToneClass(value?: string) {
   return 'text-sky-700 bg-sky-50 ring-sky-200 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'
 }
 
+function primaryResourceItem(application: WelfareApplication) {
+  return application.type === 'resource' ? application.resourceItems?.[0] : undefined
+}
+
+function resourceItemModel(item?: ApplicationItem) {
+  return String(item?.resourceSubtype || item?.approvedPayload?.model || item?.payload?.model || '').trim()
+}
+
+function applicationListTitle(application: WelfareApplication) {
+  const item = primaryResourceItem(application)
+  if (!item)
+    return application.title
+  const model = resourceItemModel(item)
+  return model ? `${resourceTypeLabel(item.resourceType)} · ${model}` : resourceTypeLabel(item.resourceType)
+}
+
+function applicationListDetail(application: WelfareApplication) {
+  const item = primaryResourceItem(application)
+  if (!item)
+    return application.githubRepo || '未绑定开源仓库'
+  return [item.requestedQuota ? `申请额度 ${item.requestedQuota}` : '', item.duration ? `有效期 ${item.duration}` : '', item.approverGroup ? `审批组 ${item.approverGroup}` : '']
+    .filter(Boolean)
+    .join(' · ') || application.description
+}
+
+function applicationListTypeLabel(application: WelfareApplication) {
+  const item = primaryResourceItem(application)
+  return item ? resourceModelLabel(resourceItemModel(item)) || resourceTypeLabel(item.resourceType) : applicationTypeText[application.type]
+}
+
+function applicationListTypeClass(application: WelfareApplication) {
+  const model = resourceItemModel(primaryResourceItem(application))
+  return model ? resourceModelToneClass(model) : 'text-sky-700 bg-sky-50 ring-sky-200 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'
+}
+
+function applicationListTypeIcon(application: WelfareApplication) {
+  return resourceModelIconClass(resourceItemModel(primaryResourceItem(application)))
+}
+
 function applicationStatusLabel(status: string) {
   return applicationStatusText[status] ?? status
 }
@@ -5440,16 +5479,25 @@ onMounted(() => {
                 </div>
                 <div v-for="item in applicationPagination.rows" :key="item.id" class="admin-table-row admin-app-grid">
                   <div class="min-w-0">
-                    <div class="fw-800 truncate">
-                      {{ item.title }}
+                    <div class="fw-800 flex gap-2 truncate items-center">
+                      <span v-if="primaryResourceItem(item)" class="rounded-full inline-flex shrink-0 h-6 w-6 ring-1 items-center justify-center" :class="applicationListTypeClass(item)">
+                        <span :class="applicationListTypeIcon(item)" />
+                      </span>
+                      <span class="truncate">{{ applicationListTitle(item) }}</span>
                     </div>
                     <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                      {{ item.githubRepo || '未绑定开源仓库' }}
+                      {{ applicationListDetail(item) }}
                     </div>
                   </div>
                   <span class="text-sm truncate">{{ userDisplayName(item.userId) }}</span>
-                  <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">{{ applicationTypeText[item.type] }}</span>
-                  <span class="admin-pill" :class="statusPillClass(item.status)">{{ applicationStatusText[item.status] }}</span>
+                  <span class="admin-pill gap-1 ring-1" :class="applicationListTypeClass(item)">
+                    <span v-if="primaryResourceItem(item)" :class="applicationListTypeIcon(item)" />
+                    {{ applicationListTypeLabel(item) }}
+                  </span>
+                  <span class="admin-pill gap-1" :class="statusPillClass(item.status)">
+                    <span :class="provisionStatusIconClass(item.status)" />
+                    {{ applicationStatusText[item.status] }}
+                  </span>
                   <span class="fw-800">
                     {{ formatPoints(item.cost) }}
                     <span v-if="item.storageExtended" class="text-xs text-slate-500 block dark:text-slate-400">存储 +{{ formatPoints(item.storageExtensionCost) }}</span>
