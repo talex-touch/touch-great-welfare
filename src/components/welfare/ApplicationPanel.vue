@@ -46,8 +46,11 @@ const reviewQueues = ref<ReviewQueuesExpose | null>(null)
 
 interface ApplicationRow {
   item: WelfareApplication
+  title: string
   description: string
   type: string
+  typeIcon: string
+  typeClass: string
   resourceItems: ResourceRowItem[]
   applicant: ApplicantRowInfo
   email: string
@@ -414,6 +417,75 @@ function typeLabel(type: RequestKind) {
   return typeText[type] ?? type.toUpperCase()
 }
 
+function resourceModelLabel(value?: string) {
+  const model = String(value || '').trim()
+  if (!model)
+    return ''
+  if (model.toLowerCase() === 'codex')
+    return 'OpenAI Codex'
+  if (model.toLowerCase() === 'claude-code')
+    return 'Claude Code'
+  return model
+}
+
+function resourceModelIcon(value?: string) {
+  const model = String(value || '').toLowerCase()
+  if (model.includes('claude'))
+    return 'i-carbon-ai-status-complete'
+  if (model.includes('codex') || model.includes('openai') || model.includes('gpt'))
+    return 'i-carbon-ai-results-high'
+  return 'i-carbon-cube'
+}
+
+function resourceModelClass(value?: string) {
+  const model = String(value || '').toLowerCase()
+  if (model.includes('claude'))
+    return 'text-orange-700 bg-orange-50 ring-orange-200 dark:text-orange-200 dark:bg-orange-950/30 dark:ring-orange-400/20'
+  if (model.includes('codex') || model.includes('openai') || model.includes('gpt'))
+    return 'text-emerald-700 bg-emerald-50 ring-emerald-200 dark:text-emerald-200 dark:bg-emerald-950/30 dark:ring-emerald-400/20'
+  return 'text-sky-700 bg-sky-50 ring-sky-200 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'
+}
+
+function primaryResourceItem(application: WelfareApplication) {
+  return application.type === 'resource' ? application.resourceItems?.[0] : undefined
+}
+
+function resourceItemModel(item?: ApplicationItem) {
+  return String(item?.resourceSubtype || item?.approvedPayload?.model || item?.payload?.model || '').trim()
+}
+
+function applicationRowTitle(item: WelfareApplication) {
+  const resourceItem = primaryResourceItem(item)
+  if (!resourceItem)
+    return item.title
+  const model = resourceItemModel(resourceItem)
+  return model ? `${resourceTypeLabel(resourceItem.resourceType)} · ${model}` : resourceTypeLabel(resourceItem.resourceType)
+}
+
+function applicationRowDescription(item: WelfareApplication) {
+  const resourceItem = primaryResourceItem(item)
+  if (!resourceItem)
+    return plainDescription(item.description)
+  return [resourceItem.requestedQuota ? `申请额度 ${resourceItem.requestedQuota}` : '', resourceItem.duration ? `有效期 ${resourceItem.duration}` : '', resourceItem.approverGroup ? `审批组 ${resourceItem.approverGroup}` : '']
+    .filter(Boolean)
+    .join(' · ') || resourceFallbackText(item.resourceItems ?? [])
+}
+
+function applicationRowType(item: WelfareApplication) {
+  const model = resourceItemModel(primaryResourceItem(item))
+  return model ? resourceModelLabel(model) : typeLabel(item.type)
+}
+
+function applicationRowTypeIcon(item: WelfareApplication) {
+  const model = resourceItemModel(primaryResourceItem(item))
+  return model ? resourceModelIcon(model) : typeIcon(item.type)
+}
+
+function applicationRowTypeClass(item: WelfareApplication) {
+  const model = resourceItemModel(primaryResourceItem(item))
+  return model ? resourceModelClass(model) : 'text-sky-700 bg-sky-50 ring-sky-200 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'
+}
+
 function resourceRowItems(item: WelfareApplication): ResourceRowItem[] {
   return (item.resourceItems ?? []).map(resourceItem => ({
     title: `${resourceTypeLabel(resourceItem.resourceType)} · ${resourceItem.resourceSubtype}`,
@@ -468,8 +540,11 @@ function toApplicationRow(item: WelfareApplication): ApplicationRow {
 
   return {
     item,
-    description: item.type === 'resource' ? resourceFallbackText(item.resourceItems ?? []) : plainDescription(item.description),
-    type: typeLabel(item.type),
+    title: applicationRowTitle(item),
+    description: applicationRowDescription(item),
+    type: applicationRowType(item),
+    typeIcon: applicationRowTypeIcon(item),
+    typeClass: applicationRowTypeClass(item),
     resourceItems,
     applicant: applicantRowInfo(item.userId),
     email: userEmail(item.userId),
@@ -643,15 +718,15 @@ function applicationRowTags(item: WelfareApplication) {
           >
             <span class="application-cell-title">
               <b>
-                {{ row.item.title }}
+                {{ row.title }}
               </b>
               <small>{{ row.description }}</small>
               <span v-if="row.tags.length" class="application-row-tags">
                 <em v-for="tag in row.tags" :key="tag.label" :class="`application-row-tag application-row-tag--${tag.tone}`">{{ tag.label }}</em>
               </span>
             </span>
-            <span>
-              <i :class="typeIcon(row.item.type)" aria-hidden="true" />
+            <span class="px-3 py-1 rounded-full inline-flex gap-2 ring-1 items-center" :class="row.typeClass">
+              <i :class="row.typeIcon" aria-hidden="true" />
               <strong class="application-type-tag">{{ row.type }}</strong>
             </span>
             <span>
@@ -735,24 +810,14 @@ function applicationRowTags(item: WelfareApplication) {
             @click="openReviewApplicationDialog(row.item.id, $event)"
           >
             <span class="application-cell-title">
-              <b>{{ row.item.title }}</b>
+              <b>{{ row.title }}</b>
               <small>{{ row.description }}</small>
               <span v-if="row.tags.length" class="application-row-tags">
                 <em v-for="tag in row.tags" :key="tag.label" :class="`application-row-tag application-row-tag--${tag.tone}`">{{ tag.label }}</em>
               </span>
             </span>
-            <span v-if="row.item.type === 'resource'" class="application-resource-cell">
-              <i :class="typeIcon(row.item.type)" aria-hidden="true" />
-              <span class="application-resource-cell__content">
-                <strong class="application-type-tag">{{ row.type }}</strong>
-                <span v-for="resourceItem in row.resourceItems" :key="resourceItem.title" class="application-resource-summary">
-                  <b>{{ resourceItem.title }}</b>
-                  <small>{{ resourceItem.fields.map(field => `${field.label} ${field.value}`).join(' · ') }}</small>
-                </span>
-              </span>
-            </span>
-            <span v-else>
-              <i :class="typeIcon(row.item.type)" aria-hidden="true" />
+            <span class="px-3 py-1 rounded-full inline-flex gap-2 ring-1 items-center" :class="row.typeClass">
+              <i :class="row.typeIcon" aria-hidden="true" />
               <strong class="application-type-tag">{{ row.type }}</strong>
             </span>
             <span>
