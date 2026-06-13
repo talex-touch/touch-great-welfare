@@ -403,6 +403,7 @@ interface ProvisionQueueRow {
   detail: string
   provider: string
   updatedAt: string
+  resourceModel?: string
 }
 const activeNotificationConfigSection = ref<NotificationConfigSectionId>('providers')
 const activeAiConfigSection = ref<AiConfigSectionId>('ai-provider')
@@ -559,6 +560,30 @@ function statusPillClass(status: string) {
   return 'text-slate-700 bg-slate-100 dark:text-slate-200 dark:bg-white/10'
 }
 
+function provisionStatusPillClass(status: string) {
+  if (['pending', 'pending_allocation'].includes(status))
+    return 'text-amber-700 bg-amber-50 ring-1 ring-amber-200/70 dark:text-amber-200 dark:bg-amber-950/30 dark:ring-amber-400/20'
+  if (['provisioning', 'processing', 'pending_review'].includes(status))
+    return 'text-sky-700 bg-sky-50 ring-1 ring-sky-200/70 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'
+  if (['completed', 'delivered', 'success'].includes(status))
+    return 'text-emerald-700 bg-emerald-50 ring-1 ring-emerald-200/70 dark:text-emerald-200 dark:bg-emerald-950/30 dark:ring-emerald-400/20'
+  if (['failed', 'rejected', 'revoked', 'error'].includes(status))
+    return 'text-rose-700 bg-rose-50 ring-1 ring-rose-200/70 dark:text-rose-200 dark:bg-rose-950/30 dark:ring-rose-400/20'
+  return statusPillClass(status)
+}
+
+function provisionStatusIconClass(status: string) {
+  if (['pending', 'pending_allocation'].includes(status))
+    return 'i-carbon-time'
+  if (['provisioning', 'processing', 'pending_review'].includes(status))
+    return 'i-carbon-progress-bar-round'
+  if (['completed', 'delivered', 'success'].includes(status))
+    return 'i-carbon-checkmark-outline'
+  if (['failed', 'rejected', 'revoked', 'error'].includes(status))
+    return 'i-carbon-warning-alt'
+  return 'i-carbon-dot-mark'
+}
+
 function provisionLogLevelText(level: string) {
   if (level === 'success')
     return '成功'
@@ -621,6 +646,35 @@ function auditToneClass(tone: string) {
 
 function applicationTypeLabel(type: string) {
   return applicationTypeText[type] ?? type
+}
+
+function resourceModelLabel(value?: string) {
+  const model = String(value || '').trim()
+  if (!model)
+    return ''
+  if (model.toLowerCase() === 'codex')
+    return 'OpenAI Codex'
+  if (model.toLowerCase() === 'claude-code')
+    return 'Claude Code'
+  return model
+}
+
+function resourceModelIconClass(value?: string) {
+  const model = String(value || '').toLowerCase()
+  if (model.includes('claude'))
+    return 'i-carbon-ai-status-complete'
+  if (model.includes('codex') || model.includes('openai') || model.includes('gpt'))
+    return 'i-carbon-ai-results-high'
+  return 'i-carbon-cube'
+}
+
+function resourceModelToneClass(value?: string) {
+  const model = String(value || '').toLowerCase()
+  if (model.includes('claude'))
+    return 'text-orange-700 bg-orange-50 ring-orange-200 dark:text-orange-200 dark:bg-orange-950/30 dark:ring-orange-400/20'
+  if (model.includes('codex') || model.includes('openai') || model.includes('gpt'))
+    return 'text-emerald-700 bg-emerald-50 ring-emerald-200 dark:text-emerald-200 dark:bg-emerald-950/30 dark:ring-emerald-400/20'
+  return 'text-sky-700 bg-sky-50 ring-sky-200 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'
 }
 
 function applicationStatusLabel(status: string) {
@@ -1500,19 +1554,24 @@ const provisionQueueAllRows = computed<ProvisionQueueRow[]>(() => {
       if (item.provisionStatus === 'not_required')
         continue
 
+      const resourceModel = String(item.resourceSubtype || item.approvedPayload?.model || item.payload?.model || '').trim()
+      const resourceTitle = resourceModel
+        ? `${resourceTypeLabel(item.resourceType)} · ${resourceModel}`
+        : resourceTypeLabel(item.resourceType)
       rows.push({
         id: `resource-${application.id}-${item.id}`,
         kind: 'resource',
         application,
         resourceItem: item,
-        title: `${resourceTypeLabel(item.resourceType)} · ${item.resourceSubtype}`,
+        title: resourceTitle,
         user,
-        typeLabel: '资源明细',
+        typeLabel: resourceTypeLabel(item.resourceType),
         status: item.provisionStatus || 'pending',
         statusLabel: resourceProvisionStatusText(item.provisionStatus),
-        detail: item.provisionNote || item.rejectReason || `${application.title} · ${item.approverGroup}`,
+        detail: item.provisionNote || item.rejectReason || `${item.approverGroup} · 申请额度 ${item.requestedQuota || '-'} · 有效期 ${item.duration || '-'}`,
         provider: item.resourceType === 'database' ? '数据库自动发放' : item.resourceType === 'llm_api_quota' ? 'Sub2API / NewAPI' : '人工发放',
         updatedAt: item.provisionCompletedAt || item.updatedAt || application.reviewedAt || application.createdAt,
+        resourceModel,
       })
     }
   }
@@ -5270,16 +5329,25 @@ onMounted(() => {
                 </div>
                 <div v-for="row in provisionQueuePagination.rows" :key="row.id" class="admin-table-row admin-provision-grid">
                   <div class="min-w-0">
-                    <div class="fw-800 truncate">
-                      {{ row.title }}
+                    <div class="fw-800 flex gap-2 truncate items-center">
+                      <span v-if="row.resourceModel" class="rounded-full inline-flex shrink-0 h-6 w-6 ring-1 items-center justify-center" :class="resourceModelToneClass(row.resourceModel)">
+                        <span :class="resourceModelIconClass(row.resourceModel)" />
+                      </span>
+                      <span class="truncate">{{ row.title }}</span>
                     </div>
                     <div class="text-xs text-slate-500 truncate dark:text-slate-400">
-                      {{ row.application.title }} · {{ row.detail }}
+                      {{ row.detail }}
                     </div>
                   </div>
                   <span class="text-sm truncate">{{ row.user }}</span>
-                  <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">{{ row.typeLabel }}</span>
-                  <span class="admin-pill" :class="statusPillClass(row.status)">{{ row.statusLabel }}</span>
+                  <span class="admin-pill gap-1 ring-1" :class="row.resourceModel ? resourceModelToneClass(row.resourceModel) : 'text-sky-700 bg-sky-50 ring-sky-200 dark:text-sky-200 dark:bg-sky-950/30 dark:ring-sky-400/20'">
+                    <span v-if="row.resourceModel" :class="resourceModelIconClass(row.resourceModel)" />
+                    {{ row.resourceModel ? resourceModelLabel(row.resourceModel) : row.typeLabel }}
+                  </span>
+                  <span class="admin-pill gap-1" :class="provisionStatusPillClass(row.status)">
+                    <span :class="provisionStatusIconClass(row.status)" />
+                    {{ row.statusLabel }}
+                  </span>
                   <span class="text-sm text-slate-600 truncate dark:text-slate-300">{{ row.provider }}</span>
                   <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(row.updatedAt) }}</span>
                   <div class="flex justify-end">

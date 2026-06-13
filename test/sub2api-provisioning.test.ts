@@ -387,13 +387,21 @@ describe('sub2api resource provisioning', () => {
       WELFARE_STATE_SECRET_KEY: 'test-secret-for-sub2api',
     }
     const cookie = await createSessionCookie(new Request('https://welfare.example.com/'), env, 'admin_1')
+    let updateUserBody: Record<string, unknown> | undefined
     let createKeyBody: Record<string, unknown> | undefined
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/api/v1/admin/users?')) {
         return Response.json({ data: { items: [{ id: 42, email: 'user@example.com' }] } })
       }
-      if (url.endsWith('/api/v1/admin/users/42/api-keys')) {
+      if (url.endsWith('/api/v1/admin/users/42')) {
+        updateUserBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
+        return Response.json({ data: { id: 42, email: 'user@example.com' } })
+      }
+      if (url.endsWith('/api/v1/auth/login')) {
+        return Response.json({ access_token: 'user-token', user_id: 42 })
+      }
+      if (url.endsWith('/api/v1/keys')) {
         createKeyBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
         return Response.json({
           data: {
@@ -434,6 +442,11 @@ describe('sub2api resource provisioning', () => {
 
     expect(response.ok).toBe(true)
     expect(result.status).toBe('provisioned')
+    expect(updateUserBody).toMatchObject({
+      email: 'user@example.com',
+      username: '申请人',
+      allowed_groups: [7],
+    })
     expect(createKeyBody).toMatchObject({
       name: 'TGW app_1-item_1',
       group_id: 7,
@@ -469,7 +482,11 @@ describe('sub2api resource provisioning', () => {
       const url = String(input)
       if (url.includes('/api/v1/admin/users?'))
         return Response.json({ data: { items: [{ id: 42, email: 'user@example.com' }] } })
-      if (url.endsWith('/api/v1/admin/users/42/api-keys')) {
+      if (url.endsWith('/api/v1/admin/users/42'))
+        return Response.json({ data: { id: 42, email: 'user@example.com' } })
+      if (url.endsWith('/api/v1/auth/login'))
+        return Response.json({ access_token: 'user-token', user_id: 42 })
+      if (url.endsWith('/api/v1/keys')) {
         createKeyCalls += 1
         const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>
         return Response.json({
@@ -539,7 +556,11 @@ describe('sub2api resource provisioning', () => {
       const url = String(input)
       if (url.includes('/api/v1/admin/users?'))
         return Response.json({ data: { items: [{ id: 42, email: 'user@example.com' }] } })
-      if (url.endsWith('/api/v1/admin/users/42/api-keys')) {
+      if (url.endsWith('/api/v1/admin/users/42'))
+        return Response.json({ data: { id: 42, email: 'user@example.com' } })
+      if (url.endsWith('/api/v1/auth/login'))
+        return Response.json({ access_token: 'user-token', user_id: 42 })
+      if (url.endsWith('/api/v1/keys')) {
         return new Response('missing route', {
           status: 404,
           headers: { 'content-type': 'text/plain' },
@@ -574,12 +595,12 @@ describe('sub2api resource provisioning', () => {
     expect(response.ok).toBe(true)
     expect(result).toMatchObject({
       status: 'pending_manual',
-      error: 'Sub2API Admin API 不支持创建 API Key，且数据库连接未配置',
+      error: 'missing route',
     })
     const updatedState = await readWelfareState(env) as WelfareState
     expect(updatedState.applications[0].status).toBe('pending_allocation')
     expect(updatedState.applications[0].resourceItems?.[0].provisionStatus).toBe('pending')
-    expect(updatedState.applications[0].resourceItems?.[0].provisionNote).toContain('Sub2API Admin API 不支持创建 API Key')
+    expect(updatedState.applications[0].resourceItems?.[0].provisionNote).toContain('missing route')
   })
 
   it('lets admins complete pending manual allocation with a structured resource form', async () => {

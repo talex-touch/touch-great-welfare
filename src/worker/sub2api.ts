@@ -512,7 +512,8 @@ function createSub2ApiSessionPassword() {
   return `TGW-${crypto.randomUUID()}-${Date.now()}`
 }
 
-function sub2ApiUserPayload(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, password: string) {
+function sub2ApiUserPayload(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, password: string, groupId?: number | null) {
+  const allowedGroupId = groupId ?? config.defaultGroupId
   return {
     email: buildUserEmail(user),
     password,
@@ -521,25 +522,21 @@ function sub2ApiUserPayload(config: Awaited<ReturnType<typeof getEffectiveSub2Ap
     balance: 0,
     concurrency: 5,
     rpm_limit: 0,
-    allowed_groups: config.defaultGroupId ? [config.defaultGroupId] : [],
+    allowed_groups: allowedGroupId ? [allowedGroupId] : [],
   }
 }
 
-async function createSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, password: string) {
+async function createSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, password: string, groupId?: number | null) {
   return await callSub2Api<UpstreamUser>(config, '/api/v1/admin/users', {
     method: 'POST',
-    body: JSON.stringify(sub2ApiUserPayload(config, user, password)),
+    body: JSON.stringify(sub2ApiUserPayload(config, user, password, groupId)),
   })
 }
 
-async function updateSub2ApiUserPassword(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, sub2apiUserId: string, password: string) {
+async function updateSub2ApiUserPassword(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, sub2apiUserId: string, password: string, groupId?: number | null) {
   return await callSub2Api<UpstreamUser>(config, `/api/v1/admin/users/${encodeURIComponent(sub2apiUserId)}`, {
     method: 'PUT',
-    body: JSON.stringify({
-      email: buildUserEmail(user),
-      username: buildUserName(user),
-      password,
-    }),
+    body: JSON.stringify(sub2ApiUserPayload(config, user, password, groupId)),
   })
 }
 
@@ -556,7 +553,7 @@ async function loginSub2ApiUser(config: Awaited<ReturnType<typeof getEffectiveSu
   return { token, userId }
 }
 
-async function ensureSub2ApiUserSession(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User) {
+async function ensureSub2ApiUserSession(config: Awaited<ReturnType<typeof getEffectiveSub2ApiConfig>>, user: User, groupId?: number | null) {
   if (!config.adminApiKey)
     throw new Error('Sub2API Admin API Key 未配置')
 
@@ -564,14 +561,14 @@ async function ensureSub2ApiUserSession(config: Awaited<ReturnType<typeof getEff
   const existing = await findSub2ApiUser(config, user)
   if (existing?.id) {
     const sub2apiUserId = String(existing.id)
-    await updateSub2ApiUserPassword(config, user, sub2apiUserId, password)
+    await updateSub2ApiUserPassword(config, user, sub2apiUserId, password, groupId)
     return {
       sub2apiUserId,
       session: await loginSub2ApiUser(config, buildUserEmail(user), password),
     }
   }
 
-  const created = await createSub2ApiUser(config, user, password)
+  const created = await createSub2ApiUser(config, user, password, groupId)
   if (!created.id)
     throw new Error('Sub2API 未返回用户 ID')
   return {
@@ -914,10 +911,11 @@ async function createSub2ApiKey(env: WorkerEnv, user: User, payload: CreateSub2A
     throw new Error('Sub2API 尚未配置完成')
 
   const quotaUsd = normalizeQuota(payload.quotaUsd, config.defaultQuotaUsd)
+  const groupId = optionalInt(payload.groupId) ?? config.defaultGroupId
   if (config.mockEnabled)
     return await insertBinding(env, user.id, `mock-${user.id}`, createMockSub2ApiKey(config, payload), quotaUsd, resourceRef)
 
-  const { sub2apiUserId, session } = await ensureSub2ApiUserSession(config, user)
+  const { sub2apiUserId, session } = await ensureSub2ApiUserSession(config, user, groupId)
   const upstreamKey = await createSub2ApiKeyByUserApi(config, session, payload)
 
   return await insertBinding(env, user.id, sub2apiUserId, upstreamKey, quotaUsd, resourceRef)
