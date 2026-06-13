@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ApplicationItem, RequestKind, WelfareApplication } from '~/composables/welfare'
+import type { ApplicationItem, RequestKind, ResourceType, WelfareApplication } from '~/composables/welfare'
 import { TxButton, TxCard, TxDrawer, TxStatusBadge } from '@talex-touch/tuffex'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -29,7 +29,7 @@ const {
 
 const router = useRouter()
 const { runSafely } = useWelfareFeedback()
-const activeSection = ref<'mine' | 'review'>('mine')
+const activeSection = ref<'overview' | 'mine' | 'review'>('overview')
 const mineSearch = ref('')
 const mineStatus = ref('all')
 const mineSort = ref('latest')
@@ -69,6 +69,23 @@ interface ApplicantRowInfo {
   level: string
   points: string
   bio: string
+}
+
+interface GrantedResourceCard {
+  id: string
+  applicationId: string
+  title: string
+  subtitle: string
+  kind: 'api-key' | 'database' | 'machine' | 'network' | 'reply' | 'generic'
+  icon: string
+  tone: string
+  status: string
+  statusTone: 'success' | 'warning' | 'info'
+  primaryLabel: string
+  primaryValue: string
+  fields: Array<{ label: string, value: string }>
+  note?: string
+  date?: string
 }
 
 interface ReviewQueuesExpose {
@@ -153,11 +170,17 @@ const visibleMineApplications = computed(() => mineExpanded.value ? filteredMine
 const visibleReviewApplicationsRows = computed(() => reviewExpanded.value ? filteredReviewApplications.value : filteredReviewApplications.value.slice(0, 5))
 const visibleMineRows = computed(() => visibleMineApplications.value.map(toApplicationRow))
 const visibleReviewRows = computed(() => visibleReviewApplicationsRows.value.map(toApplicationRow))
+const grantedResourceCards = computed(() => currentUserApplications.value.flatMap(application => [
+  ...resourceProvisionCards(application),
+  ...applicationAllocationCards(application),
+  ...applicationReplyCards(application),
+  ...applicationMessageCards(application),
+]).sort((left, right) => (right.date ?? '').localeCompare(left.date ?? '')))
 const showReviewSection = computed(() => isAdmin.value || canCrowdReview.value)
 
 watch(showReviewSection, (canShowReview) => {
   if (!canShowReview && activeSection.value === 'review')
-    activeSection.value = 'mine'
+    activeSection.value = 'overview'
 })
 
 function goCreateApplication() {
@@ -185,8 +208,177 @@ function closeApplicationDrawer() {
   isApplicationDrawerOpen.value = false
 }
 
-function setActiveSection(section: 'mine' | 'review') {
+function setActiveSection(section: 'overview' | 'mine' | 'review') {
   activeSection.value = section
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function payloadText(payload: Record<string, unknown> | undefined, key: string) {
+  const value = payload?.[key]
+  if (typeof value === 'string')
+    return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value))
+    return String(value)
+  return ''
+}
+
+function compactFields(fields: Array<{ label: string, value?: string }>) {
+  return fields
+    .filter((field): field is { label: string, value: string } => !!field.value)
+    .slice(0, 5)
+}
+
+function grantedResourceKind(resourceType?: ResourceType, payload?: Record<string, unknown>): GrantedResourceCard['kind'] {
+  const normalizedType = payloadText(payload, 'resourceType').toLowerCase()
+  if (resourceType === 'llm_api_quota' || ['newapi', 'apikey', 'api_key', 'api-key', 'api key'].some(value => normalizedType.includes(value)))
+    return 'api-key'
+  if (resourceType === 'database' || ['database', 'db', 'postgres', 'postgresql', 'mysql', 'redis', 'mongodb'].some(value => normalizedType === value || normalizedType.includes(value)))
+    return 'database'
+  if ((resourceType && ['server', 'gpu', 'k8s_namespace'].includes(resourceType)) || ['server', 'machine', 'vm', 'gpu', 'k8s', 'namespace'].some(value => normalizedType === value || normalizedType.includes(value)))
+    return 'machine'
+  if ((resourceType && ['vpn', 'ip_allowlist'].includes(resourceType)) || ['vpn', 'ip_allowlist', 'ip-allowlist', 'allowlist', 'whitelist', 'network'].some(value => normalizedType === value || normalizedType.includes(value)))
+    return 'network'
+  return 'generic'
+}
+
+function grantedResourceMeta(kind: GrantedResourceCard['kind']) {
+  const meta: Record<GrantedResourceCard['kind'], Pick<GrantedResourceCard, 'icon' | 'tone' | 'primaryLabel'>> = {
+    'api-key': { icon: 'i-carbon-api-1', tone: 'violet', primaryLabel: '凭据 / Key' },
+    'database': { icon: 'i-carbon-data-base', tone: 'cyan', primaryLabel: '数据库 / 实例' },
+    'machine': { icon: 'i-carbon-server-rack', tone: 'emerald', primaryLabel: '机器 / 命名空间' },
+    'network': { icon: 'i-carbon-network-4', tone: 'blue', primaryLabel: '网络 / IP' },
+    'reply': { icon: 'i-carbon-chat', tone: 'amber', primaryLabel: '答复摘要' },
+    'generic': { icon: 'i-carbon-cube', tone: 'slate', primaryLabel: '资源' },
+  }
+  return meta[kind]
+}
+
+function provisionPayload(item: ApplicationItem) {
+  return isRecord(item.provisionPayload) ? item.provisionPayload : undefined
+}
+
+function resourceProvisionCards(application: WelfareApplication): GrantedResourceCard[] {
+  return (application.resourceItems ?? [])
+    .filter(item => item.provisionStatus === 'completed' && provisionPayload(item))
+    .map((item) => {
+      const payload = provisionPayload(item)
+      const kind = grantedResourceKind(item.resourceType, payload)
+      const meta = grantedResourceMeta(kind)
+      const resourceName = payloadText(payload, 'resourceName') || `${resourceTypeLabel(item.resourceType)} · ${item.resourceSubtype}`
+      const credential = payloadText(payload, 'credential')
+      const accessUrl = payloadText(payload, 'accessUrl')
+      return {
+        id: `${application.id}-${item.id}`,
+        applicationId: application.id,
+        title: resourceName,
+        subtitle: `${application.title} · ${resourceTypeLabel(item.resourceType)}`,
+        kind,
+        icon: meta.icon,
+        tone: meta.tone,
+        status: '已获得',
+        statusTone: 'success',
+        primaryLabel: meta.primaryLabel,
+        primaryValue: credential || accessUrl || resourceName,
+        fields: compactFields([
+          { label: '访问地址', value: accessUrl },
+          { label: '凭据', value: credential },
+          { label: '资源规格', value: item.resourceSubtype },
+          { label: '权限', value: item.requestedPermission || payloadText(payload, 'permission') },
+          { label: '有效期', value: payloadText(payload, 'expiresAt') || item.expiresAt },
+          { label: '项目', value: application.projectId },
+        ]),
+        note: payloadText(payload, 'note') || item.provisionNote,
+        date: item.provisionCompletedAt || item.updatedAt,
+      }
+    })
+}
+
+function applicationAllocationCards(application: WelfareApplication): GrantedResourceCard[] {
+  const payload = isRecord(application.allocationPayload) ? application.allocationPayload : undefined
+  if (!payload)
+    return []
+
+  const kind = grantedResourceKind(application.type === 'code' ? 'llm_api_quota' : undefined, payload)
+  const meta = grantedResourceMeta(kind)
+  const credential = payloadText(payload, 'credential')
+  const accessUrl = payloadText(payload, 'accessUrl')
+  const resourceName = payloadText(payload, 'resourceName') || application.title
+  return [{
+    id: `${application.id}-allocation`,
+    applicationId: application.id,
+    title: resourceName,
+    subtitle: application.type === 'code' ? 'LLMApi 自动发放' : application.title,
+    kind,
+    icon: meta.icon,
+    tone: meta.tone,
+    status: '已发放',
+    statusTone: 'success',
+    primaryLabel: meta.primaryLabel,
+    primaryValue: credential || accessUrl || resourceName,
+    fields: compactFields([
+      { label: '访问地址', value: accessUrl },
+      { label: '凭据', value: credential },
+      { label: '资源类型', value: payloadText(payload, 'resourceType') },
+      { label: '有效期', value: payloadText(payload, 'expiresAt') },
+      { label: '模型', value: application.llmApiModelName },
+    ]),
+    note: payloadText(payload, 'note') || application.allocationNote,
+    date: application.allocationCompletedAt || application.completedAt,
+  }]
+}
+
+function applicationReplyCards(application: WelfareApplication): GrantedResourceCard[] {
+  if (!application.answer || !finishedStatuses.includes(application.status))
+    return []
+
+  const meta = grantedResourceMeta('reply')
+  return [{
+    id: `${application.id}-answer`,
+    applicationId: application.id,
+    title: application.title,
+    subtitle: `${typeLabel(application.type)} · ${statusText(application.status)}`,
+    kind: 'reply',
+    icon: meta.icon,
+    tone: meta.tone,
+    status: statusText(application.status),
+    statusTone: 'info',
+    primaryLabel: meta.primaryLabel,
+    primaryValue: plainDescription(application.answer),
+    fields: compactFields([
+      { label: '类型', value: typeLabel(application.type) },
+      { label: '消耗', value: formatPoints(application.cost) },
+      { label: '完成时间', value: formatDate(application.completedAt || application.reviewedAt) },
+    ]),
+    date: application.completedAt || application.reviewedAt || application.createdAt,
+  }]
+}
+
+function applicationMessageCards(application: WelfareApplication): GrantedResourceCard[] {
+  const meta = grantedResourceMeta('reply')
+  return (application.messages ?? [])
+    .filter(message => message.type === 'result_submission')
+    .map(message => ({
+      id: `${application.id}-${message.id}`,
+      applicationId: application.id,
+      title: application.title,
+      subtitle: `协作线程回复 · ${userName(message.userId)}`,
+      kind: 'reply',
+      icon: meta.icon,
+      tone: meta.tone,
+      status: '结果回复',
+      statusTone: 'info',
+      primaryLabel: meta.primaryLabel,
+      primaryValue: plainDescription(message.content),
+      fields: compactFields([
+        { label: '回复人', value: userName(message.userId) },
+        { label: '类型', value: typeLabel(application.type) },
+        { label: '回复时间', value: formatDate(message.createdAt) },
+      ]),
+      date: message.createdAt,
+    }))
 }
 
 function matchesKeyword(item: WelfareApplication, keyword: string, extraFields: string[] = []) {
@@ -310,9 +502,16 @@ function applicationRowTags(item: WelfareApplication) {
 
 <template>
   <section class="application-dashboard space-y-6">
-    <div v-if="showReviewSection" class="application-dashboard__hero">
+    <div v-if="currentUser" class="application-dashboard__hero">
       <div class="min-w-0">
-        <div class="application-dashboard__tabs" role="tablist" aria-label="申请列表切换">
+        <div class="application-dashboard__tabs" :class="{ 'application-dashboard__tabs--three': showReviewSection }" role="tablist" aria-label="申请列表切换">
+          <button
+            type="button"
+            :class="{ 'is-active': activeSection === 'overview' }"
+            @click="setActiveSection('overview')"
+          >
+            资源总览
+          </button>
           <button
             type="button"
             :class="{ 'is-active': activeSection === 'mine' }"
@@ -346,6 +545,53 @@ function applicationRowTags(item: WelfareApplication) {
     </div>
 
     <template v-else>
+      <TxCard v-show="activeSection === 'overview'" class="solid-panel application-list-panel" background="pure" shadow="soft" :padding="0" :radius="22">
+        <div class="application-list-panel__header">
+          <div class="application-section-title">
+            <h3>资源总览</h3>
+            <span>共 {{ grantedResourceCards.length }} 项</span>
+          </div>
+        </div>
+
+        <div v-if="!grantedResourceCards.length" class="application-empty">
+          暂无已获得资源。资源发放、API Key、机器/IP、数据库和申请答复会自动聚合到这里。
+        </div>
+        <div v-else class="resource-overview-grid">
+          <button
+            v-for="card in grantedResourceCards"
+            :key="card.id"
+            type="button"
+            class="resource-overview-card"
+            :class="[`resource-overview-card--${card.kind}`, `resource-overview-card--${card.tone}`]"
+            @click="openApplicationDrawer(card.applicationId)"
+          >
+            <span class="resource-overview-card__topline">
+              <span class="resource-overview-card__icon" :class="card.icon" aria-hidden="true" />
+              <span class="resource-overview-card__status" :class="`resource-overview-card__status--${card.statusTone}`">{{ card.status }}</span>
+            </span>
+            <span class="resource-overview-card__body">
+              <strong>{{ card.title }}</strong>
+              <small>{{ card.subtitle }}</small>
+            </span>
+            <span class="resource-overview-card__primary">
+              <em>{{ card.primaryLabel }}</em>
+              <b>{{ card.primaryValue }}</b>
+            </span>
+            <span v-if="card.fields.length" class="resource-overview-card__fields">
+              <span v-for="field in card.fields" :key="`${card.id}-${field.label}`">
+                <em>{{ field.label }}</em>
+                <b>{{ field.value }}</b>
+              </span>
+            </span>
+            <span v-if="card.note" class="resource-overview-card__note">{{ card.note }}</span>
+            <span class="resource-overview-card__footer">
+              <span>{{ formatDate(card.date) }}</span>
+              <span class="i-carbon-chevron-right" aria-hidden="true" />
+            </span>
+          </button>
+        </div>
+      </TxCard>
+
       <TxCard v-show="activeSection === 'mine'" class="solid-panel application-list-panel" background="pure" shadow="soft" :padding="0" :radius="22">
         <div class="application-list-panel__header">
           <div class="application-section-title">
