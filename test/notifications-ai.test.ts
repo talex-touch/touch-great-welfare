@@ -145,11 +145,11 @@ function createMemoryD1() {
           }
           if (query.includes('insert into notification_settings')) {
             const existing = settings.find(item => item.user_id === this.values[0])
-            const onlyBrowserPush = query.includes('(user_id, browser_push_enabled, updated_at)')
+            const onlyBrowserPush = query.includes('browser_push_enabled, updated_at)') && !query.includes('email_address')
             const next = onlyBrowserPush
               ? {
                   user_id: this.values[0],
-                  email_enabled: existing?.email_enabled ?? 0,
+                  email_enabled: existing?.email_enabled ?? 1,
                   email_address: existing?.email_address ?? '',
                   feishu_enabled: existing?.feishu_enabled ?? 0,
                   feishu_webhook_encrypted: existing?.feishu_webhook_encrypted ?? null,
@@ -273,6 +273,17 @@ function createMemoryD1() {
           if (query.includes('select * from notification_settings'))
             return settings.find(item => item.user_id === this.values[0]) ?? null
           if (query.includes('select count(*) as count') && query.includes('notification_deliveries')) {
+            if (query.includes('join notifications')) {
+              return {
+                count: deliveries.filter((delivery) => {
+                  const notification = notifications.find(item => item.id === delivery.notification_id)
+                  return notification?.user_id === this.values[0]
+                    && delivery.channel === 'email'
+                    && delivery.status === 'sent'
+                    && notification.event !== 'admin_announcement'
+                }).length,
+              }
+            }
             return {
               count: deliveries.filter(item => item.provider === this.values[0] && item.status === 'sent').length,
             }
@@ -1014,7 +1025,7 @@ describe('notification dispatch', () => {
     expect(d1.data.settings[0].browser_push_enabled).toBe(0)
   })
 
-  it('uses Feishu mail before Resend and charges email points once', async () => {
+  it('uses Feishu mail before Resend and charges after the daily free email', async () => {
     const stored = {
       ...state(),
       users: [user(120), user(0, 'admin_1', 'admin')],
@@ -1048,6 +1059,98 @@ describe('notification dispatch', () => {
         }))
       }
       return new Response(JSON.stringify({ id: 'resend_should_not_run' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await saveNotificationProvider(d1)
+    d1.data.notifications.push({
+      id: 'ntf_free_used',
+      user_id: 'user_1',
+      event: 'email_test',
+      title: '已用免费邮件',
+      body: 'free',
+      data: '{}',
+      created_at: '2026-06-01T00:00:00.000Z',
+    })
+    d1.data.deliveries.push({
+      id: 'dlv_free_used',
+      notification_id: 'ntf_free_used',
+      channel: 'email',
+      status: 'sent',
+      charged_points: 0,
+      provider: 'feishu_mail',
+      created_at: '2026-06-01T00:00:00.000Z',
+    })
+
+    const previous = {
+      ...stored,
+      applications: [{
+        id: 'app_1',
+        userId: 'user_1',
+        type: 'pro' as const,
+        title: 'Pro 支持',
+        description: '请支持',
+        hasOpenSourceBadge: false,
+        attachments: [],
+        status: 'pending_review' as const,
+        cost: 100,
+        costCharged: false,
+        createdAt: '2026-06-01T00:00:00.000Z',
+      }],
+    }
+    const next = {
+      ...stored,
+      applications: [{
+        ...previous.applications[0],
+        status: 'answered' as const,
+        answer: '<p>已通过。</p>',
+        reviewedAt: '2026-06-01T01:00:00.000Z',
+      }],
+    }
+    d1.setState(next)
+
+    await notifications.dispatchWelfareStateChangeNotifications({
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }, previous, next)
+
+    const emailDeliveries = d1.data.deliveries.filter(item => item.channel === 'email' && item.notification_id !== 'ntf_free_used')
+    expect(emailDeliveries).toHaveLength(1)
+    expect(emailDeliveries[0].provider).toBe('feishu_mail')
+    expect(emailDeliveries[0].charged_points).toBe(5)
+    expect(d1.data.pointTransactions).toHaveLength(1)
+    const decodedState = await readWelfareState({
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+    }) as WelfareState
+    expect(decodedState.users.find(item => item.id === 'user_1')?.points).toBe(115)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('api.resend.com'))).toBe(false)
+    expect(d1.data.providerConfig?.feishu_refresh_token_expires_at).toBeTruthy()
+  })
+
+  it('defaults legacy users to email notifications and sends the first daily email for free', async () => {
+    const stored = {
+      ...state(),
+      users: [user(0), user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/authen/v2/oauth/token')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          access_token: 'access_new',
+          expires_in: 7200,
+          refresh_token: 'refresh_new',
+          refresh_token_expires_in: 604800,
+        }))
+      }
+      return new Response(JSON.stringify({
+        code: 0,
+        msg: 'success',
+        data: { message_id: 'msg_free' },
+      }))
     })
     vi.stubGlobal('fetch', fetchMock)
     await saveNotificationProvider(d1)
@@ -1086,16 +1189,66 @@ describe('notification dispatch', () => {
 
     const emailDeliveries = d1.data.deliveries.filter(item => item.channel === 'email')
     expect(emailDeliveries).toHaveLength(1)
-    expect(emailDeliveries[0].provider).toBe('feishu_mail')
-    expect(emailDeliveries[0].charged_points).toBe(5)
-    expect(d1.data.pointTransactions).toHaveLength(1)
-    const decodedState = await readWelfareState({
+    expect(emailDeliveries[0].status).toBe('sent')
+    expect(emailDeliveries[0].charged_points).toBe(0)
+    expect(d1.data.pointTransactions).toHaveLength(0)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/mail/v1/user_mailboxes/'))).toBe(true)
+  })
+
+  it('charges user email tests only after the daily free email is used', async () => {
+    const stored = {
+      ...state(120),
+      users: [user(120), user(0, 'admin_1', 'admin')],
+    }
+    const d1 = createMemoryD1()
+    d1.setState(stored)
+    vi.stubGlobal('crypto', globalThis.crypto)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/authen/v2/oauth/token')) {
+        return new Response(JSON.stringify({
+          code: 0,
+          access_token: 'access_new',
+          expires_in: 7200,
+          refresh_token: 'refresh_new',
+          refresh_token_expires_in: 604800,
+        }))
+      }
+      return new Response(JSON.stringify({
+        code: 0,
+        msg: 'success',
+        data: { message_id: `msg_${d1.data.deliveries.length}` },
+      }))
+    }))
+    await saveNotificationProvider(d1)
+
+    const env = {
       LOCAL_DB: d1 as unknown as D1Database,
       NOTIFY_SECRET_KEY: 'test-secret',
-    }) as WelfareState
-    expect(decodedState.users.find(item => item.id === 'user_1')?.points).toBe(115)
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('api.resend.com'))).toBe(false)
-    expect(d1.data.providerConfig?.feishu_refresh_token_expires_at).toBeTruthy()
+    }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+    const first = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/email-test', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ provider: 'feishu_mail' }),
+    }), env)
+    const second = await notifications.handleNotificationRequest(new Request('https://example.com/api/notifications/email-test', {
+      method: 'POST',
+      headers: {
+        cookie,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ provider: 'feishu_mail' }),
+    }), env)
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    await expect(first.json()).resolves.toMatchObject({ chargedPoints: 0 })
+    await expect(second.json()).resolves.toMatchObject({ chargedPoints: 5 })
+    expect(d1.data.pointTransactions).toHaveLength(1)
   })
 
   it('falls back to Resend when Feishu mail reaches the daily limit', async () => {
@@ -1166,7 +1319,8 @@ describe('notification dispatch', () => {
     const latestEmailDeliveries = d1.data.deliveries.filter(item => item.notification_id)
     expect(latestEmailDeliveries.some(item => item.provider === 'feishu_mail' && item.status === 'skipped')).toBe(true)
     expect(latestEmailDeliveries.some(item => item.provider === 'resend' && item.status === 'sent')).toBe(true)
-    expect(d1.data.pointTransactions).toHaveLength(1)
+    expect(d1.data.pointTransactions).toHaveLength(0)
+    expect(latestEmailDeliveries.some(item => item.provider === 'resend' && item.status === 'sent' && item.charged_points === 0)).toBe(true)
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/mail/v1/user_mailboxes/'))).toBe(false)
   })
 
@@ -1237,6 +1391,7 @@ describe('notification dispatch', () => {
 
     expect(content.text).toContain('内容已截断')
     expect(content.text).toContain('1. xxx.pdf - 点击下载：https://welfare.example.com/api/uploads/att_1/file')
-    expect(content.html).toContain('<a href="https://welfare.example.com/api/uploads/att_1/file">点击下载</a>')
+    expect(content.html).toContain('href="https://welfare.example.com/api/uploads/att_1/file"')
+    expect(content.html).toContain('点击下载</a>')
   })
 })

@@ -498,7 +498,7 @@ onMounted(async () => {
             <div class="wallet-pricing-list">
               <div>
                 <span>预扣费</span>
-                <strong>所有公益申请均采用预扣费制度。</strong>
+                <strong>所有公益申请均采用预扣费制度。建议用多少充多少，资源可能随时因供应商、容量或风控原因无法使用，一般不退款。</strong>
               </div>
               <div>
                 <span>活动价格</span>

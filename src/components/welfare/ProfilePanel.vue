@@ -598,7 +598,7 @@ onUnmounted(() => {
                     邮箱通知
                   </label>
                 </div>
-                <p>默认使用 LinuxDo 账号邮箱；可手动修改。默认不启用，测试发送会消耗 5 积分。</p>
+                <p>默认使用 LinuxDo 账号邮箱；可手动修改。邮件通知默认开启，每天首封免费，之后每封扣 5 积分。</p>
                 <div class="profile-setting-action">
                   <TxInput v-model="notificationSettingsForm.emailAddress" type="email" :placeholder="currentUser.profile.email" />
                   <label class="profile-setting-toggle">
@@ -607,7 +607,7 @@ onUnmounted(() => {
                   </label>
                 </div>
                 <button class="profile-setting-link-button" type="button" :disabled="notificationSettingsForm.emailTesting" @click="openEmailTestDialog">
-                  发送测试邮件（消耗 5 积分）
+                  发送测试邮件
                 </button>
               </div>
 
@@ -948,7 +948,7 @@ onUnmounted(() => {
                 <h3 id="profile-email-test-title">
                   发送测试邮件
                 </h3>
-                <p>测试会使用真实邮件通道，发送成功后会消耗 5 积分。</p>
+                <p>测试会使用真实邮件通道，每天首封免费，超出后每封扣 5 积分。</p>
               </div>
               <TxButton variant="ghost" size="sm" aria-label="关闭测试邮件弹窗" :disabled="notificationSettingsForm.emailTesting" @click="closeEmailTestDialog">
                 <span class="i-carbon-close" />
@@ -961,7 +961,7 @@ onUnmounted(() => {
                 <strong>{{ notificationEmailTestAddress }}</strong>
               </div>
               <p class="profile-warning">
-                发送测试邮件会按邮箱通知规则扣除 5 积分；邮箱通知开关默认不启用，测试发送不会自动打开开关。
+                邮件通知默认开启；测试邮件也计入每日邮箱通知额度，首封免费，超出后按规则扣除积分。
               </p>
             </div>
 
@@ -970,7 +970,7 @@ onUnmounted(() => {
                 取消
               </TxButton>
               <TxButton variant="primary" :disabled="notificationSettingsForm.emailTesting" @click="testEmailNotification">
-                {{ notificationSettingsForm.emailTesting ? '发送中...' : '确认发送并扣 5 积分' }}
+                {{ notificationSettingsForm.emailTesting ? '发送中...' : '确认发送' }}
               </TxButton>
             </div>
           </div>
@@ -1068,7 +1068,7 @@ onUnmounted(() => {
               <div class="profile-pricing-list">
                 <div>
                   <span>预扣费</span>
-                  <strong>所有公益申请均采用预扣费制度。</strong>
+                  <strong>所有公益申请均采用预扣费制度。建议用多少充多少，资源可能随时因供应商、容量或风控原因无法使用，一般不退款。</strong>
                 </div>
                 <div>
                   <span>活动价格</span>

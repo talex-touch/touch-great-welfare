@@ -303,6 +303,7 @@ export interface SystemLogListResult {
 }
 
 export const EMAIL_NOTIFICATION_COST = 5
+export const EMAIL_NOTIFICATION_FREE_DAILY_LIMIT = 1
 
 export function notificationEventText(event: NotificationEvent) {
   const map: Record<NotificationEvent, string> = {

@@ -19,7 +19,7 @@ import type {
   SystemLogLevel,
   SystemLogListResult,
 } from '~/shared/notifications'
-import { EMAIL_NOTIFICATION_COST, NOTIFICATION_TEMPLATE_OPTIONS, notificationTemplateOption } from '~/shared/notifications'
+import { EMAIL_NOTIFICATION_COST, EMAIL_NOTIFICATION_FREE_DAILY_LIMIT, NOTIFICATION_TEMPLATE_OPTIONS, notificationTemplateOption } from '~/shared/notifications'
 import { richTextToPlainText } from '~/utils/rich-text'
 import {
   assertAdminRequest,
@@ -203,6 +203,7 @@ const FEISHU_MAIL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000
 const FEISHU_MAIL_AUTHORIZE_URL = 'https://open.feishu.cn/open-apis/authen/v1/index'
 const FEISHU_MAIL_AUTH_SCOPE = 'offline_access mail:user_mailbox.message:send'
 const ADMIN_ANNOUNCEMENT_CHANNELS: NotificationChannel[] = ['in_app', 'email', 'feishu', 'browser_push']
+const EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS: NotificationEvent[] = ['admin_announcement']
 type EmailDeliveryProvider = EmailDeliveryAttempt['provider']
 type EmailDeliveryStatus = EmailDeliveryAttempt['status']
 const EMAIL_DELIVERY_PROVIDER_LABELS: Record<EmailDeliveryProvider, string> = {
@@ -713,7 +714,7 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
       `
         create table if not exists notification_settings (
           user_id text primary key,
-          email_enabled integer not null default 0,
+          email_enabled integer not null default 1,
           email_address text not null default '',
           feishu_enabled integer not null default 0,
           feishu_webhook_encrypted text,
@@ -917,6 +918,14 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_password_encrypted', 'text')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_from_email', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_from_name', 'text not null default \'\'')
+    await env.LOCAL_DB!
+      .prepare(`
+        update notification_settings
+        set email_enabled = 1
+        where email_enabled = 0
+          and coalesce(email_address, '') = ''
+      `)
+      .run()
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_enabled', 'integer not null default 0')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_host', 'text not null default \'\'')
     await addD1ColumnIfMissing(env, 'notification_provider_config', 'smtp_port', 'integer not null default 465')
@@ -1132,7 +1141,7 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
   await pool.query(`
     create table if not exists notification_settings (
       user_id text primary key,
-      email_enabled boolean not null default false,
+      email_enabled boolean not null default true,
       email_address text not null default '',
       feishu_enabled boolean not null default false,
       feishu_webhook_encrypted text,
@@ -1156,6 +1165,13 @@ export async function ensureNotificationSchema(env: WorkerEnv) {
     )
   `)
   await pool.query('alter table notification_deliveries add column if not exists provider text not null default $1', [''])
+  await pool.query('alter table notification_settings alter column email_enabled set default true')
+  await pool.query(`
+    update notification_settings
+    set email_enabled = true
+    where email_enabled = false
+      and coalesce(email_address, '') = ''
+  `)
   await pool.query(`
     create table if not exists push_subscriptions (
       id text primary key,
@@ -1415,7 +1431,7 @@ async function toSettingsView(env: WorkerEnv, user: User, row: NotificationSetti
   }
 
   return {
-    emailEnabled: boolValue(row?.email_enabled),
+    emailEnabled: row ? boolValue(row.email_enabled) : true,
     emailAddress: row?.email_address || user.profile.email,
     feishuEnabled: boolValue(row?.feishu_enabled),
     feishuWebhookMasked,
@@ -1593,12 +1609,12 @@ async function setBrowserPushEnabled(env: WorkerEnv, userId: string, enabled: bo
   if (!current) {
     if (shouldUseD1(env)) {
       await env.LOCAL_DB!
-        .prepare('insert into notification_settings (user_id, browser_push_enabled, updated_at) values (?1, ?2, current_timestamp)')
+        .prepare('insert into notification_settings (user_id, email_enabled, browser_push_enabled, updated_at) values (?1, 1, ?2, current_timestamp)')
         .bind(userId, enabled ? 1 : 0)
         .run()
       return
     }
-    await getPool(env).query('insert into notification_settings (user_id, browser_push_enabled, updated_at) values ($1, $2, now())', [userId, enabled])
+    await getPool(env).query('insert into notification_settings (user_id, email_enabled, browser_push_enabled, updated_at) values ($1, true, $2, now())', [userId, enabled])
     return
   }
 
@@ -2142,6 +2158,48 @@ async function countSentFeishuMailToday(env: WorkerEnv) {
       and (created_at at time zone 'Asia/Shanghai')::date = $2::date
   `, ['feishu_mail', dateKey])
   return Number(result.rows[0]?.count ?? 0)
+}
+
+async function countBillableEmailNotificationsToday(env: WorkerEnv, userId: string) {
+  await ensureNotificationSchema(env)
+  const dateKey = shanghaiDateKey()
+  if (shouldUseD1(env)) {
+    const row = await env.LOCAL_DB!
+      .prepare(`
+        select count(*) as count
+        from notification_deliveries delivery
+        join notifications notification on notification.id = delivery.notification_id
+        where notification.user_id = ?1
+          and delivery.channel = 'email'
+          and delivery.status = 'sent'
+          and notification.event not in (${EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS.map((_, index) => `?${index + 2}`).join(', ')})
+          and date(delivery.created_at, '+8 hours') = ?${EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS.length + 2}
+      `)
+      .bind(userId, ...EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS, dateKey)
+      .first<{ count: number }>()
+    return Number(row?.count ?? 0)
+  }
+
+  const placeholders = EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS.map((_, index) => `$${index + 2}`).join(', ')
+  const result = await getPool(env).query<{ count: string }>(`
+    select count(*) as count
+    from notification_deliveries delivery
+    join notifications notification on notification.id = delivery.notification_id
+    where notification.user_id = $1
+      and delivery.channel = 'email'
+      and delivery.status = 'sent'
+      and notification.event not in (${placeholders})
+      and (delivery.created_at at time zone 'Asia/Shanghai')::date = $${EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS.length + 2}::date
+  `, [userId, ...EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS, dateKey])
+  return Number(result.rows[0]?.count ?? 0)
+}
+
+async function emailNotificationChargePoints(env: WorkerEnv, userId: string, event?: NotificationEvent) {
+  if (event && EMAIL_NOTIFICATION_CHARGE_EXEMPT_EVENTS.includes(event))
+    return 0
+
+  const sentToday = await countBillableEmailNotificationsToday(env, userId)
+  return sentToday < EMAIL_NOTIFICATION_FREE_DAILY_LIMIT ? 0 : EMAIL_NOTIFICATION_COST
 }
 
 async function createFeishuMailOAuthState(env: WorkerEnv, input: Omit<FeishuMailOAuthState, 'createdAt'>) {
@@ -2745,13 +2803,13 @@ async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestP
   const emailAddress = (payload.emailAddress?.trim() || user.profile.email).toLowerCase()
   assertEmail(emailAddress)
 
-  const chargedPoints = payload.free ? 0 : EMAIL_NOTIFICATION_COST
-  if (chargedPoints && !await hasEnoughPoints(env, user.id, EMAIL_NOTIFICATION_COST))
+  const chargedPoints = payload.free ? 0 : await emailNotificationChargePoints(env, user.id, 'email_test')
+  if (chargedPoints && !await hasEnoughPoints(env, user.id, chargedPoints))
     throw new Error('邮箱通知余额不足')
 
   const customTemplateInput = templateTestInput(payload, chargedPoints, emailAddress)
   const title = customTemplateInput?.title ?? 'Touch Great Welfare 邮箱测试'
-  const body = customTemplateInput?.body ?? (chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${EMAIL_NOTIFICATION_COST} 积分。后续正式通知将按你的通知设置发送。` : '这是一封后台邮件通道测试邮件，不会扣除用户积分。')
+  const body = customTemplateInput?.body ?? (chargedPoints ? `这是一封测试邮件，发送成功会消耗 ${chargedPoints} 积分。每日首封邮箱通知免费，后续正式通知将按你的通知设置发送。` : '这是一封免费邮件，不会扣除用户积分。')
   const data = customTemplateInput?.data ?? {
     kind: 'email_test',
     emailAddress,
@@ -2825,13 +2883,14 @@ async function sendEmailTest(env: WorkerEnv, user: User, payload: SendEmailTestP
 }
 
 async function dispatchOptionalChannels(env: WorkerEnv, user: User, settings: NotificationSettingsRow | null, notificationId: string, input: CreateNotificationInput) {
-  if (boolValue(settings?.email_enabled)) {
+  if (!settings || boolValue(settings.email_enabled)) {
     const address = settings?.email_address || user.profile.email
-    if (!await hasEnoughPoints(env, user.id, EMAIL_NOTIFICATION_COST)) {
+    const chargedPoints = await emailNotificationChargePoints(env, user.id, input.event)
+    if (chargedPoints && !await hasEnoughPoints(env, user.id, chargedPoints)) {
       await recordDelivery(env, notificationId, 'email', 'skipped', '邮箱通知余额不足')
     }
     else {
-      await dispatchEmailChannel(env, user.id, address, notificationId, input, EMAIL_NOTIFICATION_COST, user.profile.displayName || user.profile.email || user.id)
+      await dispatchEmailChannel(env, user.id, address, notificationId, input, chargedPoints, user.profile.displayName || user.profile.email || user.id)
     }
   }
 

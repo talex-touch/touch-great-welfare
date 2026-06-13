@@ -63,7 +63,7 @@ onMounted(() => {
               邮箱通知
             </label>
             <p class="text-xs text-slate-500 leading-5 mt-2">
-              发送成功后扣 5 积分；余额不足时跳过邮箱。
+              邮件通知默认开启；每天首封免费，之后每封扣 5 积分，余额不足时跳过邮箱。
             </p>
             <TxInput v-model="notificationSettingsForm.emailAddress" class="mt-4" type="email" placeholder="you@example.com" />
           </div>
