@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OAuthProviderConfigView } from '~/composables/oauth'
-import type { CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
+import type { ApplicationItem, CreditTransaction, RequestKind, ResourceGovernanceQueueItem, StudentVerification, UserCoupon, WelfareApplication } from '~/composables/welfare'
 import type { NotificationTemplateId } from '~/shared/notifications'
 import { FileUploader, TxButton, TxCard, TxCheckbox, TxDrawer, TxInput, TxNumberInput, TxSelect, TxSelectItem, TxStatusBadge, TxTabItem, TxTabs } from '@talex-touch/tuffex'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -10,6 +10,7 @@ import { sendProviderEmailTest } from '~/composables/notifications'
 import { buildResourceGovernanceSnapshot, formatBytes, formatDate, formatPoints, isGptProModel, MAX_ATTACHMENT_BYTES, normalizeVerificationType, RESOURCE_TYPE_CONFIGS, resourceTypeLabel, verificationOrganizationLabel, verificationTypeLabel } from '~/composables/welfare'
 import { adjustUserPointsAction, updateOauthConfigAction } from '~/composables/welfare-persistence'
 import { ADMIN_TABS, adminTabKeyFromName, adminTabNameFromKey, useWelfareUiState } from '~/composables/welfare-ui'
+import { resourceItemApprovedFields, resourceItemSummaryFields, resourceProvisionStatusText } from '~/composables/welfare/resource-display'
 import { NOTIFICATION_TEMPLATE_OPTIONS, notificationTemplateOption } from '~/shared/notifications'
 import RichTextEditor from '../RichTextEditor.vue'
 import RichTextView from '../RichTextView.vue'
@@ -359,6 +360,19 @@ const transactionDirectionFilterOptions = [
   { value: 'out', label: '扣减' },
 ]
 
+const provisionQueueTypeFilterOptions = [
+  { value: ALL_FILTER, label: '全部来源' },
+  { value: 'application', label: '普通申请' },
+  { value: 'resource', label: '资源明细' },
+]
+
+const provisionQueueStatusFilterOptions = [
+  { value: ALL_FILTER, label: '全部状态' },
+  { value: 'pending_allocation', label: applicationStatusText.pending_allocation },
+  { value: 'pending', label: resourceProvisionStatusText('pending') },
+  { value: 'completed', label: resourceProvisionStatusText('completed') },
+]
+
 const bannerToneOptions = [
   { value: 'info', label: '提示' },
   { value: 'success', label: '成功' },
@@ -374,7 +388,24 @@ const announcementChannelOptions = [
 
 const notificationTemplateOptions = NOTIFICATION_TEMPLATE_OPTIONS
 type NotificationConfigSectionId = 'providers' | 'templates' | 'banner' | 'announcements' | 'logs'
+type AiConfigSectionId = 'ai-provider' | 'database-provision' | 'sub2api'
+type ProvisionQueueKind = 'application' | 'resource'
+interface ProvisionQueueRow {
+  id: string
+  kind: ProvisionQueueKind
+  application: WelfareApplication
+  resourceItem?: ApplicationItem
+  title: string
+  user: string
+  typeLabel: string
+  status: string
+  statusLabel: string
+  detail: string
+  provider: string
+  updatedAt: string
+}
 const activeNotificationConfigSection = ref<NotificationConfigSectionId>('providers')
+const activeAiConfigSection = ref<AiConfigSectionId>('ai-provider')
 const activeEmailTemplateId = ref(notificationTemplateOptions[0].id)
 const emailTemplateDrafts = reactive(Object.fromEntries(notificationTemplateOptions.map(template => [template.id, defaultEmailTemplateDraft(template)])) as Record<string, { subjectTemplate: string, bodyTemplate: string }>)
 const emailTemplateTestForm = reactive({
@@ -445,6 +476,16 @@ const transactionFilters = reactive({
   pageSize: 10,
 })
 
+const provisionQueueFilters = reactive({
+  query: '',
+  from: '',
+  to: '',
+  type: ALL_FILTER,
+  status: ALL_FILTER,
+  page: 1,
+  pageSize: 10,
+})
+
 const auditFilters = reactive({
   query: '',
   from: '',
@@ -454,6 +495,8 @@ const auditFilters = reactive({
   pageSize: 10,
 })
 const selectedUserId = ref('')
+const selectedProvisionQueueRowId = ref('')
+const isProvisionQueueDrawerOpen = ref(false)
 const isUserDrawerOpen = ref(false)
 const userDrawerMode = ref<'detail' | 'points'>('detail')
 const activeUserDrawerTab = ref<UserDrawerTab>(USER_DRAWER_TABS.account)
@@ -750,9 +793,24 @@ function resetTransactionFilters() {
   transactionFilters.direction = ALL_FILTER
 }
 
+function resetProvisionQueueFilters() {
+  resetBaseFilters(provisionQueueFilters)
+  provisionQueueFilters.type = ALL_FILTER
+  provisionQueueFilters.status = ALL_FILTER
+}
+
 function resetAuditFilters() {
   resetBaseFilters(auditFilters)
   auditFilters.area = ALL_FILTER
+}
+
+function openProvisionQueueDrawer(rowId: string) {
+  selectedProvisionQueueRowId.value = rowId
+  isProvisionQueueDrawerOpen.value = true
+}
+
+function closeProvisionQueueDrawer() {
+  isProvisionQueueDrawerOpen.value = false
 }
 
 function openUserDrawer(userId: string, mode: 'detail' | 'points' = 'detail') {
@@ -826,6 +884,13 @@ watch(
   () => [transactionFilters.query, transactionFilters.from, transactionFilters.to, transactionFilters.type, transactionFilters.direction, transactionFilters.pageSize],
   () => {
     transactionFilters.page = 1
+  },
+)
+
+watch(
+  () => [provisionQueueFilters.query, provisionQueueFilters.from, provisionQueueFilters.to, provisionQueueFilters.type, provisionQueueFilters.status, provisionQueueFilters.pageSize],
+  () => {
+    provisionQueueFilters.page = 1
   },
 )
 
@@ -1391,11 +1456,64 @@ const dashboardInsightCards = computed(() => {
   ]
 })
 
+const provisionQueueAllRows = computed<ProvisionQueueRow[]>(() => {
+  const rows: ProvisionQueueRow[] = []
+
+  for (const application of state.applications) {
+    const user = userDisplayName(application.userId)
+
+    if (application.status === 'pending_allocation' && application.type !== 'resource') {
+      rows.push({
+        id: `application-${application.id}`,
+        kind: 'application',
+        application,
+        title: application.title,
+        user,
+        typeLabel: applicationTypeLabel(application.type),
+        status: application.status,
+        statusLabel: applicationStatusLabel(application.status),
+        detail: application.allocationNote || application.answer || '等待管理员完成资源分配。',
+        provider: application.type === 'code' ? application.llmApiProvider || 'NewAPI' : '人工发放',
+        updatedAt: application.allocationCompletedAt || application.reviewedAt || application.createdAt,
+      })
+    }
+
+    for (const item of application.resourceItems ?? []) {
+      if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
+        continue
+      if (item.provisionStatus === 'not_required')
+        continue
+
+      rows.push({
+        id: `resource-${application.id}-${item.id}`,
+        kind: 'resource',
+        application,
+        resourceItem: item,
+        title: `${resourceTypeLabel(item.resourceType)} · ${item.resourceSubtype}`,
+        user,
+        typeLabel: '资源明细',
+        status: item.provisionStatus || 'pending',
+        statusLabel: resourceProvisionStatusText(item.provisionStatus),
+        detail: item.provisionNote || item.rejectReason || `${application.title} · ${item.approverGroup}`,
+        provider: item.resourceType === 'database' ? '数据库自动发放' : item.resourceType === 'llm_api_quota' ? 'Sub2API / NewAPI' : '人工发放',
+        updatedAt: item.provisionCompletedAt || item.updatedAt || application.reviewedAt || application.createdAt,
+      })
+    }
+  }
+
+  return rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+})
+
 const dataGroups = computed(() => [
   {
     title: '公益申请',
     count: state.applications.length,
     note: `${state.applications.filter(item => ['pending_review', 'needs_supplement'].includes(item.status)).length} 个待处理，${state.applications.filter(item => item.status === 'rejected').length} 个已退回`,
+  },
+  {
+    title: '发放队列',
+    count: provisionQueueAllRows.value.length,
+    note: `${provisionQueueAllRows.value.filter(item => item.status !== 'completed').length} 个待处理，${provisionQueueAllRows.value.filter(item => item.status === 'completed').length} 个已完成`,
   },
   {
     title: '认证申请',
@@ -1408,6 +1526,26 @@ const dataGroups = computed(() => [
     note: `${adminTransactions.value.filter(item => item.delta > 0).length} 条入账，${adminTransactions.value.filter(item => item.delta < 0).length} 条扣减`,
   },
 ])
+
+const provisionQueueRows = computed(() => provisionQueueAllRows.value
+  .filter(item => provisionQueueFilters.type === ALL_FILTER || item.kind === provisionQueueFilters.type)
+  .filter(item => provisionQueueFilters.status === ALL_FILTER || item.status === provisionQueueFilters.status)
+  .filter(item => isInDateRange(item.updatedAt, provisionQueueFilters))
+  .filter(item => matchesQuery(provisionQueueFilters.query, [
+    item.title,
+    item.user,
+    item.typeLabel,
+    item.statusLabel,
+    item.detail,
+    item.provider,
+    item.application.id,
+    item.resourceItem?.id,
+  ])))
+
+const provisionQueuePagination = computed(() => paginateRows(provisionQueueRows.value, provisionQueueFilters))
+const selectedProvisionQueueRow = computed(() => provisionQueueAllRows.value.find(item => item.id === selectedProvisionQueueRowId.value))
+const selectedProvisionResourceFields = computed(() => selectedProvisionQueueRow.value?.resourceItem ? resourceItemSummaryFields(selectedProvisionQueueRow.value.resourceItem) : [])
+const selectedProvisionApprovedFields = computed(() => selectedProvisionQueueRow.value?.resourceItem ? resourceItemApprovedFields(selectedProvisionQueueRow.value.resourceItem) : [])
 
 const applicationRows = computed(() => [...state.applications]
   .filter(item => applicationFilters.type === ALL_FILTER || item.type === applicationFilters.type)
@@ -1738,7 +1876,8 @@ function saveApplicationPolicyConfig() {
     if (!isAdmin.value)
       throw new Error('需要管理员权限')
     await persistApplicationPolicy()
-  }, '申请策略已保存')
+    await persistAiConfig()
+  }, '申请策略与模型价格已保存')
 }
 
 function onAdjustPoints(userId: string) {
@@ -2667,8 +2806,8 @@ onMounted(() => {
                   最小字数、冷却、PoW、Turnstile 和各类目开放窗口会在提交前后同时校验。
                 </p>
               </div>
-              <TxButton variant="primary" :disabled="!isAdmin || applicationPolicyConfigForm.loading" @click="saveApplicationPolicyConfig">
-                {{ applicationPolicyConfigForm.loading ? '保存中...' : '保存策略配置' }}
+              <TxButton variant="primary" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" @click="saveApplicationPolicyConfig">
+                {{ applicationPolicyConfigForm.loading || aiConfigForm.loading ? '保存中...' : '保存策略配置' }}
               </TxButton>
             </div>
 
@@ -2788,6 +2927,70 @@ onMounted(() => {
             </div>
           </div>
 
+          <div class="mt-6 p-4 border border-indigo-200 rounded-3xl bg-indigo-50/70 dark:border-indigo-400/20 dark:bg-indigo-950/20">
+            <div class="flex flex-wrap gap-3 items-start justify-between">
+              <div>
+                <div class="text-sm text-indigo-950 fw-900 dark:text-indigo-100">
+                  LLMApi 模型价格
+                </div>
+                <p class="field-hint mt-1">
+                  用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。Codex 按 USD 额度配置，GPT PRO 复用额度字段表示对话轮次，默认 5 轮、7 天有效。
+                </p>
+              </div>
+              <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
+                {{ aiConfigForm.llmApiModels.filter(model => model.enabled).length }} 个启用
+              </span>
+            </div>
+            <div class="mt-4 space-y-4">
+              <div v-for="model in aiConfigForm.llmApiModels" :key="model.key" class="p-4 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-[#151820]">
+                <div class="flex flex-wrap gap-3 items-start justify-between">
+                  <div>
+                    <div class="text-sm fw-900">
+                      {{ model.name }} · {{ model.provider }}
+                    </div>
+                    <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
+                      {{ llmApiRegionLabel(model.region) }}模型 · {{ model.description }}
+                    </div>
+                  </div>
+                  <TxCheckbox v-model="model.enabled" variant="checkmark" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" label="启用" />
+                </div>
+                <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-7">
+                  <label class="gap-2 grid">
+                    <span class="field-label">{{ model.key === 'gpt-pro' ? '价格（积分/轮）' : '价格（积分/USD）' }}</span>
+                    <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">{{ model.key === 'gpt-pro' ? '默认轮次' : '默认额度 USD' }}</span>
+                    <TxNumberInput v-model="model.defaultBudgetUsd" :min="model.minBudgetUsd" :max="model.maxBudgetUsd" :step="10" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">{{ model.key === 'gpt-pro' ? '最小轮次' : '最小 USD' }}</span>
+                    <TxNumberInput v-model="model.minBudgetUsd" :min="1" :max="model.maxBudgetUsd" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">{{ model.key === 'gpt-pro' ? '最大轮次' : '最大 USD' }}</span>
+                    <TxNumberInput v-model="model.maxBudgetUsd" :min="model.minBudgetUsd" :max="100000" :step="10" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">IP / RPM</span>
+                    <div class="gap-2 grid grid-cols-2">
+                      <TxNumberInput v-model="model.ipLimit" :min="1" :max="50" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                      <TxNumberInput v-model="model.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                    </div>
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">默认 TPM</span>
+                    <TxNumberInput v-model="model.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                  </label>
+                  <label class="gap-2 grid">
+                    <span class="field-label">并发</span>
+                    <TxNumberInput v-model="model.concurrencyLimit" :min="1" :max="100" :step="1" :controls="false" :disabled="!isAdmin || applicationPolicyConfigForm.loading || aiConfigForm.loading" />
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div v-if="applicationPolicyConfigForm.message" class="text-xs leading-5 mt-5 p-3 rounded-2xl bg-slate-100 dark:bg-white/10">
             {{ applicationPolicyConfigForm.message }}
           </div>
@@ -2872,21 +3075,24 @@ onMounted(() => {
           </template>
 
           <TxTabs
-            class="admin-config-tabs mt-4"
+            v-model="activeAiConfigSection"
+            class="admin-config-tabs admin-config-tabs--side mt-4"
             default-value="ai-provider"
-            placement="top"
+            placement="left"
             indicator-variant="block"
             indicator-motion="glide"
             :content-padding="0"
             :content-scrollable="false"
+            :nav-min-width="260"
+            :nav-max-width="320"
             auto-height
             borderless
           >
             <TxTabItem name="ai-provider" icon-class="i-carbon-ai-status">
               <template #name>
-                AI Provider
+                <span class="admin-tab-title">AI Provider</span>
+                <small class="admin-tab-note">模型、NewAPI 与审核配置</small>
               </template>
-
               <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
                 <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
                   <span class="i-carbon-ai-status" />
@@ -2937,70 +3143,6 @@ onMounted(() => {
                   </label>
                 </div>
 
-                <div class="mt-6 p-4 border border-indigo-200 rounded-3xl bg-indigo-50/70 dark:border-indigo-400/20 dark:bg-indigo-950/20">
-                  <div class="flex flex-wrap gap-3 items-start justify-between">
-                    <div>
-                      <div class="text-sm text-indigo-950 fw-900 dark:text-indigo-100">
-                        LLMApi 模型价格
-                      </div>
-                      <p class="field-hint mt-1">
-                        用户侧暂开放 Codex / GPT PRO；ClaudeCode / Mimo 暂停选择。Codex 按 USD 额度配置，GPT PRO 复用额度字段表示对话轮次，默认 5 轮、7 天有效。
-                      </p>
-                    </div>
-                    <span class="text-xs text-indigo-700 fw-800 px-3 py-1 rounded-full bg-white dark:text-indigo-200 dark:bg-white/10">
-                      {{ aiConfigForm.llmApiModels.filter(model => model.enabled).length }} 个启用
-                    </span>
-                  </div>
-                  <div class="mt-4 space-y-4">
-                    <div v-for="model in aiConfigForm.llmApiModels" :key="model.key" class="p-4 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-[#151820]">
-                      <div class="flex flex-wrap gap-3 items-start justify-between">
-                        <div>
-                          <div class="text-sm fw-900">
-                            {{ model.name }} · {{ model.provider }}
-                          </div>
-                          <div class="text-xs text-slate-500 mt-1 dark:text-slate-400">
-                            {{ llmApiRegionLabel(model.region) }}模型 · {{ model.description }}
-                          </div>
-                        </div>
-                        <TxCheckbox v-model="model.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" label="启用" />
-                      </div>
-                      <div class="mt-4 gap-3 grid md:grid-cols-3 xl:grid-cols-7">
-                        <label class="gap-2 grid">
-                          <span class="field-label">{{ model.key === 'gpt-pro' ? '价格（积分/轮）' : '价格（积分/USD）' }}</span>
-                          <TxNumberInput v-model="model.pointsPerUsd" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">{{ model.key === 'gpt-pro' ? '默认轮次' : '默认额度 USD' }}</span>
-                          <TxNumberInput v-model="model.defaultBudgetUsd" :min="model.minBudgetUsd" :max="model.maxBudgetUsd" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">{{ model.key === 'gpt-pro' ? '最小轮次' : '最小 USD' }}</span>
-                          <TxNumberInput v-model="model.minBudgetUsd" :min="1" :max="model.maxBudgetUsd" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">{{ model.key === 'gpt-pro' ? '最大轮次' : '最大 USD' }}</span>
-                          <TxNumberInput v-model="model.maxBudgetUsd" :min="model.minBudgetUsd" :max="100000" :step="10" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">IP / RPM</span>
-                          <div class="gap-2 grid grid-cols-2">
-                            <TxNumberInput v-model="model.ipLimit" :min="1" :max="50" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                            <TxNumberInput v-model="model.rpmLimit" :min="1" :max="1000" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                          </div>
-                        </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">默认 TPM</span>
-                          <TxNumberInput v-model="model.tpmLimit" :min="1" :max="10000000" :step="1000" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        </label>
-                        <label class="gap-2 grid">
-                          <span class="field-label">并发</span>
-                          <TxNumberInput v-model="model.concurrencyLimit" :min="1" :max="100" :step="1" :controls="false" :disabled="!isAdmin || aiConfigForm.loading" />
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 <div class="mt-5 flex flex-wrap gap-3 items-center">
                   <label class="text-sm flex gap-2 items-center">
                     <TxCheckbox v-model="aiConfigForm.enabled" variant="checkmark" :disabled="!isAdmin || aiConfigForm.loading" aria-label="启用 AI Provider" />
@@ -3022,9 +3164,9 @@ onMounted(() => {
 
             <TxTabItem name="database-provision" icon-class="i-carbon-data-base">
               <template #name>
-                数据库发放
+                <span class="admin-tab-title">数据库发放</span>
+                <small class="admin-tab-note">PostgreSQL 与 OnePanel 状态</small>
               </template>
-
               <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
                 <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
                   <span class="i-carbon-data-base" />
@@ -3107,9 +3249,9 @@ onMounted(() => {
 
             <TxTabItem name="sub2api" icon-class="i-carbon-api-1">
               <template #name>
-                Sub2API
+                <span class="admin-tab-title">Sub2API</span>
+                <small class="admin-tab-note">API Key 自动发放配置</small>
               </template>
-
               <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
                 <div class="text-lg fw-900 mb-4 flex gap-2 items-center">
                   <span class="i-carbon-api-1" />
@@ -4737,9 +4879,9 @@ onMounted(() => {
           </div>
         </TxTabItem>
 
-        <TxTabItem :name="ADMIN_TABS.dashboard" icon-class="i-carbon-dashboard">
+        <TxTabItem :name="ADMIN_TABS.dashboard" icon-class="i-carbon-data-table">
           <template #name>
-            仪表盘数据
+            业务数据管理
           </template>
 
           <div class="space-y-5">
@@ -5031,15 +5173,9 @@ onMounted(() => {
               </div>
             </div>
           </div>
-        </TxTabItem>
 
-        <TxTabItem :name="ADMIN_TABS.data" icon-class="i-carbon-data-table">
-          <template #name>
-            业务数据管理
-          </template>
-
-          <div class="space-y-5">
-            <div class="gap-4 grid lg:grid-cols-3">
+          <div class="mt-6 space-y-5">
+            <div class="gap-4 grid sm:grid-cols-2 xl:grid-cols-4">
               <div v-for="group in dataGroups" :key="group.title" class="admin-metric">
                 <div class="text-sm text-slate-500 fw-800 dark:text-slate-400">
                   {{ group.title }}
@@ -5049,6 +5185,114 @@ onMounted(() => {
                 </div>
                 <div class="text-xs text-slate-500 leading-5 mt-2 dark:text-slate-400">
                   {{ group.note }}
+                </div>
+              </div>
+            </div>
+
+            <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+              <div class="flex flex-wrap gap-3 items-start justify-between">
+                <div>
+                  <div class="text-lg fw-900 flex gap-2 items-center">
+                    <span class="i-carbon-queue" />
+                    发放队列
+                  </div>
+                  <p class="text-sm text-slate-500 leading-6 mt-1 dark:text-slate-400">
+                    汇总待分配申请和资源明细自动/人工发放状态，可打开查看每条详细情况。
+                  </p>
+                </div>
+                <span class="text-xs fw-800 px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10">
+                  {{ provisionQueuePagination.total }} / {{ provisionQueueAllRows.length }} 条
+                </span>
+              </div>
+
+              <div class="admin-filter-bar mt-5">
+                <label class="admin-filter-field admin-filter-field--wide">
+                  <span class="field-label">查询</span>
+                  <TxInput v-model="provisionQueueFilters.query" placeholder="标题 / 用户 / 供应商 / 明细" />
+                </label>
+                <label class="admin-filter-field">
+                  <span class="field-label">开始日期</span>
+                  <input v-model="provisionQueueFilters.from" type="date" class="admin-date-input">
+                </label>
+                <label class="admin-filter-field">
+                  <span class="field-label">结束日期</span>
+                  <input v-model="provisionQueueFilters.to" type="date" class="admin-date-input">
+                </label>
+                <label class="admin-filter-field">
+                  <span class="field-label">来源</span>
+                  <select v-model="provisionQueueFilters.type" class="form-select">
+                    <option v-for="option in provisionQueueTypeFilterOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+                <label class="admin-filter-field">
+                  <span class="field-label">状态</span>
+                  <select v-model="provisionQueueFilters.status" class="form-select">
+                    <option v-for="option in provisionQueueStatusFilterOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+                <TxButton size="sm" variant="secondary" @click="resetProvisionQueueFilters">
+                  重置
+                </TxButton>
+              </div>
+
+              <div class="admin-table mt-5">
+                <div class="admin-table-row admin-provision-grid admin-table-head">
+                  <span>队列项</span>
+                  <span>用户</span>
+                  <span>来源</span>
+                  <span>状态</span>
+                  <span>供应商</span>
+                  <span>更新时间</span>
+                  <span>操作</span>
+                </div>
+                <div v-if="!provisionQueueRows.length" class="admin-empty">
+                  暂无发放队列数据
+                </div>
+                <div v-for="row in provisionQueuePagination.rows" :key="row.id" class="admin-table-row admin-provision-grid">
+                  <div class="min-w-0">
+                    <div class="fw-800 truncate">
+                      {{ row.title }}
+                    </div>
+                    <div class="text-xs text-slate-500 truncate dark:text-slate-400">
+                      {{ row.application.title }} · {{ row.detail }}
+                    </div>
+                  </div>
+                  <span class="text-sm truncate">{{ row.user }}</span>
+                  <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">{{ row.typeLabel }}</span>
+                  <span class="admin-pill" :class="statusPillClass(row.status)">{{ row.statusLabel }}</span>
+                  <span class="text-sm text-slate-600 truncate dark:text-slate-300">{{ row.provider }}</span>
+                  <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(row.updatedAt) }}</span>
+                  <div class="flex justify-end">
+                    <TxButton size="sm" variant="secondary" @click="openProvisionQueueDrawer(row.id)">
+                      查看详情
+                    </TxButton>
+                  </div>
+                </div>
+              </div>
+
+              <div class="admin-pagination">
+                <div class="text-xs text-slate-500 dark:text-slate-400">
+                  第 {{ provisionQueuePagination.start }}-{{ provisionQueuePagination.end }} 条 / 共 {{ provisionQueuePagination.total }} 条
+                </div>
+                <div class="admin-pagination-controls">
+                  <select v-model="provisionQueueFilters.pageSize" class="form-select admin-page-size">
+                    <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">
+                      {{ size }} / 页
+                    </option>
+                  </select>
+                  <TxButton size="sm" variant="secondary" :disabled="provisionQueuePagination.page <= 1" @click="previousPage(provisionQueueFilters)">
+                    上一页
+                  </TxButton>
+                  <span class="text-xs text-slate-500 fw-800 dark:text-slate-400">
+                    {{ provisionQueuePagination.page }} / {{ provisionQueuePagination.totalPages }}
+                  </span>
+                  <TxButton size="sm" variant="secondary" :disabled="provisionQueuePagination.page >= provisionQueuePagination.totalPages" @click="nextPage(provisionQueueFilters, provisionQueuePagination.totalPages)">
+                    下一页
+                  </TxButton>
                 </div>
               </div>
             </div>
@@ -5535,6 +5779,165 @@ onMounted(() => {
         </TxTabItem>
       </TxTabs>
     </TxCard>
+
+    <TxDrawer
+      v-if="selectedProvisionQueueRow"
+      v-model:visible="isProvisionQueueDrawerOpen"
+      class="admin-provision-drawer-host"
+      direction="right"
+      size="min(980px, 92vw)"
+      title="发放队列详情"
+      :z-index="USER_DRAWER_Z_INDEX"
+      mask-effect="blur"
+      @close="closeProvisionQueueDrawer"
+    >
+      <template #header>
+        <div class="admin-drawer-header">
+          <div class="min-w-0">
+            <div class="text-lg fw-900 flex gap-2 items-center">
+              <span class="i-carbon-queue" />
+              {{ selectedProvisionQueueRow.title }}
+            </div>
+            <div class="text-sm text-slate-500 leading-6 mt-2 break-all dark:text-slate-400">
+              {{ selectedProvisionQueueRow.application.title }} · {{ selectedProvisionQueueRow.user }} · {{ selectedProvisionQueueRow.application.id }}
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2 items-center">
+            <span class="admin-pill text-sky-700 bg-sky-50 dark:text-sky-200 dark:bg-sky-950/30">
+              {{ selectedProvisionQueueRow.typeLabel }}
+            </span>
+            <span class="admin-pill" :class="statusPillClass(selectedProvisionQueueRow.status)">
+              {{ selectedProvisionQueueRow.statusLabel }}
+            </span>
+            <TxButton size="sm" variant="secondary" aria-label="关闭发放详情" @click="closeProvisionQueueDrawer">
+              关闭
+            </TxButton>
+          </div>
+        </div>
+      </template>
+
+      <template #default>
+        <div class="admin-user-drawer-content">
+          <section class="admin-detail-section">
+            <div class="admin-detail-title">
+              <span class="i-carbon-document" />
+              申请信息
+            </div>
+            <div class="admin-detail-list mt-4">
+              <div>
+                <span>申请标题</span>
+                <b>{{ selectedProvisionQueueRow.application.title }}</b>
+              </div>
+              <div>
+                <span>申请用户</span>
+                <b>{{ selectedProvisionQueueRow.user }}</b>
+              </div>
+              <div>
+                <span>申请类型</span>
+                <b>{{ applicationTypeLabel(selectedProvisionQueueRow.application.type) }}</b>
+              </div>
+              <div>
+                <span>申请状态</span>
+                <b>{{ applicationStatusLabel(selectedProvisionQueueRow.application.status) }}</b>
+              </div>
+              <div>
+                <span>创建时间</span>
+                <b>{{ formatDate(selectedProvisionQueueRow.application.createdAt) }}</b>
+              </div>
+              <div>
+                <span>更新时间</span>
+                <b>{{ formatDate(selectedProvisionQueueRow.updatedAt) }}</b>
+              </div>
+              <div>
+                <span>供应商/方式</span>
+                <b>{{ selectedProvisionQueueRow.provider }}</b>
+              </div>
+              <div>
+                <span>申请 ID</span>
+                <b>{{ selectedProvisionQueueRow.application.id }}</b>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="selectedProvisionQueueRow.resourceItem" class="admin-detail-section">
+            <div class="admin-detail-title">
+              <span class="i-carbon-catalog" />
+              资源明细
+            </div>
+            <div class="admin-detail-list mt-4">
+              <div>
+                <span>资源 ID</span>
+                <b>{{ selectedProvisionQueueRow.resourceItem.id }}</b>
+              </div>
+              <div>
+                <span>审批状态</span>
+                <b>{{ selectedProvisionQueueRow.resourceItem.approvalStatus }}</b>
+              </div>
+              <div>
+                <span>发放状态</span>
+                <b>{{ resourceProvisionStatusText(selectedProvisionQueueRow.resourceItem.provisionStatus) }}</b>
+              </div>
+              <div v-if="selectedProvisionQueueRow.resourceItem.provisionCompletedAt">
+                <span>发放完成</span>
+                <b>{{ formatDate(selectedProvisionQueueRow.resourceItem.provisionCompletedAt) }}</b>
+              </div>
+            </div>
+            <div v-if="selectedProvisionResourceFields.length" class="mt-4 gap-3 grid md:grid-cols-2">
+              <div v-for="field in selectedProvisionResourceFields" :key="field.label" class="application-detail-stat">
+                <span>{{ field.label }}</span>
+                <b>{{ field.value }}</b>
+              </div>
+            </div>
+            <div v-if="selectedProvisionApprovedFields.length" class="mt-4">
+              <div class="text-sm fw-900 mb-2">
+                审批后参数
+              </div>
+              <div class="gap-3 grid md:grid-cols-2">
+                <div v-for="field in selectedProvisionApprovedFields" :key="`approved-${field.label}`" class="application-detail-stat">
+                  <span>{{ field.label }}</span>
+                  <b>{{ field.value }}</b>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="admin-detail-section">
+            <div class="admin-detail-title">
+              <span class="i-carbon-result" />
+              发放情况
+            </div>
+            <div class="admin-detail-list mt-4">
+              <div>
+                <span>队列来源</span>
+                <b>{{ selectedProvisionQueueRow.kind === 'resource' ? '资源明细' : '普通申请' }}</b>
+              </div>
+              <div>
+                <span>当前状态</span>
+                <b>{{ selectedProvisionQueueRow.statusLabel }}</b>
+              </div>
+              <div>
+                <span>说明</span>
+                <b>{{ selectedProvisionQueueRow.detail }}</b>
+              </div>
+              <div v-if="selectedProvisionQueueRow.application.allocationNote">
+                <span>分配备注</span>
+                <b>{{ selectedProvisionQueueRow.application.allocationNote }}</b>
+              </div>
+            </div>
+            <pre v-if="selectedProvisionQueueRow.application.allocationPayload" class="admin-json-preview mt-4">{{ JSON.stringify(selectedProvisionQueueRow.application.allocationPayload, null, 2) }}</pre>
+            <pre v-if="selectedProvisionQueueRow.resourceItem?.provisionPayload" class="admin-json-preview mt-4">{{ JSON.stringify(selectedProvisionQueueRow.resourceItem.provisionPayload, null, 2) }}</pre>
+          </section>
+
+          <section class="admin-detail-section">
+            <div class="admin-detail-title">
+              <span class="i-carbon-text-long-paragraph" />
+              申请/答复内容
+            </div>
+            <RichTextView :content="selectedProvisionQueueRow.application.answer || selectedProvisionQueueRow.application.description || '暂无内容。'" class="rich-text-preview mt-4" />
+          </section>
+        </div>
+      </template>
+    </TxDrawer>
 
     <div v-if="isVapidRegenerateDialogOpen" class="admin-confirm-backdrop" @click.self="closeVapidRegenerateDialog">
       <div class="admin-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-vapid-regenerate-title">

@@ -23,8 +23,8 @@ const navItems: readonly NavItem[] = [
 ] as const
 
 const visibleNavItems = computed(() => navItems.filter(item => !item.roleRequired || currentUser.value?.role === 'reviewer' || isAdmin.value))
-const primaryAdminTabItems = computed(() => adminTabItems.filter(tab => ['dashboard', 'data', 'users', 'audit'].includes(tab.key)))
-const configAdminTabItems = computed(() => adminTabItems.filter(tab => !['dashboard', 'data', 'users', 'audit'].includes(tab.key)))
+const primaryAdminTabItems = computed(() => adminTabItems.filter(tab => ['dashboard', 'users', 'audit'].includes(tab.key)))
+const configAdminTabItems = computed(() => adminTabItems.filter(tab => !['dashboard', 'users', 'audit'].includes(tab.key)))
 
 function go(item: typeof visibleNavItems.value[number]) {
   selectedSection.value = item.key

@@ -32,8 +32,98 @@
   padding: 0 !important;
 }
 
+.admin-config-tabs--side.tx-tabs {
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.admin-config-tabs--side > .tx-tabs__nav {
+  flex: 0 0 260px;
+  border-right: 0;
+}
+
+.admin-config-tabs--side > .tx-tabs__nav .tx-tabs__nav-bar {
+  overflow: visible;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.admin-config-tabs--side > .tx-tabs__nav .tx-tabs__nav-inner {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 0.55rem;
+  padding: 0;
+  overflow: visible;
+}
+
+.admin-config-tabs--side .tx-tab-item {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  white-space: normal;
+}
+
+.admin-config-tabs--side .tx-tab-item.is-active {
+  border-color: rgba(16, 185, 129, 0.28);
+  color: #047857;
+  background: rgba(236, 253, 245, 0.82);
+}
+
+.admin-config-tabs--side .tx-tabs__pointer {
+  display: none;
+}
+
+.admin-config-tabs--side .tx-tabs__main {
+  min-width: 0;
+  padding: 0 !important;
+}
+
+.admin-tab-title,
+.admin-tab-note {
+  display: block;
+}
+
+.admin-tab-title {
+  font-weight: 900;
+}
+
+.admin-tab-note {
+  margin-top: 0.12rem;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 .dark .admin-config-tabs .tx-tabs__nav-bar {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.dark .admin-config-tabs--side > .tx-tabs__nav .tx-tabs__nav-bar {
+  background: transparent;
+}
+
+.dark .admin-config-tabs--side .tx-tab-item {
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.dark .admin-config-tabs--side .tx-tab-item.is-active {
+  border-color: rgba(52, 211, 153, 0.28);
+  color: #bbf7d0;
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.dark .admin-config-tabs--side .admin-tab-note {
+  color: #94a3b8;
 }
 
 .notification-config-workbench {
@@ -583,6 +673,7 @@
 
 .admin-user-drawer-host .tx-drawer__panel,
 .admin-verification-drawer-host .tx-drawer__panel,
+.admin-provision-drawer-host .tx-drawer__panel,
 .notification-drawer-host .tx-drawer__panel {
   border-left: 1px solid rgba(15, 23, 42, 0.08);
   background: #f8fafc;
@@ -590,12 +681,14 @@
 
 .admin-user-drawer-host .tx-drawer__header,
 .admin-verification-drawer-host .tx-drawer__header,
+.admin-provision-drawer-host .tx-drawer__header,
 .notification-drawer-host .tx-drawer__header {
   padding: 1.1rem 1.25rem;
 }
 
 .admin-user-drawer-host .tx-drawer__body,
 .admin-verification-drawer-host .tx-drawer__body,
+.admin-provision-drawer-host .tx-drawer__body,
 .notification-drawer-host .tx-drawer__body {
   padding: 1.25rem;
 }
@@ -670,6 +763,10 @@
 .admin-app-grid,
 .admin-student-grid {
   grid-template-columns: minmax(200px, 1.5fr) minmax(120px, 0.8fr) minmax(104px, 0.7fr) 96px 92px 96px;
+}
+
+.admin-provision-grid {
+  grid-template-columns: minmax(220px, 1.35fr) minmax(120px, 0.7fr) 96px 96px minmax(128px, 0.8fr) 112px 96px;
 }
 
 .admin-dashboard-activity-grid {
@@ -762,6 +859,20 @@
   font-weight: 900;
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.admin-json-preview {
+  max-height: 260px;
+  overflow: auto;
+  padding: 0.85rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  color: #334155;
+  background: rgba(15, 23, 42, 0.04);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .admin-action-check {
@@ -922,6 +1033,7 @@
 
 .dark .admin-user-drawer-host .tx-drawer__panel,
 .dark .admin-verification-drawer-host .tx-drawer__panel,
+.dark .admin-provision-drawer-host .tx-drawer__panel,
 .dark .notification-drawer-host .tx-drawer__panel {
   border-left-color: rgba(255, 255, 255, 0.1);
   background: #0f172a;
@@ -958,6 +1070,12 @@
 .dark .admin-detail-list b,
 .dark .admin-consumption-bar b {
   color: #f8fafc;
+}
+
+.dark .admin-json-preview {
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .dark .admin-action-check,
@@ -1017,6 +1135,16 @@
   .notification-template-editor-split,
   .notification-template-test-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-config-tabs--side.tx-tabs {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .admin-config-tabs--side > .tx-tabs__nav {
+    width: 100%;
+    flex-basis: auto;
   }
 
   .admin-table {

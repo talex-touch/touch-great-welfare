@@ -786,7 +786,7 @@ export const ADMIN_TABS = {
   notifications: '通知配置',
   ldc: '充值配置',
   users: '用户管理',
-  dashboard: '仪表盘数据',
+  dashboard: '业务数据管理',
   data: '业务数据管理',
   audit: '审计日志',
 } as const
@@ -795,8 +795,7 @@ export type AdminTabKey = keyof typeof ADMIN_TABS
 export type AdminTabName = (typeof ADMIN_TABS)[AdminTabKey]
 
 export const adminTabItems = [
-  { key: 'dashboard', name: ADMIN_TABS.dashboard, icon: 'i-carbon-dashboard' },
-  { key: 'data', name: ADMIN_TABS.data, icon: 'i-carbon-data-table' },
+  { key: 'dashboard', name: ADMIN_TABS.dashboard, icon: 'i-carbon-data-table' },
   { key: 'users', name: ADMIN_TABS.users, icon: 'i-carbon-user-multiple' },
   { key: 'audit', name: ADMIN_TABS.audit, icon: 'i-carbon-cloud-auditing' },
   { key: 'policy', name: ADMIN_TABS.policy, icon: 'i-carbon-rule' },
@@ -809,6 +808,8 @@ export const adminTabItems = [
 ] as const
 
 export function adminTabNameFromKey(tabKey?: string): AdminTabName | undefined {
+  if (tabKey === 'data')
+    return ADMIN_TABS.dashboard
   return adminTabItems.find(item => item.key === tabKey)?.name
 }
 
