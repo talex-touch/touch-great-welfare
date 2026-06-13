@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { AiApplicationReview, LlmApiModelPricing, ResourceType, WelfareApplication, WelfareState } from '~/composables/welfare'
+import type { AiApplicationReview, LlmApiModelPricing, ResourceProvisionLogLevel, ResourceType, WelfareApplication, WelfareState } from '~/composables/welfare'
 import { calculateActivityPrice, DEFAULT_LLM_API_MODELS, normalizeLlmApiModelPricings, REQUEST_COST } from '~/composables/welfare'
 import {
   assertAdminRequest,
@@ -1041,6 +1041,102 @@ function sub2ApiPayloadFromResourceItem(item: NonNullable<WelfareApplication['re
   }
 }
 
+type ResourceProvisionItem = NonNullable<WelfareApplication['resourceItems']>[number]
+
+function safeProvisionMetadata(metadata?: Record<string, any>) {
+  if (!metadata)
+    return undefined
+
+  const entries = Object.entries(metadata)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+  return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+function appendResourceProvisionLog(
+  item: ResourceProvisionItem,
+  log: {
+    level: ResourceProvisionLogLevel
+    stage: string
+    message: string
+    actorUserId?: string
+    provider?: string
+    metadata?: Record<string, any>
+  },
+  at = now(),
+) {
+  item.provisionLogs ??= []
+  item.provisionLogs.push({
+    id: createId('rpl'),
+    at,
+    level: log.level,
+    stage: log.stage,
+    message: log.message,
+    actorUserId: log.actorUserId,
+    provider: log.provider,
+    metadata: safeProvisionMetadata(log.metadata),
+  })
+  if (item.provisionLogs.length > 80)
+    item.provisionLogs = item.provisionLogs.slice(-80)
+  item.updatedAt = at
+}
+
+function resourceProvisionLogTargets(application: WelfareApplication, itemId?: string) {
+  if (application.type !== 'resource')
+    return []
+  return (application.resourceItems ?? []).filter(item =>
+    !!normalizedAutoProvisionResourceType(item)
+    && ['approved', 'adjusted_approved'].includes(item.approvalStatus)
+    && item.provisionStatus !== 'completed'
+    && (!itemId || item.id === itemId),
+  )
+}
+
+async function appendResourceProvisionLogToLatestState(
+  env: WorkerEnv,
+  payload: ResourceProvisionJobPayload,
+  log: Parameters<typeof appendResourceProvisionLog>[1],
+  options: { markPending?: boolean } = {},
+) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const record = await readWelfareStateRecord(env)
+    const state = record.state as Partial<WelfareState>
+    assertWelfareState(state)
+    const application = state.applications.find(item => item.id === payload.applicationId)
+    if (!application || application.type !== 'resource')
+      return
+
+    const targets = resourceProvisionLogTargets(application, payload.itemId?.trim())
+    if (!targets.length)
+      return
+
+    const loggedAt = now()
+    for (const item of targets) {
+      if (options.markPending && item.provisionStatus !== 'completed')
+        item.provisionStatus = 'pending'
+      appendResourceProvisionLog(item, log, loggedAt)
+    }
+    try {
+      await writeWelfareState(env, state, { expectedVersion: record.version })
+      return
+    }
+    catch (error) {
+      if (!isStateVersionConflict(error) || attempt === 2)
+        throw error
+    }
+  }
+}
+
+async function recordResourceProvisionLog(
+  env: WorkerEnv,
+  payload: ResourceProvisionJobPayload,
+  log: Parameters<typeof appendResourceProvisionLog>[1],
+  options?: { markPending?: boolean },
+) {
+  await appendResourceProvisionLogToLatestState(env, payload, log, options).catch((error) => {
+    console.error('resource provision log failed', error)
+  })
+}
+
 async function provisionCodeApplication(
   env: WorkerEnv,
   state: WelfareState,
@@ -1099,28 +1195,67 @@ async function provisionResourceApplication(
   const results: ResourceProvisionResultItem[] = []
   const failures: ResourceProvisionFailure[] = []
   for (const item of items) {
+    const itemJob = { applicationId: application.id, adminUserId, itemId: item.id }
+    await recordResourceProvisionLog(env, itemJob, {
+      level: 'info',
+      stage: 'worker_started',
+      message: '后台 Worker 已开始处理该资源明细。',
+      actorUserId: adminUserId,
+      metadata: {
+        resourceType: item.resourceType,
+        resourceSubtype: item.resourceSubtype,
+      },
+    }, { markPending: true })
+
     try {
       const autoProvisionType = normalizedAutoProvisionResourceType(item)
       if (autoProvisionType === 'llm_api_quota') {
-        const key = await createSub2ApiKeyForResourceItem(env, user, sub2ApiPayloadFromResourceItem(item), {
+        const requestPayload = sub2ApiPayloadFromResourceItem(item)
+        await recordResourceProvisionLog(env, itemJob, {
+          level: 'info',
+          stage: 'sub2api_request',
+          message: '正在调用 Sub2API 创建或复用 API Key。',
+          actorUserId: adminUserId,
+          provider: 'sub2api',
+          metadata: {
+            name: requestPayload.name,
+            quotaUsd: requestPayload.quotaUsd,
+            expiresInDays: requestPayload.expiresInDays,
+            groupId: requestPayload.groupId,
+            maxActiveIps: requestPayload.maxActiveIps,
+            maxConcurrency: requestPayload.maxConcurrency,
+          },
+        }, { markPending: true })
+        const key = await createSub2ApiKeyForResourceItem(env, user, requestPayload, {
           applicationId: application.id,
           itemId: item.id,
         })
         const result = { itemId: item.id, provider: 'sub2api' as const, key }
-        applyResourceProvisionResult(item, result)
+        applyResourceProvisionResult(item, result, adminUserId)
         results.push(result)
         continue
       }
 
+      await recordResourceProvisionLog(env, itemJob, {
+        level: 'info',
+        stage: 'database_request',
+        message: '正在调用数据库自动发放服务创建或复用账号。',
+        actorUserId: adminUserId,
+        provider: 'database',
+        metadata: {
+          resourceType: item.resourceType,
+          resourceSubtype: item.resourceSubtype,
+        },
+      }, { markPending: true })
       const database = await createDatabaseForResourceItem(env, { applicationId: application.id, item, user })
       const result = { itemId: item.id, provider: 'database' as const, database }
-      applyResourceProvisionResult(item, result)
+      applyResourceProvisionResult(item, result, adminUserId)
       results.push(result)
     }
     catch (error) {
       const message = error instanceof Error ? error.message : '自动发放失败'
       const failure = { itemId: item.id, error: message }
-      applyResourceProvisionFailure(item, failure)
+      applyResourceProvisionFailure(item, failure, adminUserId)
       failures.push(failure)
     }
   }
@@ -1192,24 +1327,64 @@ function appendResourceProvisionMessage(
   appendProvisionMessage(application, adminUserId, `<p><strong>资源自动发放：</strong>已完成 ${results.length} 个资源明细${failureText}。</p><pre>${escapeHtml(details)}</pre>`)
 }
 
-function applyResourceProvisionResult(item: NonNullable<WelfareApplication['resourceItems']>[number], result: ResourceProvisionResultItem) {
+function applyResourceProvisionResult(item: ResourceProvisionItem, result: ResourceProvisionResultItem, adminUserId?: string) {
   item.provisionStatus = 'completed'
   item.provisionCompletedAt = now()
   item.updatedAt = item.provisionCompletedAt
 
   if (result.provider === 'sub2api') {
     item.provisionNote = `Sub2API 自动发放：${result.key.keyMasked}，额度 $${result.key.quotaUsd}，有效期 ${result.key.expiresAt || '按默认配置'}。明文 Key 已在本次发放响应中返回。`
+    appendResourceProvisionLog(item, {
+      level: 'success',
+      stage: result.key.reused ? 'sub2api_reused' : 'sub2api_completed',
+      message: result.key.reused ? 'Sub2API 已复用该资源明细的活跃绑定。' : 'Sub2API API Key 已创建并绑定到该资源明细。',
+      actorUserId: adminUserId,
+      provider: 'sub2api',
+      metadata: {
+        bindingId: result.key.id,
+        keyMasked: result.key.keyMasked,
+        quotaUsd: result.key.quotaUsd,
+        expiresAt: result.key.expiresAt,
+        sub2apiUserId: result.key.sub2apiUserId,
+        sub2apiKeyId: result.key.sub2apiKeyId,
+        reused: result.key.reused,
+      },
+    }, item.provisionCompletedAt)
     return
   }
 
   const secretNotice = result.database.password ? '明文密码仅在本次发放响应中返回。' : '已复用现有活跃绑定，明文密码不再返回。'
   item.provisionNote = `数据库自动发放：${result.database.databaseName} / ${result.database.username} / ${result.database.connectionUrlMasked}，权限 ${result.database.permission}，有效期 ${result.database.expiresAt || '按默认配置'}。${secretNotice}`
+  appendResourceProvisionLog(item, {
+    level: 'success',
+    stage: result.database.reused ? 'database_reused' : 'database_completed',
+    message: result.database.reused ? '数据库已复用该资源明细的活跃绑定。' : '数据库账号/连接信息已自动发放。',
+    actorUserId: adminUserId,
+    provider: 'database',
+    metadata: {
+      bindingId: result.database.id,
+      databaseName: result.database.databaseName,
+      username: result.database.username,
+      connectionUrlMasked: result.database.connectionUrlMasked,
+      permission: result.database.permission,
+      expiresAt: result.database.expiresAt,
+      reused: result.database.reused,
+    },
+  }, item.provisionCompletedAt)
 }
 
-function applyResourceProvisionFailure(item: NonNullable<WelfareApplication['resourceItems']>[number], failure: ResourceProvisionFailure) {
+function applyResourceProvisionFailure(item: ResourceProvisionItem, failure: ResourceProvisionFailure, adminUserId?: string) {
+  const failedAt = now()
   item.provisionStatus = 'pending'
   item.provisionNote = `自动发放失败，待人工处理：${failure.error}`
-  item.updatedAt = now()
+  item.updatedAt = failedAt
+  appendResourceProvisionLog(item, {
+    level: 'error',
+    stage: 'failed',
+    message: `自动发放失败，已转入人工处理：${failure.error}`,
+    actorUserId: adminUserId,
+    provider: normalizedAutoProvisionResourceType(item) === 'llm_api_quota' ? 'sub2api' : normalizedAutoProvisionResourceType(item),
+  }, failedAt)
 }
 
 async function writeResourceProvisionState(
@@ -1240,18 +1415,40 @@ async function writeResourceProvisionState(
   for (const result of results) {
     const item = latestApplication.resourceItems?.find(candidate => candidate.id === result.itemId)
     if (item && item.provisionStatus !== 'completed')
-      applyResourceProvisionResult(item, result)
+      applyResourceProvisionResult(item, result, adminUserId)
   }
 
   for (const failure of failures) {
     const item = latestApplication.resourceItems?.find(candidate => candidate.id === failure.itemId)
     if (item && item.provisionStatus !== 'completed')
-      applyResourceProvisionFailure(item, failure)
+      applyResourceProvisionFailure(item, failure, adminUserId)
   }
 
   applyResourceApplicationProvisionStatus(latestApplication)
   appendResourceProvisionMessage(latestApplication, adminUserId, results, failures)
   await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
+}
+
+function applyProvisionPendingFailure(application: WelfareApplication, adminUserId: string, message: string, itemId?: string) {
+  if (application.type === 'resource') {
+    for (const item of application.resourceItems ?? []) {
+      if ((item.resourceType === 'llm_api_quota' || item.resourceType === 'database') && (!itemId || item.id === itemId) && item.provisionStatus !== 'completed') {
+        const failedAt = now()
+        item.provisionStatus = 'pending'
+        item.provisionNote = `自动发放失败，待人工处理：${message}`
+        item.updatedAt = failedAt
+        appendResourceProvisionLog(item, {
+          level: 'error',
+          stage: 'job_failed',
+          message: `自动发放任务异常，已转入人工处理：${message}`,
+          actorUserId: adminUserId,
+          provider: normalizedAutoProvisionResourceType(item) === 'llm_api_quota' ? 'sub2api' : normalizedAutoProvisionResourceType(item),
+        }, failedAt)
+      }
+    }
+  }
+  application.status = 'pending_allocation'
+  appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(message)}</p>`)
 }
 
 async function markProvisionPending(
@@ -1264,18 +1461,23 @@ async function markProvisionPending(
   itemId?: string,
 ) {
   const message = error instanceof Error ? error.message : '自动发放失败'
-  if (application.type === 'resource') {
-    for (const item of application.resourceItems ?? []) {
-      if ((item.resourceType === 'llm_api_quota' || item.resourceType === 'database') && (!itemId || item.id === itemId) && item.provisionStatus !== 'completed') {
-        item.provisionStatus = 'pending'
-        item.provisionNote = `自动发放失败，待人工处理：${message}`
-        item.updatedAt = now()
-      }
-    }
+  applyProvisionPendingFailure(application, adminUserId, message, itemId)
+  try {
+    await writeWelfareState(env, state, { expectedVersion })
   }
-  application.status = 'pending_allocation'
-  appendProvisionMessage(application, adminUserId, `<p><strong>自动发放待人工处理：</strong>${escapeHtml(message)}</p>`)
-  await writeWelfareState(env, state, { expectedVersion })
+  catch (writeError) {
+    if (!isStateVersionConflict(writeError))
+      throw writeError
+
+    const latestRecord = await readWelfareStateRecord(env)
+    const latestState = latestRecord.state as Partial<WelfareState>
+    assertWelfareState(latestState)
+    const latestApplication = latestState.applications.find(item => item.id === application.id)
+    if (!latestApplication)
+      throw new Error('申请不存在')
+    applyProvisionPendingFailure(latestApplication, adminUserId, message, itemId)
+    await writeWelfareState(env, latestState, { expectedVersion: latestRecord.version })
+  }
   await notifyProvisionResult(env, application, '资源自动发放失败，待人工分配')
 }
 
@@ -1297,6 +1499,18 @@ async function runResourceProvision(env: WorkerEnv, payload: ResourceProvisionJo
 
   if (application.type !== 'code' && application.type !== 'resource')
     return { status: 'skipped' as const, applicationId: application.id, reason: '该申请类型不需要自动发放' }
+
+  if (application.type === 'resource') {
+    await recordResourceProvisionLog(env, payload, {
+      level: 'info',
+      stage: 'worker_received',
+      message: '后台 Worker 已收到自动发放任务。',
+      actorUserId: payload.adminUserId,
+      metadata: {
+        itemId: payload.itemId,
+      },
+    }, { markPending: true })
+  }
 
   try {
     if (application.type === 'code')
@@ -1334,8 +1548,19 @@ async function provisionApplicationReward(request: Request, env: WorkerEnv) {
     return { status: 'skipped' as const, applicationId: application.id, reason: '该申请类型不需要自动发放' }
 
   const job = { applicationId: application.id, adminUserId: admin.id, itemId: payload.itemId?.trim() || undefined }
-  if (await enqueueResourceProvisionJob(env, job))
+  if (await enqueueResourceProvisionJob(env, job)) {
+    await recordResourceProvisionLog(env, job, {
+      level: 'info',
+      stage: 'queued',
+      message: '已进入后台自动发放队列，等待 Worker 消费。',
+      actorUserId: admin.id,
+      metadata: {
+        queue: 'ASYNC_JOBS',
+        itemId: job.itemId,
+      },
+    }, { markPending: true })
     return { status: 'pending' as const, applicationId: application.id, itemId: job.itemId }
+  }
 
   return runResourceProvision(env, job)
 }

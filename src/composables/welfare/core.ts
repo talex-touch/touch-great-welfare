@@ -38,6 +38,7 @@ export type SquarePostType = 'application_template' | 'review'
 export type ResourceType = 'database' | 'llm_api_quota' | 'content_service' | 'media_publishing' | 'data_productivity' | 'quality_review' | 'git_repository' | 'cicd' | 'vpn' | 'ip_allowlist' | 'notification_channel' | 'identity_security' | 'server' | 'gpu' | 'k8s_namespace' | 'object_storage'
 export type ResourceApprovalStatus = 'pending' | 'approved' | 'rejected' | 'adjusted_approved'
 export type ResourceProvisionStatus = 'not_required' | 'pending' | 'completed'
+export type ResourceProvisionLogLevel = 'info' | 'success' | 'warning' | 'error'
 export type ResourceLifecycleStatus = 'pending' | 'approved' | 'rejected' | 'provisioning' | 'active' | 'renewal_requested' | 'expired' | 'reclaim_pending' | 'returned' | 'released' | 'closed'
 export type ResourceLifecycleAction = 'approve' | 'reject' | 'provision' | 'activate' | 'request_renewal' | 'approve_renewal' | 'reject_renewal' | 'mark_expired' | 'queue_reclaim' | 'return' | 'release' | 'close'
 export type ResourceUrgency = 'normal' | 'urgent' | 'emergency'
@@ -156,6 +157,7 @@ export interface ApplicationItem {
   lifecycleStatus?: ResourceLifecycleStatus
   provisionPayload?: Record<string, any>
   provisionNote?: string
+  provisionLogs?: ResourceProvisionLog[]
   provisionCompletedAt?: string
   activatedAt?: string
   expiresAt?: string
@@ -166,6 +168,17 @@ export interface ApplicationItem {
   closedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+export interface ResourceProvisionLog {
+  id: string
+  at: string
+  level: ResourceProvisionLogLevel
+  stage: string
+  message: string
+  actorUserId?: string
+  provider?: string
+  metadata?: Record<string, any>
 }
 
 export interface UserProfile {

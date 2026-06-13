@@ -552,11 +552,27 @@ function llmBudgetText(application: WelfareApplication) {
 function statusPillClass(status: string) {
   if (['answered', 'approved', 'delivered', 'completed', 'closed', 'success', 'active', 'released', 'returned'].includes(status))
     return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-950/30'
-  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning', 'provisioning', 'renewal_requested', 'pending_allocation'].includes(status))
+  if (['pending_review', 'needs_supplement', 'processing', 'pending', 'reserved', 'warning', 'provisioning', 'renewal_requested', 'pending_allocation', 'info'].includes(status))
     return 'text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-950/30'
   if (['rejected', 'revoked', 'danger', 'error', 'expired', 'reclaim_pending'].includes(status))
     return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-950/30'
   return 'text-slate-700 bg-slate-100 dark:text-slate-200 dark:bg-white/10'
+}
+
+function provisionLogLevelText(level: string) {
+  if (level === 'success')
+    return '成功'
+  if (level === 'warning')
+    return '警告'
+  if (level === 'error')
+    return '错误'
+  return '信息'
+}
+
+function provisionLogMetadata(log: { metadata?: Record<string, any> }) {
+  if (!log.metadata || !Object.keys(log.metadata).length)
+    return ''
+  return JSON.stringify(log.metadata, null, 2)
 }
 
 function roleText(role: string) {
@@ -5926,6 +5942,35 @@ onMounted(() => {
             </div>
             <pre v-if="selectedProvisionQueueRow.application.allocationPayload" class="admin-json-preview mt-4">{{ JSON.stringify(selectedProvisionQueueRow.application.allocationPayload, null, 2) }}</pre>
             <pre v-if="selectedProvisionQueueRow.resourceItem?.provisionPayload" class="admin-json-preview mt-4">{{ JSON.stringify(selectedProvisionQueueRow.resourceItem.provisionPayload, null, 2) }}</pre>
+          </section>
+
+          <section v-if="selectedProvisionQueueRow.resourceItem" class="admin-detail-section">
+            <div class="admin-detail-title">
+              <span class="i-carbon-list-boxes" />
+              发放日志
+            </div>
+            <div v-if="!selectedProvisionQueueRow.resourceItem.provisionLogs?.length" class="admin-empty mt-4">
+              暂无发放日志；可点击重试自动发放后查看队列执行记录。
+            </div>
+            <div v-else class="mt-4 space-y-3">
+              <div v-for="log in selectedProvisionQueueRow.resourceItem.provisionLogs" :key="log.id" class="p-4 border border-black/8 rounded-2xl bg-white dark:border-white/10 dark:bg-black/20">
+                <div class="flex flex-wrap gap-2 items-center justify-between">
+                  <div class="flex flex-wrap gap-2 min-w-0 items-center">
+                    <span class="admin-pill" :class="statusPillClass(log.level)">{{ provisionLogLevelText(log.level) }}</span>
+                    <span class="text-sm fw-900 truncate">{{ log.stage }}</span>
+                    <span v-if="log.provider" class="text-xs text-slate-500 dark:text-slate-400">{{ log.provider }}</span>
+                  </div>
+                  <span class="text-xs text-slate-500 dark:text-slate-400">{{ formatDate(log.at) }}</span>
+                </div>
+                <div class="text-sm text-slate-700 leading-6 mt-2 break-words dark:text-slate-200">
+                  {{ log.message }}
+                </div>
+                <div v-if="log.actorUserId" class="text-xs text-slate-500 mt-2 dark:text-slate-400">
+                  操作人：{{ userDisplayName(log.actorUserId) }} · {{ log.actorUserId }}
+                </div>
+                <pre v-if="provisionLogMetadata(log)" class="admin-json-preview mt-3">{{ provisionLogMetadata(log) }}</pre>
+              </div>
+            </div>
           </section>
 
           <section class="admin-detail-section">
