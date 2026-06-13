@@ -27,8 +27,9 @@ const { notify } = useWelfareFeedback()
 const studentVerifications = computed(() => currentStudentVerifications.value.filter(item => (item.verificationType ?? 'student') === 'student'))
 const latestStudentVerification = computed(() => studentVerifications.value[0])
 const activeStudentVerification = computed(() => studentVerifications.value.find(item => ['pending', 'needs_supplement', 'approved'].includes(item.status)))
+const approvedStudentVerification = computed(() => studentVerifications.value.find(item => item.status === 'approved'))
 const supplementVerification = computed(() => studentVerifications.value.find(item => item.status === 'needs_supplement'))
-const canCreateStudentVerification = computed(() => !!currentUser.value && !activeStudentVerification.value && !currentUser.value.profile.studentVerified)
+const canCreateStudentVerification = computed(() => !!currentUser.value && !activeStudentVerification.value && !approvedStudentVerification.value)
 const createStudentVerificationText = computed(() => latestStudentVerification.value && ['rejected', 'revoked'].includes(latestStudentVerification.value.status) ? '重新认证' : '选择认证')
 const headerStatusText = computed(() => {
   const verification = activeStudentVerification.value ?? latestStudentVerification.value
@@ -36,7 +37,7 @@ const headerStatusText = computed(() => {
     return '处理中'
   if (verification?.status === 'needs_supplement')
     return '待补充资料'
-  if (verification?.status === 'approved' || currentUser.value?.profile.studentVerified)
+  if (verification?.status === 'approved' || approvedStudentVerification.value)
     return '学生已认证'
   if (verification?.status === 'rejected' || verification?.status === 'revoked')
     return '认证失败'
@@ -46,7 +47,7 @@ const headerStatusTone = computed(() => {
   const verification = activeStudentVerification.value ?? latestStudentVerification.value
   if (verification?.status === 'pending' || verification?.status === 'needs_supplement')
     return 'warning'
-  if (verification?.status === 'approved' || currentUser.value?.profile.studentVerified)
+  if (verification?.status === 'approved' || approvedStudentVerification.value)
     return 'success'
   if (verification?.status === 'rejected' || verification?.status === 'revoked')
     return 'danger'

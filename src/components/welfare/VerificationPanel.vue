@@ -47,7 +47,7 @@ const pendingFilters = reactive({
   page: 1,
   pageSize: 10,
 })
-const studentApproved = computed(() => !!currentUser.value?.profile.studentVerified)
+const studentApproved = computed(() => currentStudentVerifications.value.some(item => (item.verificationType ?? 'student') === 'student' && item.status === 'approved'))
 const frontlineApproved = computed(() => currentStudentVerifications.value.some(item => item.verificationType === 'frontline' && item.status === 'approved'))
 const openSourceConfigured = computed(() => !!currentUser.value?.profile.githubAuthorized && !!profileForm.githubUsername && !!profileForm.selectedRepo)
 const sortedStudentVerifications = computed(() => [...state.studentVerifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)))

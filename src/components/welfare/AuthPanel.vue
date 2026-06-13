@@ -24,6 +24,7 @@ const redirectPath = computed(() => {
 const {
   hasAdmin,
   currentUser,
+  currentStudentVerifications,
   currentUserPointBalanceText,
   isAdmin,
   publicOAuthProviders,
@@ -48,6 +49,7 @@ const linuxDoProvider = computed(() => publicOAuthProviders.value.find(provider 
 const otherOAuthProviders = computed(() => publicOAuthProviders.value.filter(provider => provider.id !== 'linux-do'))
 const loginClosedReason = computed(() => !systemConfig.value.siteEnabled ? systemConfig.value.siteClosedReason : systemConfig.value.loginClosedReason)
 const registrationClosedReason = computed(() => systemConfig.value.registrationClosedReason)
+const hasApprovedStudentVerification = computed(() => currentStudentVerifications.value.some(item => (item.verificationType ?? 'student') === 'student' && item.status === 'approved'))
 
 function onCreateAdmin() {
   runSafely(async () => {
@@ -190,7 +192,7 @@ onMounted(() => {
               {{ currentUser.profile.displayName }}
             </div>
             <TxTag v-if="currentUser.role === 'admin'" label="Admin" color="#0f172a" background="rgba(52,211,153,.22)" />
-            <TxTag v-if="currentUser.profile.studentVerified" label="学生认证" color="#047857" background="rgba(16,185,129,.14)" />
+            <TxTag v-if="hasApprovedStudentVerification" label="学生认证" color="#047857" background="rgba(16,185,129,.14)" />
           </div>
           <div class="text-sm text-slate-500 mt-1 truncate dark:text-slate-400">
             {{ currentUser.profile.email }}

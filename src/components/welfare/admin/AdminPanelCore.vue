@@ -863,6 +863,7 @@ const allUserRows = computed(() => [...state.users]
       level,
       applications: applications.length,
       studentVerifications: studentVerifications.length,
+      hasApprovedStudentVerification: studentVerifications.some(item => normalizeVerificationType(item.verificationType) === 'student' && item.status === 'approved'),
       transactions: transactions.length,
       pipelineSpend: Math.abs(sumTransactions(pipelineSpend)),
       totalSpend: Math.abs(sumTransactions(spendTransactions)),
@@ -874,9 +875,9 @@ const allUserRows = computed(() => [...state.users]
 const userRows = computed(() => allUserRows.value.filter((row) => {
   const roleMatched = userFilters.role === ALL_FILTER || row.user.role === userFilters.role
   const verificationMatched = userFilters.verification === ALL_FILTER
-    || (userFilters.verification === 'student' && row.user.profile.studentVerified)
+    || (userFilters.verification === 'student' && row.hasApprovedStudentVerification)
     || (userFilters.verification === 'github' && row.user.profile.githubAuthorized)
-    || (userFilters.verification === 'none' && !row.user.profile.studentVerified && !row.user.profile.githubAuthorized)
+    || (userFilters.verification === 'none' && !row.hasApprovedStudentVerification && !row.user.profile.githubAuthorized)
 
   return roleMatched
     && verificationMatched
@@ -1010,6 +1011,7 @@ const selectedUserRecentCoupons = computed<UserCoupon[]>(() => selectedUserDetai
 const selectedUserApprovedStudentVerification = computed<StudentVerification | undefined>(() => selectedUserDetail.value?.studentVerifications
   .filter(item => normalizeVerificationType(item.verificationType) === 'student' && item.status === 'approved')
   .sort((a, b) => (b.reviewedAt || b.createdAt).localeCompare(a.reviewedAt || a.createdAt))[0])
+const selectedUserStudentVerified = computed(() => !!selectedUserApprovedStudentVerification.value)
 
 const selectedUserConsumptionRows = computed(() => selectedUserDetail.value?.spendTransactions.slice(0, USER_DETAIL_LIMIT).map(item => ({
   transaction: item,
@@ -1037,7 +1039,7 @@ const selectedUserStatCards = computed(() => {
     {
       label: '认证记录',
       value: `${detail.stats.approvedStudents}/${detail.stats.studentCount}`,
-      note: `学生${detail.user.profile.studentVerified ? '已认证' : '未认证'} / GitHub ${detail.user.profile.githubAuthorized ? '已授权' : '未授权'}`,
+      note: `学生${selectedUserStudentVerified.value ? '已认证' : '未认证'} / GitHub ${detail.user.profile.githubAuthorized ? '已授权' : '未授权'}`,
       icon: 'i-carbon-user-certification',
     },
     {
@@ -4039,7 +4041,7 @@ onMounted(() => {
                     </div>
                   </div>
                   <div class="text-xs text-slate-600 leading-5 dark:text-slate-300">
-                    <div>{{ row.user.profile.studentVerified ? '学生已认证' : '学生未认证' }}</div>
+                    <div>{{ row.hasApprovedStudentVerification ? '学生已认证' : '学生未认证' }}</div>
                     <div>{{ row.user.profile.githubAuthorized ? 'GitHub 已授权' : 'GitHub 未授权' }}</div>
                   </div>
                   <div class="text-xs text-slate-600 leading-5 dark:text-slate-300">
@@ -4265,7 +4267,7 @@ onMounted(() => {
                           <div class="admin-detail-list mt-4">
                             <div>
                               <span>当前状态</span>
-                              <b>{{ selectedUserDetail.user.profile.studentVerified ? '学生已认证' : '学生未认证' }}</b>
+                              <b>{{ selectedUserStudentVerified ? '学生已认证' : '学生未认证' }}</b>
                             </div>
                             <div>
                               <span>已通过记录</span>
@@ -4281,7 +4283,7 @@ onMounted(() => {
                             </div>
                           </div>
 
-                          <div v-if="selectedUserDetail.user.profile.studentVerified && selectedUserApprovedStudentVerification" class="mt-4 gap-3 grid">
+                          <div v-if="selectedUserStudentVerified && selectedUserApprovedStudentVerification" class="mt-4 gap-3 grid">
                             <div class="field-label">
                               撤销原因
                             </div>
@@ -4304,7 +4306,7 @@ onMounted(() => {
                               <TxButton
                                 size="sm"
                                 variant="secondary"
-                                :disabled="!isAdmin || selectedUserDetail.user.profile.studentVerified"
+                                :disabled="!isAdmin || selectedUserStudentVerified"
                                 @click="openUserStudentVerificationCreate(selectedUserDetail.user.id)"
                               >
                                 {{ isUserStudentVerificationCreateOpen ? '正在新添加认证' : '新添加认证' }}

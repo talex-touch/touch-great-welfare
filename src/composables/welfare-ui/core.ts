@@ -1323,14 +1323,14 @@ export function useWelfareUiState() {
     resourceApplicationForm.costCenter = ''
     resourceApplicationForm.ownerId = welfare.currentUser.value?.id ?? ''
     resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
-    resourceApplicationForm.selectedResourceTypes = ['database']
+    resourceApplicationForm.selectedResourceTypes = ['llm_api_quota']
     resourceApplicationForm.acceptedTermIds = []
     resourceApplicationForm.waiveRejectionReviewFee = false
     resourceApplicationForm.selectedCouponId = ''
     resourceApplicationForm.shareToSquare = false
     resourceApplicationForm.squarePostContent = ''
     resourceApplicationItems.value = []
-    addResourceApplicationItem('database')
+    addResourceApplicationItem('llm_api_quota', { resourceSubtype: 'codex' })
   }
 
   function fillResourceApplicationFormFromDraft(application: WelfareApplication) {
@@ -1347,7 +1347,7 @@ export function useWelfareUiState() {
     resourceApplicationForm.costCenter = application.costCenter ?? ''
     resourceApplicationForm.ownerId = application.ownerId ?? welfare.currentUser.value?.id ?? ''
     resourceApplicationForm.duration = RESOURCE_DEFAULT_DURATION
-    resourceApplicationForm.selectedResourceTypes = [...(application.selectedResourceTypes?.length ? application.selectedResourceTypes : ['database' as ResourceType])]
+    resourceApplicationForm.selectedResourceTypes = [...(application.selectedResourceTypes?.length ? application.selectedResourceTypes : ['llm_api_quota' as ResourceType])]
     resourceApplicationForm.acceptedTermIds = application.termsAcceptances?.map(item => item.termId) ?? []
     resourceApplicationForm.waiveRejectionReviewFee = !!application.rejectionReviewFeeWaived
     resourceApplicationForm.selectedCouponId = ''

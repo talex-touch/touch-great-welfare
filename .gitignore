@@ -15,4 +15,5 @@ dist-ssr
 node_modules
 .idea/
 .spec-workflow/
+.serena/
 *.log

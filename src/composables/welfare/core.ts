@@ -2208,6 +2208,17 @@ function normalizeState(input: Partial<WelfareState>): WelfareState {
     attachments: toAttachmentMeta(verification.attachments),
   }))
 
+  const approvedStudentUserIds = new Set(normalized.studentVerifications
+    .filter(verification => verification.verificationType === 'student' && verification.status === 'approved')
+    .map(verification => verification.userId))
+  normalized.users = normalized.users.map(user => ({
+    ...user,
+    profile: {
+      ...user.profile,
+      studentVerified: approvedStudentUserIds.has(user.id),
+    },
+  }))
+
   normalized.educationEmailChallenges = normalized.educationEmailChallenges
     .filter(item => item && typeof item === 'object')
     .map(item => ({

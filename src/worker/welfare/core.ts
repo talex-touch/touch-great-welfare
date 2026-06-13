@@ -1343,7 +1343,7 @@ export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfar
   }
 
   const retentionStartedAt = Date.now()
-  const retainedState = applyWelfareRetentionPolicy(state).state
+  const retainedState = syncStudentVerifiedProfiles(applyWelfareRetentionPolicy(state).state)
   logWelfarePerf('apply retention policy', retentionStartedAt)
   logWelfarePerf('readWelfareStateRecord total', totalStartedAt, `sync=${options.syncPointBalances || false}`)
   return {
@@ -1358,7 +1358,7 @@ export async function readWelfareState(env: WorkerEnv, options: ReadWelfareState
     const { readWelfareStateFromTables } = await import('./hybrid-read')
     const state = await readWelfareStateFromTables(env) as unknown as Partial<WelfareState>
     state.applicationPolicy = normalizeApplicationPolicy(state.applicationPolicy)
-    return state
+    return syncStudentVerifiedProfiles(state)
   }
 
   return (await readWelfareStateRecord(env, options)).state
@@ -1974,6 +1974,18 @@ function appendWorkerStudentSupplementNotes(existingNotes: string, supplementNot
 
 function stateUsers(state: Partial<WelfareState>) {
   return Array.isArray(state.users) ? state.users : []
+}
+
+function syncStudentVerifiedProfiles(state: Partial<WelfareState>) {
+  const approvedStudentUserIds = new Set((Array.isArray(state.studentVerifications) ? state.studentVerifications : [])
+    .filter(verification => normalizeVerificationType(verification.verificationType) === 'student' && verification.status === 'approved')
+    .map(verification => verification.userId))
+
+  for (const user of stateUsers(state)) {
+    user.profile.studentVerified = approvedStudentUserIds.has(user.id)
+  }
+
+  return state
 }
 
 function stateApplications(state: Partial<WelfareState>) {
@@ -3421,7 +3433,7 @@ function canClaimDeliveryApplication(application: WelfareApplication, user: User
 }
 
 async function commitActionState(env: WorkerEnv, previousState: Partial<WelfareState>, nextState: Partial<WelfareState>, expectedVersion?: number) {
-  const retained = applyWelfareRetentionPolicy(nextState).state
+  const retained = syncStudentVerifiedProfiles(applyWelfareRetentionPolicy(nextState).state)
   if (isRecord(retained))
     delete retained.currentUserId
   const version = await writeWelfareState(env, retained, { ...(expectedVersion === undefined ? {} : { expectedVersion }), previousState })
@@ -3436,7 +3448,7 @@ export async function commitActionStateWithPointTransactions(
   expectedVersion: number,
   pointTransactions: AtomicPointTransaction[],
 ) {
-  const retained = applyWelfareRetentionPolicy(nextState).state
+  const retained = syncStudentVerifiedProfiles(applyWelfareRetentionPolicy(nextState).state)
   if (isRecord(retained))
     delete retained.currentUserId
   const version = await writeWelfareStateWithAtomicPointTransactions(env, retained, pointTransactions, { expectedVersion, previousState })

@@ -201,8 +201,8 @@ function handleComplete() {
 
 <template>
   <section class="space-y-6" :class="{ 'application-detail-panel--drawer': drawer }">
-    <TxCard class="solid-panel" background="pure" shadow="soft" :padding="24" :radius="28">
-      <div class="flex flex-wrap gap-4 items-start justify-between">
+    <TxCard class="solid-panel application-detail-shell" background="pure" shadow="soft" :padding="drawer ? 0 : 24" :radius="drawer ? 0 : 28">
+      <div v-if="!drawer" class="flex flex-wrap gap-4 items-start justify-between">
         <div>
           <h2 class="text-3xl fw-900 tracking-tight">
             申请详情
@@ -212,7 +212,7 @@ function handleComplete() {
           </p>
         </div>
         <TxButton variant="ghost" @click="backToList">
-          {{ drawer ? '关闭' : '返回列表' }}
+          返回列表
         </TxButton>
       </div>
 
@@ -220,9 +220,9 @@ function handleComplete() {
         申请不存在，或你没有权限查看该申请。
       </div>
 
-      <div v-else class="mt-6 space-y-6">
+      <div v-else class="application-detail-content" :class="drawer ? 'mt-0 space-y-4' : 'mt-6 space-y-6'">
         <!-- Application header -->
-        <div class="p-5 border border-black/8 rounded-3xl bg-slate-50 dark:border-white/10 dark:bg-white/5">
+        <div class="application-detail-block application-detail-block--hero">
           <div class="flex flex-wrap gap-4 items-start justify-between">
             <div class="min-w-0">
               <div class="flex gap-2 items-center">
@@ -292,7 +292,7 @@ function handleComplete() {
         </div>
 
         <!-- LLMApi details -->
-        <div v-if="application.type === 'code'" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+        <div v-if="application.type === 'code'" class="application-detail-block">
           <h3 class="text-xl fw-900">
             LLMApi 额度
           </h3>
@@ -325,7 +325,7 @@ function handleComplete() {
         </div>
 
         <!-- Resource details -->
-        <div v-if="application.type === 'resource'" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+        <div v-if="application.type === 'resource'" class="application-detail-block">
           <div class="flex flex-wrap gap-3 items-start justify-between">
             <div>
               <h3 class="text-xl fw-900">
@@ -374,7 +374,7 @@ function handleComplete() {
             </div>
           </div>
           <div class="mt-4 space-y-3">
-            <div v-for="item in application.resourceItems ?? []" :key="item.id" class="p-4 rounded-2xl bg-slate-50 dark:bg-white/5">
+            <div v-for="item in application.resourceItems ?? []" :key="item.id" class="application-resource-item">
               <div class="flex flex-wrap gap-3 items-start justify-between">
                 <div>
                   <div class="fw-900">
@@ -464,7 +464,7 @@ function handleComplete() {
         </div>
 
         <!-- AI Review -->
-        <div v-if="application.aiReview" class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+        <div v-if="application.aiReview" class="application-detail-block">
           <h3 class="text-xl fw-900">
             AI 初审
           </h3>
@@ -477,7 +477,7 @@ function handleComplete() {
         </div>
 
         <!-- Application description -->
-        <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+        <div class="application-detail-block">
           <h3 class="text-xl fw-900">
             申请说明
           </h3>
@@ -485,7 +485,7 @@ function handleComplete() {
         </div>
 
         <!-- Attachments -->
-        <div class="p-5 border border-black/8 rounded-3xl bg-white dark:border-white/10 dark:bg-[#151820]">
+        <div class="application-detail-block">
           <h3 class="text-xl fw-900">
             附件材料
           </h3>
