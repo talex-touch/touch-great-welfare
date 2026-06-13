@@ -220,7 +220,7 @@ function handleComplete() {
         申请不存在，或你没有权限查看该申请。
       </div>
 
-      <div v-else class="application-detail-content" :class="drawer ? 'mt-0 space-y-4' : 'mt-6 space-y-6'">
+      <div v-else class="application-detail-content" :class="drawer ? 'mt-0 space-y-2' : 'mt-6 space-y-6'">
         <!-- Application header -->
         <div class="application-detail-block application-detail-block--hero">
           <div class="flex flex-wrap gap-4 items-start justify-between">
@@ -390,8 +390,8 @@ function handleComplete() {
                   <TxStatusBadge :text="resourceLifecycleText(item)" :status="resourceLifecycleTone(item)" size="sm" />
                 </div>
               </div>
-              <div class="mt-3 gap-2 grid md:grid-cols-2 xl:grid-cols-3">
-                <div v-for="field in resourceItemSummaryFields(item)" :key="`${item.id}-${field.label}`" class="application-detail-stat">
+              <div class="application-resource-field-grid mt-2">
+                <div v-for="field in resourceItemSummaryFields(item)" :key="`${item.id}-${field.label}`" class="application-resource-field">
                   <span>{{ field.label }}</span>
                   <b>{{ field.value }}</b>
                 </div>
@@ -429,8 +429,8 @@ function handleComplete() {
                 <div class="text-xs text-emerald-900 fw-900 dark:text-emerald-100">
                   批准内容
                 </div>
-                <div class="mt-2 gap-2 grid md:grid-cols-2">
-                  <div v-for="field in resourceItemApprovedFields(item)" :key="`${item.id}-approved-${field.label}`" class="application-detail-stat">
+                <div class="application-resource-field-grid mt-2">
+                  <div v-for="field in resourceItemApprovedFields(item)" :key="`${item.id}-approved-${field.label}`" class="application-resource-field">
                     <span>{{ field.label }}</span>
                     <b>{{ field.value }}</b>
                   </div>
