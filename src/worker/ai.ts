@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { AiApplicationReview, LlmApiModelPricing, WelfareApplication, WelfareState } from '~/composables/welfare'
+import type { AiApplicationReview, LlmApiModelPricing, ResourceType, WelfareApplication, WelfareState } from '~/composables/welfare'
 import { calculateActivityPrice, DEFAULT_LLM_API_MODELS, normalizeLlmApiModelPricings, REQUEST_COST } from '~/composables/welfare'
 import {
   assertAdminRequest,
@@ -999,6 +999,24 @@ function expiresInDaysFromDuration(duration: unknown) {
   return match ? Number(match[1]) : undefined
 }
 
+function normalizedAutoProvisionResourceType(item: NonNullable<WelfareApplication['resourceItems']>[number]): ResourceType | undefined {
+  const rawValues = [
+    item.resourceType,
+    item.resourceSubtype,
+    resourceProvisionValue(item, 'resourceType', 'type', 'category', 'model'),
+  ].map(value => String(value ?? '').trim().toLowerCase())
+
+  if (rawValues.includes('llm_api_quota'))
+    return 'llm_api_quota'
+  if (rawValues.includes('database'))
+    return 'database'
+  if (rawValues.some(value => ['llm-api-quota', 'llm', 'llm_api', 'ai', 'api_key', 'api-key', 'apikey', 'newapi', 'codex', 'gpt-pro', 'gpt'].includes(value)))
+    return 'llm_api_quota'
+  if (rawValues.some(value => ['db', 'postgresql', 'postgres', 'mysql', 'redis', 'mongodb'].includes(value)))
+    return 'database'
+  return undefined
+}
+
 function llmModelForResourceItem(item: NonNullable<WelfareApplication['resourceItems']>[number]) {
   const modelKey = String(resourceProvisionValue(item, 'model') || item.resourceSubtype || '')
   return DEFAULT_LLM_API_MODELS.find(model => model.key === modelKey)
@@ -1070,7 +1088,7 @@ async function provisionResourceApplication(
 ) {
   const user = findApplicationUser(state, application.userId)
   const items = (application.resourceItems ?? []).filter(item =>
-    (item.resourceType === 'llm_api_quota' || item.resourceType === 'database')
+    !!normalizedAutoProvisionResourceType(item)
     && ['approved', 'adjusted_approved'].includes(item.approvalStatus)
     && item.provisionStatus !== 'completed'
     && (!itemId || item.id === itemId),
@@ -1082,7 +1100,8 @@ async function provisionResourceApplication(
   const failures: ResourceProvisionFailure[] = []
   for (const item of items) {
     try {
-      if (item.resourceType === 'llm_api_quota') {
+      const autoProvisionType = normalizedAutoProvisionResourceType(item)
+      if (autoProvisionType === 'llm_api_quota') {
         const key = await createSub2ApiKeyForResourceItem(env, user, sub2ApiPayloadFromResourceItem(item), {
           applicationId: application.id,
           itemId: item.id,

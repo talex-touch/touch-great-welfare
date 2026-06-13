@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AttachmentMeta } from '~/composables/welfare'
+import type { AttachmentMeta, ResourceType } from '~/composables/welfare'
 import { TxButton, TxCard, TxCheckbox, TxDrawer, TxSelect, TxSelectItem, TxTag } from '@talex-touch/tuffex'
 import { computed, onMounted, ref } from 'vue'
 import { useWelfareFeedback } from '~/composables/feedback'
@@ -68,7 +68,7 @@ const selectedReviewApplicationId = ref<string | undefined>()
 const isReviewApplicationDialogOpen = ref(false)
 const selectedReviewApplication = computed(() => state.applications.find(item => item.id === selectedReviewApplicationId.value))
 const retryingResourceProvisionItems = ref<Record<string, boolean>>({})
-const autoProvisionResourceTypes = new Set(['llm_api_quota', 'database'])
+const autoProvisionResourceTypes = new Set<ResourceType>(['llm_api_quota', 'database'])
 const reviewDraftKey = 'welfare:review-drafts'
 const crowdReviewDraftKey = 'welfare:crowd-review-drafts'
 
@@ -144,14 +144,48 @@ function onCompleteProvision(applicationId: string, itemId: string) {
   runSafely(() => completeResourceProvision(applicationId, itemId), '人工开通结果已记录并已通知用户')
 }
 
-function canRetryResourceProvision(item: { approvalStatus: string, provisionStatus?: string, resourceType: string }) {
+function normalizedAutoProvisionResourceType(item: { resourceType?: string, resourceSubtype?: string, payload?: Record<string, any> }): ResourceType | undefined {
+  const rawValues = [
+    item.resourceType,
+    item.resourceSubtype,
+    item.payload?.resourceType,
+    item.payload?.type,
+    item.payload?.category,
+    item.payload?.model,
+  ].map(value => String(value ?? '').trim().toLowerCase())
+
+  const directType = rawValues.find((value): value is ResourceType => autoProvisionResourceTypes.has(value as ResourceType))
+  if (directType)
+    return directType
+  if (rawValues.some(value => ['llm-api-quota', 'llm', 'llm_api', 'ai', 'api_key', 'api-key', 'apikey', 'newapi', 'codex', 'gpt-pro', 'gpt'].includes(value)))
+    return 'llm_api_quota'
+  if (rawValues.some(value => ['db', 'postgresql', 'postgres', 'mysql', 'redis', 'mongodb'].includes(value)))
+    return 'database'
+  return undefined
+}
+
+function canRetryResourceProvision(item: { approvalStatus: string, provisionStatus?: string, resourceType?: string, resourceSubtype?: string, payload?: Record<string, any> }) {
   return isAdmin.value
     && ['approved', 'adjusted_approved'].includes(item.approvalStatus)
     && item.provisionStatus !== 'completed'
-    && autoProvisionResourceTypes.has(item.resourceType)
+    && !!normalizedAutoProvisionResourceType(item)
 }
 
-async function onRetryResourceProvision(applicationId: string, item: { id: string, approvalStatus: string, provisionStatus?: string, resourceType: string }) {
+function retryResourceProvisionUnavailableReason(item: { approvalStatus: string, provisionStatus?: string, resourceType?: string, resourceSubtype?: string, payload?: Record<string, any> }) {
+  if (!isAdmin.value)
+    return '仅管理员可重试自动发放'
+  if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
+    return '资源明细尚未通过审批'
+  if (item.provisionStatus === 'completed')
+    return '资源已经发放完成'
+  if (!normalizedAutoProvisionResourceType(item)) {
+    const typeLabel = item.resourceType ? resourceTypeLabel(item.resourceType as ResourceType) : '未知'
+    return `当前资源类型 ${typeLabel} 暂不支持自动重试`
+  }
+  return ''
+}
+
+async function onRetryResourceProvision(applicationId: string, item: { id: string, approvalStatus: string, provisionStatus?: string, resourceType?: string, resourceSubtype?: string, payload?: Record<string, any> }) {
   if (!canRetryResourceProvision(item) || retryingResourceProvisionItems.value[item.id])
     return
 
@@ -313,7 +347,7 @@ onMounted(() => {
       v-model:visible="isReviewApplicationDialogOpen"
       class="review-application-drawer-host"
       direction="right"
-      size="min(1120px, 96vw)"
+      size="min(920px, 92vw)"
       title="审核详情"
       :z-index="130"
       mask-effect="blur"
@@ -433,15 +467,20 @@ onMounted(() => {
                   <div class="text-xs fw-900">
                     发放状态：{{ resourceProvisionStatusText(resourceItem.provisionStatus) }}
                   </div>
-                  <TxButton
-                    v-if="canRetryResourceProvision(resourceItem)"
-                    size="sm"
-                    variant="secondary"
-                    :disabled="retryingResourceProvisionItems[resourceItem.id]"
-                    @click="onRetryResourceProvision(item.id, resourceItem)"
-                  >
-                    {{ retryingResourceProvisionItems[resourceItem.id] ? '重试中...' : '重试自动发放' }}
-                  </TxButton>
+                  <div class="flex flex-wrap gap-2 items-center justify-end">
+                    <TxButton
+                      v-if="canRetryResourceProvision(resourceItem)"
+                      size="sm"
+                      variant="secondary"
+                      :disabled="retryingResourceProvisionItems[resourceItem.id]"
+                      @click="onRetryResourceProvision(item.id, resourceItem)"
+                    >
+                      {{ retryingResourceProvisionItems[resourceItem.id] ? '重试中...' : '重试自动发放' }}
+                    </TxButton>
+                    <span v-else-if="resourceItem.provisionStatus !== 'completed'" class="text-xs text-slate-500 dark:text-slate-400">
+                      {{ retryResourceProvisionUnavailableReason(resourceItem) }}
+                    </span>
+                  </div>
                 </div>
                 <div v-if="resourceItemApprovedFields(resourceItem).length" class="mt-2 gap-2 grid md:grid-cols-2">
                   <div v-for="field in resourceItemApprovedFields(resourceItem)" :key="`${resourceItem.id}-approved-${field.label}`" class="application-detail-stat">
@@ -666,3 +705,37 @@ onMounted(() => {
     </TxCard>
   </div>
 </template>
+
+<style scoped>
+:deep(.review-application-drawer-host .tx-drawer__panel),
+:deep(.review-application-drawer-host .tx-drawer__body) {
+  max-width: 92vw;
+  overflow-x: hidden;
+}
+
+.review-application-dialog {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.review-application-dialog :deep(*) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.review-application-dialog :deep(.rich-text-view),
+.review-application-dialog :deep(.rich-text-preview),
+.review-application-dialog :deep(pre),
+.review-application-dialog input,
+.review-application-dialog textarea,
+.review-application-dialog .application-detail-stat span,
+.review-application-dialog .application-detail-stat b {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+</style>
