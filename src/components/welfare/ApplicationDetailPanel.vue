@@ -222,73 +222,71 @@ function handleComplete() {
 
       <div v-else class="application-detail-content" :class="drawer ? 'mt-0 space-y-2' : 'mt-6 space-y-6'">
         <!-- Application header -->
-        <div class="application-detail-block application-detail-block--hero">
-          <div class="flex flex-wrap gap-4 items-start justify-between">
-            <div class="min-w-0">
-              <div class="flex gap-2 items-center">
-                <span :class="typeIcon(application.type)" />
-                <h3 class="text-2xl fw-900 truncate">
-                  {{ application.title }}
-                </h3>
-              </div>
-              <div class="text-sm text-slate-500 mt-2 dark:text-slate-400">
-                {{ formatDate(application.createdAt) }} 创建
-                <template v-if="isAdmin">
-                  · {{ userName(application.userId) }}
-                </template>
-              </div>
+        <div class="flex flex-wrap gap-4 items-start justify-between">
+          <div class="min-w-0">
+            <div class="flex gap-2 items-center">
+              <span :class="typeIcon(application.type)" />
+              <h3 class="text-2xl fw-900 truncate">
+                {{ application.title }}
+              </h3>
             </div>
-            <div class="flex flex-wrap gap-2 items-center">
-              <TxButton
-                v-if="application.type === 'resource' && application.status === 'draft' && application.userId === currentUser?.id"
-                size="sm"
-                variant="secondary"
-                @click="editDraft"
-              >
-                编辑草稿
-              </TxButton>
-              <TxStatusBadge :text="statusText(application.status)" :status="statusTone(application.status)" />
-              <TxStatusBadge :text="prepaidStateText" :status="prepaidStateTone" />
+            <div class="text-sm text-slate-500 mt-2 dark:text-slate-400">
+              {{ formatDate(application.createdAt) }} 创建
+              <template v-if="isAdmin">
+                · {{ userName(application.userId) }}
+              </template>
             </div>
           </div>
+          <div class="flex flex-wrap gap-2 items-center">
+            <TxButton
+              v-if="application.type === 'resource' && application.status === 'draft' && application.userId === currentUser?.id"
+              size="sm"
+              variant="secondary"
+              @click="editDraft"
+            >
+              编辑草稿
+            </TxButton>
+            <TxStatusBadge :text="statusText(application.status)" :status="statusTone(application.status)" />
+            <TxStatusBadge :text="prepaidStateText" :status="prepaidStateTone" />
+          </div>
+        </div>
 
-          <div class="mt-5 gap-3 grid md:grid-cols-2 xl:grid-cols-4">
-            <div class="application-detail-stat">
-              <span>类型</span>
-              <b>{{ application.type.toUpperCase() }}</b>
-            </div>
-            <div class="application-detail-stat">
-              <span>申请预扣</span>
-              <b>{{ formatPoints(application.cost) }}</b>
-            </div>
-            <div class="application-detail-stat">
-              <span>云端保留至</span>
-              <b>{{ formatDate(application.retentionExpiresAt) }}</b>
-            </div>
-            <div class="application-detail-stat">
-              <span>处理截止</span>
-              <b>{{ formatDate(application.processingDueAt) }}</b>
-            </div>
-            <div v-if="application.type === 'pro'" class="application-detail-stat">
-              <span>通过后免费补充</span>
-              <b>{{ Math.max(0, (application.postApprovalSupplementLimit ?? 0) - (application.postApprovalSupplementCount ?? 0)) }}/{{ application.postApprovalSupplementLimit ?? 0 }} 次</b>
-            </div>
+        <div class="mt-5 gap-3 grid md:grid-cols-2 xl:grid-cols-4">
+          <div class="application-detail-stat">
+            <span>类型</span>
+            <b>{{ application.type.toUpperCase() }}</b>
           </div>
+          <div class="application-detail-stat">
+            <span>申请预扣</span>
+            <b>{{ formatPoints(application.cost) }}</b>
+          </div>
+          <div class="application-detail-stat">
+            <span>云端保留至</span>
+            <b>{{ formatDate(application.retentionExpiresAt) }}</b>
+          </div>
+          <div class="application-detail-stat">
+            <span>处理截止</span>
+            <b>{{ formatDate(application.processingDueAt) }}</b>
+          </div>
+          <div v-if="application.type === 'pro'" class="application-detail-stat">
+            <span>通过后免费补充</span>
+            <b>{{ Math.max(0, (application.postApprovalSupplementLimit ?? 0) - (application.postApprovalSupplementCount ?? 0)) }}/{{ application.postApprovalSupplementLimit ?? 0 }} 次</b>
+          </div>
+        </div>
 
-          <div class="mt-4 flex flex-wrap gap-2">
-            <TxTag v-if="application.pricingPromotionName" :label="application.pricingPromotionName" color="#7c2d12" background="rgba(251,146,60,.18)" />
-            <TxTag v-if="application.hasOpenSourceBadge" label="开源认证" color="#0369a1" background="rgba(14,165,233,.14)" />
-            <TxTag v-if="application.storageExtended" :label="`存储 +7 天 · ${formatPoints(application.storageExtensionCost)}`" color="#0f766e" background="rgba(45,212,191,.16)" />
-            <TxTag v-if="application.expedited" :label="`加速处理 · ${formatPoints(application.expediteCost || 0)}`" color="#854d0e" background="rgba(250,204,21,.18)" />
-            <TxTag v-if="application.rejectionReviewFeeWaived && application.rejectionFraudulent" label="认真承诺但造假仍扣手续费" color="#991b1b" background="rgba(248,113,113,.16)" />
-            <TxTag v-else-if="application.rejectionReviewFeeWaived" label="认真填写承诺" color="#7c3aed" background="rgba(167,139,250,.16)" />
-            <TxTag v-if="application.rejectionFraudulent" label="造假限制" color="#991b1b" background="rgba(248,113,113,.16)" />
-            <TxTag v-else-if="!application.rejectionReviewFeeWaived" :label="`退回手续费 ${formatPoints(application.rejectionReviewFee)}`" color="#be123c" background="rgba(244,63,94,.12)" />
-          </div>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <TxTag v-if="application.pricingPromotionName" :label="application.pricingPromotionName" color="#7c2d12" background="rgba(251,146,60,.18)" />
+          <TxTag v-if="application.hasOpenSourceBadge" label="开源认证" color="#0369a1" background="rgba(14,165,233,.14)" />
+          <TxTag v-if="application.storageExtended" :label="`存储 +7 天 · ${formatPoints(application.storageExtensionCost)}`" color="#0f766e" background="rgba(45,212,191,.16)" />
+          <TxTag v-if="application.expedited" :label="`加速处理 · ${formatPoints(application.expediteCost || 0)}`" color="#854d0e" background="rgba(250,204,21,.18)" />
+          <TxTag v-if="application.rejectionReviewFeeWaived && application.rejectionFraudulent" label="认真承诺但造假仍扣手续费" color="#991b1b" background="rgba(248,113,113,.16)" />
+          <TxTag v-else-if="application.rejectionReviewFeeWaived" label="认真填写承诺" color="#7c3aed" background="rgba(167,139,250,.16)" />
+          <TxTag v-if="application.rejectionFraudulent" label="造假限制" color="#991b1b" background="rgba(248,113,113,.16)" />
+          <TxTag v-else-if="!application.rejectionReviewFeeWaived" :label="`退回手续费 ${formatPoints(application.rejectionReviewFee)}`" color="#be123c" background="rgba(244,63,94,.12)" />
+        </div>
 
-          <div v-if="application.githubRepo" class="text-sm text-slate-500 mt-4 break-all dark:text-slate-400">
-            关联仓库：{{ application.githubRepo }}
-          </div>
+        <div v-if="application.githubRepo" class="text-sm text-slate-500 mt-4 break-all dark:text-slate-400">
+          关联仓库：{{ application.githubRepo }}
         </div>
 
         <!-- LLMApi details -->

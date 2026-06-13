@@ -650,10 +650,6 @@
   background: #fff;
 }
 
-.application-detail-block--hero {
-  background: rgba(248, 250, 252, 0.78);
-}
-
 .application-resource-item {
   padding: 1rem;
   border-radius: 18px;
@@ -784,7 +780,9 @@
 
 .application-detail-panel--drawer > .solid-panel,
 .application-detail-panel--drawer .application-detail-shell {
+  display: contents;
   border: 0;
+  outline: 0;
   background: transparent;
   box-shadow: none;
 }
@@ -1062,7 +1060,6 @@
   background: #151820;
 }
 
-.dark .application-detail-block--hero,
 .dark .application-resource-item {
   background: rgba(255, 255, 255, 0.05);
 }
