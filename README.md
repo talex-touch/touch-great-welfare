@@ -85,7 +85,7 @@ export DATABASE_URL="postgresql://user:password@host:5432/touch_great_welfare"
 pnpm exec wrangler hyperdrive create touch-great-welfare-db --connection-string "$DATABASE_URL"
 ```
 
-把命令输出里的 Hyperdrive ID 写入 `wrangler.production.jsonc` 的 `hyperdrive[0].id`。远端配置 dry-run：
+把命令输出里的 Hyperdrive ID 写入 `wrangler.production.jsonc` 的 `hyperdrive[0].id`。如果不希望把真实 ID 写入仓库，也可以在本机或 CI 中设置 `HYPERDRIVE_ID` 供生产配置检查使用。远端配置 dry-run：
 
 ```bash
 pnpm run build && pnpm exec wrangler deploy --config wrangler.production.jsonc --dry-run

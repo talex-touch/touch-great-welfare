@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { AttachmentMeta, WelfareState } from '~/composables/welfare'
+import type { AttachmentMeta, WelfareState } from '~/shared/welfare-types'
 import { assertWelfareState, createId, errorResponse, getAuthenticatedRequest, json } from './auth'
 import { readWelfareStateRecord } from './welfare-state'
 

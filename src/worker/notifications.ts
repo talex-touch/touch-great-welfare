@@ -1,5 +1,4 @@
 import type { WorkerEnv } from './welfare-state'
-import type { AttachmentMeta, StudentVerification, User, WelfareApplication, WelfareState } from '~/composables/welfare'
 import type {
   AdminAnnouncementListResult,
   AdminAnnouncementSummary,
@@ -19,6 +18,7 @@ import type {
   SystemLogLevel,
   SystemLogListResult,
 } from '~/shared/notifications'
+import type { AttachmentMeta, StudentVerification, User, WelfareApplication, WelfareState } from '~/shared/welfare-types'
 import { EMAIL_NOTIFICATION_COST, EMAIL_NOTIFICATION_FREE_DAILY_LIMIT, NOTIFICATION_TEMPLATE_OPTIONS, notificationTemplateOption } from '~/shared/notifications'
 import { richTextToPlainText } from '~/utils/rich-text'
 import {

@@ -3,6 +3,11 @@ shellEmulator: true
 trustPolicy: no-downgrade
 
 packages: []
+overrides:
+  dompurify: ^3.4.11
+  picomatch: ^4.0.4
+  postcss: 8.5.10
+  yaml: ^2.8.3
 catalog:
   '@types/pg': ^8.20.0
   pg: ^8.21.0
@@ -15,13 +20,11 @@ catalogs:
     unplugin: ^3.0.0
     unplugin-auto-import: ^21.0.0
     unplugin-vue-components: ^31.0.0
-    unplugin-vue-macros: ^2.14.5
     vite: ^7.3.1
   dev:
     '@antfu/eslint-config': ^7.6.1
     '@types/node': ^25.3.3
     '@unocss/eslint-plugin': ^66.6.3
-    '@vue-macros/volar': ^3.1.2
     '@vue/test-utils': ^2.4.6
     eslint: ^10.0.2
     eslint-plugin-format: ^2.0.1

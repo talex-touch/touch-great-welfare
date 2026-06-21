@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { CreditTransaction, CreditTransactionType, WelfareState } from '~/composables/welfare'
+import type { CreditTransaction, CreditTransactionType, WelfareState } from '~/shared/welfare-types'
 import { authenticatedUserId } from './session'
 import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 

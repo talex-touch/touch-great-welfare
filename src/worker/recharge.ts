@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
-import type { UserCoupon, WelfareState } from '~/composables/welfare'
-import { normalizeSystemConfig } from '~/composables/welfare'
+import type { UserCoupon, WelfareState } from '~/shared/welfare-types'
+import { normalizeSystemConfig } from '~/shared/welfare-domain'
 import { assertSafeExternalUrl, normalizeUrlBase } from './auth'
 import { decryptSecret, encryptSecret } from './crypto'
 import {

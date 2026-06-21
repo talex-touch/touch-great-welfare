@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
-import type { WelfareState } from '~/composables/welfare'
-import { createUserInviteCode, normalizeSystemConfig } from '~/composables/welfare'
+import type { WelfareState } from '~/shared/welfare-types'
+import { createUserInviteCode, normalizeSystemConfig } from '~/shared/welfare-domain'
 import { assertAdminRequest, assertSafeExternalUrl, errorResponse, json, maskSecret, now, readJson } from './auth'
 import { bytesToHex, decryptSecret, encryptSecret, sha256Hex } from './crypto'
 import { createSessionCookie } from './session'

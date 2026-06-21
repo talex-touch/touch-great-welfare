@@ -2,7 +2,7 @@
  * UserRepository - 用户数据访问层
  */
 
-import type { User } from '~/composables/welfare'
+import type { User } from '~/shared/welfare-types'
 import { BaseRepository } from './base'
 
 export class UserRepository extends BaseRepository<User> {

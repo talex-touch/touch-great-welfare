@@ -3,7 +3,7 @@
  */
 
 import type { WorkerEnv } from './core'
-import type { User } from '~/composables/welfare'
+import type { User } from '~/shared/welfare-types'
 
 export async function getUserFromTable(env: WorkerEnv, userId: string): Promise<User | null> {
   const db = env.LOCAL_DB

@@ -2,7 +2,7 @@
  * ApplicationRepository - 申请数据访问层
  */
 
-import type { WelfareApplication } from '~/composables/welfare'
+import type { WelfareApplication } from '~/shared/welfare-types'
 import { BaseRepository } from './base'
 
 export class ApplicationRepository extends BaseRepository<WelfareApplication> {

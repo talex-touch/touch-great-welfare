@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
-import type { AiApplicationReview, LlmApiModelPricing, ResourceProvisionLogLevel, ResourceType, WelfareApplication, WelfareState } from '~/composables/welfare'
-import { calculateActivityPrice, DEFAULT_LLM_API_MODELS, normalizeLlmApiModelPricings, REQUEST_COST } from '~/composables/welfare'
+import type { AiApplicationReview, LlmApiModelPricing, ResourceProvisionLogLevel, ResourceType, WelfareApplication, WelfareState } from '~/shared/welfare-types'
+import { calculateActivityPrice, DEFAULT_LLM_API_MODELS, normalizeLlmApiModelPricings, REQUEST_COST } from '~/shared/welfare-domain'
 import {
   assertAdminRequest,
   assertSafeExternalUrl,

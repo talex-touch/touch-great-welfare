@@ -6,7 +6,7 @@
  */
 
 import type { WorkerEnv } from '../../core'
-import type { User, UserProfile } from '~/composables/welfare'
+import type { User, UserProfile } from '~/shared/welfare-types'
 import { readWelfareStateRecord, writeWelfareState } from '../../core'
 import { getPool } from '../database/connection'
 import { createRepositories } from '../repository'

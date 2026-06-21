@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './core'
-import type { WelfareState } from '~/composables/welfare'
+import type { WelfareState } from '~/shared/welfare-types'
 import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
 import { dispatchWelfareStateChangeNotifications } from '../notifications'
 import { syncUserPointBalancesFromLedger } from '../points'

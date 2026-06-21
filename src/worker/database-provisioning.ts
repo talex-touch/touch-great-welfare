@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { ApplicationItem, User } from '~/composables/welfare'
+import type { ApplicationItem, User } from '~/shared/welfare-types'
 import { Pool } from 'pg'
 import { assertAdminRequest, boolValue, createId, errorResponse, fetchWithTimeout, json, maskSecret, readJson } from './auth'
 import { decryptSecret, encryptSecret, sha256Hex } from './crypto'

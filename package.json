@@ -31,7 +31,6 @@
     "@types/pg": "catalog:",
     "@unocss/eslint-plugin": "catalog:dev",
     "@vitejs/plugin-vue": "catalog:build",
-    "@vue-macros/volar": "catalog:dev",
     "@vue/test-utils": "catalog:dev",
     "eslint": "catalog:dev",
     "eslint-plugin-format": "catalog:dev",
@@ -43,7 +42,6 @@
     "unocss": "catalog:build",
     "unplugin-auto-import": "catalog:build",
     "unplugin-vue-components": "catalog:build",
-    "unplugin-vue-macros": "catalog:build",
     "vite": "catalog:build",
     "vitest": "catalog:dev",
     "vue-tsc": "catalog:dev"

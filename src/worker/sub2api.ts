@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { User } from '~/composables/welfare'
+import type { User } from '~/shared/welfare-types'
 import {
   assertAdminRequest,
   assertSafeExternalUrl,

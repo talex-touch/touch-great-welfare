@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './welfare-state'
-import type { EducationEmailChallenge, StudentVerification, WelfareState } from '~/composables/welfare'
-import { EDUCATION_EMAIL_REVIEW_INBOX } from '~/composables/welfare'
+import type { EducationEmailChallenge, StudentVerification, WelfareState } from '~/shared/welfare-types'
+import { EDUCATION_EMAIL_REVIEW_INBOX } from '~/shared/welfare-domain'
 import {
   assertAdminRequest,
   assertSafeExternalUrl,

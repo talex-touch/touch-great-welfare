@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './welfare-state'
-import type { User, WelfareState } from '~/composables/welfare'
+import type { User, WelfareState } from '~/shared/welfare-types'
 import { authenticatedUserId } from './session'
 import { readWelfareState } from './welfare-state'
 
