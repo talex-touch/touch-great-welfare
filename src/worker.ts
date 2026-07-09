@@ -117,6 +117,7 @@ export default {
       || url.pathname === '/api/session'
       || url.pathname.startsWith('/api/session/')
       || url.pathname === '/api/me'
+      || url.pathname.startsWith('/api/me/')
       || url.pathname === '/api/welfare-state'
       || url.pathname.startsWith('/api/welfare-state/')
       || url.pathname.startsWith('/api/config/')
@@ -131,7 +132,9 @@ export default {
       || url.pathname.startsWith('/api/deliveries/')
       || url.pathname.startsWith('/api/admin/welfare')
       || url.pathname.startsWith('/api/admin/config/')
+      || url.pathname === '/api/admin/applications'
       || url.pathname.startsWith('/api/admin/applications/')
+      || url.pathname === '/api/admin/verifications'
       || url.pathname.startsWith('/api/admin/verifications/')
       || url.pathname.startsWith('/api/admin/coupons/')
       || url.pathname.startsWith('/api/admin/users/')) {

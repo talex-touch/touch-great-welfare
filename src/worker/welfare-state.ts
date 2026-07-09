@@ -4,6 +4,7 @@ export {
   handleWelfareStateRequest,
 } from './welfare/router'
 export {
+  allowUnstableNormalizedReads,
   applyTrustedPointTransactionsFromState,
   getPool,
   readWelfareState,

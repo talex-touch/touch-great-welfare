@@ -186,7 +186,7 @@ read:user user:email public_repo
 
 ## 数据说明
 
-业务数据不再保存在浏览器本地存储。前端通过 `/api/welfare-state` 读取和保存 PostgreSQL 中的 `welfare_app_state` 表：
+业务数据不再保存在浏览器本地存储。服务端仍保留 `welfare_app_state` 作为兼容状态表：
 
 ```sql
 create table if not exists welfare_app_state (
@@ -195,5 +195,7 @@ create table if not exists welfare_app_state (
   updated_at timestamptz not null default now()
 );
 ```
+
+`GET /api/welfare-state`、`GET /api/welfare-state/me`、`GET /api/welfare-state/admin` 仅作为旧版读兼容入口保留。`PUT /api/welfare-state` 全量保存默认冻结，返回 `LEGACY_STATE_WRITE_FROZEN`；业务写入必须使用分段接口，例如 `/api/admin/config/system`、`/api/applications/submit`、`/api/admin/applications/review-item`。只有迁移应急时可临时设置 `ENABLE_LEGACY_STATE_WRITE=true` 放行旧全量保存；生产配置检查会禁止该变量开启。
 
 生产环境需要配置 Hyperdrive binding。本地开发使用 `LOCAL_DB` D1 binding。如果数据库不可用，页面会显示数据库错误，业务写操作不会落到浏览器本地存储。

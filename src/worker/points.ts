@@ -69,7 +69,8 @@ function json(payload: unknown, status = 200) {
 }
 
 function errorResponse(error: unknown, status = 500) {
-  return json({ error: error instanceof Error ? error.message : '服务端错误' }, status)
+  const message = error instanceof Error ? error.message : '服务端错误'
+  return json({ error: message }, message === '请先登录' ? 401 : status)
 }
 
 function forbidden(message = '需要管理员权限') {
@@ -578,12 +579,12 @@ export async function handlePointRequest(request: Request, env: WorkerEnv) {
     if (url.pathname !== '/api/points/transactions' || request.method !== 'GET')
       return json({ error: 'Method Not Allowed' }, 405)
 
-    const state = await readWelfareState(env) as Partial<WelfareState>
-    const users = Array.isArray(state.users) ? state.users : []
     const userId = await authenticatedUserId(request, env)
     if (!userId)
       throw new Error('请先登录')
 
+    const state = await readWelfareState(env) as Partial<WelfareState>
+    const users = Array.isArray(state.users) ? state.users : []
     const user = users.find(item => item.id === userId)
     if (!user)
       throw new Error('用户不存在')

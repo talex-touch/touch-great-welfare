@@ -45,7 +45,9 @@ if (localDb)
 
 const unsafeVars = new Map([
   ['USE_NORMALIZED_TABLES', 'true'],
+  ['ALLOW_UNSTABLE_NORMALIZED_READS', 'true'],
   ['ENABLE_TEMP_ADMIN_ENDPOINTS', 'true'],
+  ['ENABLE_LEGACY_STATE_WRITE', 'true'],
 ])
 for (const [key, value] of objectEntries(config.vars)) {
   if (unsafeVars.get(key) === String(value).trim().toLowerCase())

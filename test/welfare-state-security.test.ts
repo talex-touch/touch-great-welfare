@@ -873,7 +873,7 @@ describe('welfare state security', () => {
         created_at: '2026-06-03T00:00:00.000Z',
       },
     )
-    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret', ENABLE_LEGACY_STATE_WRITE: 'true' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
     const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/admin/welfare/state', {
       headers: { cookie },
@@ -902,6 +902,39 @@ describe('welfare state security', () => {
     const balanceQueries = d1.queries.filter(item => item.method === 'all' && item.query.includes('from point_transactions'))
     expect(balanceQueries.at(-1)?.values).toContain('user_1')
     expect(balanceQueries.at(-1)?.values).not.toContain('user_2')
+  })
+
+  it('freezes legacy full-state saves by default while keeping reads compatible', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin', points: 0 })
+    const d1 = createMemoryD1({ ...state(), users: [admin] })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state/admin', {
+      headers: { cookie },
+    }), env)
+    expect(currentResponse.status).toBe(200)
+    const current = await currentResponse.json() as { state: WelfareState, version: number }
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        version: current.version,
+        state: {
+          ...current.state,
+          siteBanner: { enabled: true, title: '旧入口写入', body: '不应被保存' },
+        },
+      }),
+    }), env)
+
+    expect(response.status).toBe(410)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'LEGACY_STATE_WRITE_FROZEN',
+    })
+
+    const latest = await readWelfareState(env) as WelfareState
+    expect(latest.siteBanner).toEqual({ enabled: false, title: '', body: '' })
   })
 
   it('credits replayed recharge notifications only once', async () => {
@@ -946,7 +979,7 @@ describe('welfare state security', () => {
 
   it('rejects non-admin full-state PUT', async () => {
     const d1 = createMemoryD1(state())
-    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret', ENABLE_LEGACY_STATE_WRITE: 'true' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
     const { applicationPolicy: _applicationPolicy, ...nextState } = {
       ...state(),
@@ -975,7 +1008,7 @@ describe('welfare state security', () => {
   it('requires matching version for admin full-state PUT', async () => {
     const admin = user({ id: 'admin_1', role: 'admin' })
     const d1 = createMemoryD1({ ...state(), users: [admin] })
-    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret', ENABLE_LEGACY_STATE_WRITE: 'true' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
 
     const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state/admin', {
@@ -1510,7 +1543,7 @@ describe('welfare state security', () => {
 
   it('rejects forged non-admin PUT transactions before state merge', async () => {
     const d1 = createMemoryD1(state())
-    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret', ENABLE_LEGACY_STATE_WRITE: 'true' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
     const nextState = {
       ...state(),
@@ -1560,7 +1593,7 @@ describe('welfare state security', () => {
       balance_after: 1050,
       created_at: '2026-06-08T00:00:00.000Z',
     })
-    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret', ENABLE_LEGACY_STATE_WRITE: 'true' }
     const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
 
     const currentResponse = await handleWelfareStateRequest(new Request('https://example.com/api/admin/welfare/state', {

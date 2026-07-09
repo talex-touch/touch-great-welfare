@@ -71,12 +71,12 @@ export function assertWelfareState(input: Partial<WelfareState>): asserts input 
 }
 
 export async function getAuthenticatedRequest(request: Request, env: WorkerEnv): Promise<AuthenticatedRequest> {
-  const state = await readWelfareState(env) as Partial<WelfareState>
-  assertWelfareState(state)
-
   const userId = await authenticatedUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
+
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  assertWelfareState(state)
 
   const user = state.users.find(item => item.id === userId)
   if (!user)

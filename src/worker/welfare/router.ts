@@ -1,8 +1,4 @@
 import type { WorkerEnv } from './core'
-import type { WelfareState } from '~/shared/welfare-types'
-import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
-import { dispatchWelfareStateChangeNotifications } from '../notifications'
-import { syncUserPointBalancesFromLedger } from '../points'
 import { clearSessionCookie } from '../session'
 import {
   addAdminApplicationMessageAction,
@@ -13,7 +9,6 @@ import {
   adminStateResponse,
   adminVerificationsResponse,
   answerAdminApplicationAction,
-  assertStateShape,
   bindInvitationCodeAction,
   boostSquarePostAction,
   bootstrapAdmin,
@@ -36,22 +31,15 @@ import {
   currentUserVerificationResponse,
   currentUserWalletResponse,
   errorResponse,
-  forbidden,
   grantAdminCouponsAction,
-  isAdminUser,
-  isRecord,
   json,
   loginAdmin,
-  mergeSensitiveWelfareState,
   publicConfigResponse,
-  readPayload,
-  readWelfareStateRecord,
   redeemCouponCodeAction,
   rejectAdminApplicationAction,
   reportSquareBoostAction,
   requestAdminApplicationSupplementAction,
   requestCurrentUserResourceLifecycleAction,
-  requestUserId,
   reviewAdminApplicationItemAction,
   reviewAdminStudentVerificationAction,
   reviewCollaborationApplication,
@@ -59,7 +47,6 @@ import {
   revokeAdminStudentVerificationAction,
   sessionResponse,
   squareStateResponse,
-  StateVersionConflictError,
   submitAdminStudentVerificationAction,
   submitApplicationSupplementAction,
   submitCollaborationApplication,
@@ -78,89 +65,13 @@ import {
   updateAdminUserSuspensionAction,
   updateCurrentProfileAction,
   vouchInvitationAction,
-  writeWelfareState,
 } from './core'
+import { legacyFullStateSave } from './legacy-state-write'
 
 export { handleApplicationSubmitRequest } from './core'
 
 function sessionLogoutResponse(request: Request) {
   return json({ ok: true }, 200, { 'set-cookie': clearSessionCookie(request) })
-}
-
-function changedPointUserIds(previousState: Partial<WelfareState>, nextState: unknown) {
-  if (!isRecord(nextState) || !Array.isArray(nextState.users))
-    return []
-
-  const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
-  const previousPointsByUserId = new Map(previousUsers.map(user => [user.id, user.points]))
-  const userIds = new Set<string>()
-
-  for (const user of nextState.users) {
-    if (!isRecord(user) || typeof user.id !== 'string')
-      continue
-
-    const previousPoints = previousPointsByUserId.get(user.id)
-    if (previousPoints !== undefined && user.points !== previousPoints)
-      userIds.add(user.id)
-  }
-
-  return Array.from(userIds)
-}
-
-function preserveServerPointState(previousState: Partial<WelfareState>, nextState: unknown) {
-  if (!isRecord(nextState))
-    return
-
-  nextState.transactions = []
-  const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
-  const previousPointsByUserId = new Map(previousUsers.map(user => [user.id, user.points]))
-  if (!Array.isArray(nextState.users))
-    return
-
-  for (const user of nextState.users) {
-    if (!isRecord(user) || typeof user.id !== 'string')
-      continue
-
-    const points = previousPointsByUserId.get(user.id)
-    if (points !== undefined)
-      user.points = points
-  }
-}
-
-async function legacyFullStateSave(request: Request, env: WorkerEnv) {
-  const userId = await requestUserId(request, env)
-  if (!userId)
-    throw new Error('请先登录')
-  const previousRecord = await readWelfareStateRecord(env)
-  const previousState = previousRecord.state as Partial<WelfareState>
-  const currentVersion = previousRecord.version
-  if (!isAdminUser(previousState, userId))
-    return forbidden('全量状态保存仅允许管理员使用')
-
-  const payload = await readPayload(request) as { state?: unknown, version?: unknown }
-  const expectedVersion = Math.trunc(Number(payload.version))
-  if (!Number.isFinite(expectedVersion) || expectedVersion <= 0) {
-    return json({
-      code: 'STATE_VERSION_REQUIRED',
-      error: '保存业务状态必须携带有效 version',
-    }, 400)
-  }
-  if (expectedVersion !== currentVersion)
-    throw new StateVersionConflictError()
-  assertStateShape(payload.state)
-  const statePayload = payload.state
-  const pointUserIds = changedPointUserIds(previousState, statePayload)
-  if (pointUserIds.length)
-    await syncUserPointBalancesFromLedger(env, previousState, pointUserIds)
-
-  const mergedSensitiveState = await mergeSensitiveWelfareState(previousState, statePayload, request, env)
-  preserveServerPointState(previousState, mergedSensitiveState)
-  const nextState = applyWelfareRetentionPolicy(mergedSensitiveState).state
-  if (isRecord(nextState))
-    delete nextState.currentUserId
-  const nextVersion = await writeWelfareState(env, nextState, { expectedVersion })
-  await dispatchWelfareStateChangeNotifications(env, previousState, nextState as Partial<WelfareState>)
-  return json({ ok: true, version: nextVersion })
 }
 
 async function handleLegacyAction(request: Request, env: WorkerEnv, action: string) {

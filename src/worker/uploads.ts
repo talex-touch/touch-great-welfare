@@ -128,10 +128,11 @@ function findAttachment(state: WelfareState, fileId: string) {
 }
 
 async function uploadImage(request: Request, env: WorkerEnv): Promise<UploadResponse> {
+  const auth = await getAuthenticatedRequest(request, env)
+
   if (!env.AI_ASSETS)
     throw new Error('AI_ASSETS R2 Binding 未配置')
 
-  const auth = await getAuthenticatedRequest(request, env)
   const contentType = request.headers.get('content-type') ?? ''
   if (!isImageContentType(contentType))
     throw new UploadRequestError('仅支持上传图片资源', 400)

@@ -1945,7 +1945,7 @@ export async function handleAiRequest(request: Request, env: WorkerEnv) {
 
     if (path.startsWith('/images/') && path.endsWith('/file') && request.method === 'GET') {
       const jobId = path.slice('/images/'.length, -'/file'.length)
-      return readImageFile(request, env, jobId)
+      return await readImageFile(request, env, jobId)
     }
 
     if (path.startsWith('/images/') && request.method === 'GET') {

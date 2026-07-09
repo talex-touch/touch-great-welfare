@@ -1,18 +1,11 @@
+import type { AtomicPointTransaction } from './state-store'
 import type {
-  ApplicationItem,
-  ApplicationMessageType,
-  AttachmentMeta,
-  CouponDiscountType,
-  CouponScope,
   CouponTemplate,
-  CreditTransaction,
   CrowdReview,
   DailyCheckIn,
   EducationEmailChallenge,
   InvitationBinding,
   ResourceApprovalStatus,
-  ResourceLifecycleAction,
-  ResourceType,
   SquareBoost,
   SquarePost,
   SquareReport,
@@ -25,41 +18,30 @@ import type {
   WelfareApplication,
   WelfareState,
 } from '~/shared/welfare-types'
-import { Pool } from 'pg'
 import {
-  applicationPowChallenge,
   applyResourceLifecycleAction,
   buildPricingSnapshot,
-  buildUserLevelCard,
   calculateLlmApiCostPoints,
   calculateLlmApiRateLimitChangeCost,
   calculateRejectionReviewFee,
-  canApplyResourceType,
   createFraudRejectionCooldownUntil,
   createProcessingDueAt,
   createRejectionFeeWaiverBlockedUntil,
   createRetentionExpiresAt,
-  discountedResourceItemCost,
-  estimatedResourceItemCost,
-  isValidApplicationPow,
   llmApiRequiresExtendedReview,
   normalizeApplicationPolicy,
   normalizeResourceItems,
   normalizeSiteBanner,
   resolveResourceLifecycleStatus,
   resolveSelectableLlmApiModel,
-  RESOURCE_TYPE_CONFIGS,
   resourceActivityPromotionName,
   resourceApprovalStatusText,
-  resourceTypeConfigForPolicy,
   resourceTypeLabel,
   rollDailyCheckInPoints,
-  termsForResourceTypes,
 } from '~/composables/welfare'
-import { analyzeEducationEmail, assertEducationEmailAddress, educationEmailAdminRecommendationLabel } from '~/shared/education-email'
+import { analyzeEducationEmail, educationEmailAdminRecommendationLabel } from '~/shared/education-email'
 import {
   ACTIVITY_END_AT,
-  applyRateDiscount,
   BASE_REQUEST_COST,
   calculateActivityPrice,
   calculateLlmApiBudgetActivityPrice,
@@ -67,14 +49,12 @@ import {
   COLLABORATION_DELIVERY_REWARD_MAX,
   COLLABORATION_DELIVERY_REWARD_MIN,
   createUserInviteCode,
-  DAILY_CHECK_IN_COUPON_TTL_DAYS,
   DAILY_CHECK_IN_MAX_POINTS,
   EDUCATION_EMAIL_CHALLENGE_TTL_HOURS,
   EDUCATION_EMAIL_REVIEW_INBOX,
   INVITATION_BIND_WINDOW_HOURS,
   LLM_API_EXTENDED_PROCESSING_HOURS,
   LLM_API_STANDARD_PROCESSING_HOURS,
-  MAX_ACTIVE_USER_REQUESTS,
   MAX_ATTACHMENT_BYTES,
   normalizeLlmApiBudgetUsd,
   normalizeSystemConfig,
@@ -87,16 +67,109 @@ import {
   SQUARE_BOOST_REWARD_POINTS,
   SQUARE_DAILY_BOOST_LIMIT,
   SQUARE_MIN_DISCOUNT_RATE,
-  SQUARE_SHARE_DISCOUNT_RATE,
   STORAGE_EXTENSION_COST,
   STUDENT_REVIEW_FEE,
 } from '~/shared/welfare-domain'
 import { isRichTextEmpty, richTextToPlainText } from '~/utils/rich-text'
 import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
-import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret, sha256Hex } from '../crypto'
+import { base64UrlDecode, base64UrlEncode, sha256Hex } from '../crypto'
 import { dispatchWelfareStateChangeNotifications } from '../notifications'
-import { appendPointTransaction, backfillPointTransactionsFromState, ensurePointTransactionSchema, pointTransactionId, syncUserPointBalancesFromLedger } from '../points'
+import { appendPointTransaction, ensurePointTransactionSchema, pointTransactionId, syncUserPointBalancesFromLedger } from '../points'
 import { authenticatedUserId, createSessionCookie } from '../session'
+import {
+  aggregateResourceApplicationStatusForReview,
+  assertCanAnswerApplication,
+  assertCanCompleteApplication,
+  assertCanRejectApplication,
+  assertCanRequestApplicationSupplement,
+  transitionApplicationAnswered,
+  transitionApplicationCompleted,
+  transitionApplicationRejected,
+  transitionApplicationSupplementRequested,
+} from './application-state-machine'
+import {
+  adminApplication,
+  appendWorkerApplicationMessage,
+  assertApplicationPolicyForState,
+  assertCanCreateRequestForState,
+  assertResourceTypeCanApplyForState,
+  attachmentsFromPayload,
+  buildResourceDescription,
+  buildResourceTermsAcceptances,
+  ensureApplications,
+  manualProvisionNote,
+  normalizeManualProvisionPayload,
+  pushApplicationMessage,
+  rejectionFeeWaiverBlockedUntilForState,
+  sanitizeResourceLifecycleAction,
+  stateApplications,
+  totalAttachmentBytes,
+  totalResourceApplicationAttachmentBytes,
+} from './applications'
+import { getPool, shouldUseD1 } from './connection'
+import {
+  createCouponCodeValue,
+  createDailyCoupon,
+  createUserCouponFromRule,
+  DEFAULT_COUPON_TTL_DAYS,
+  ensureCoupons,
+  normalizeWorkerCouponRule,
+  resourceCheckoutSnapshotForState,
+  squareDiscountSnapshot,
+} from './coupons'
+import { parseOffsetParam, parsePositiveIntegerParam, parseStatusParam } from './query'
+import { isRecord } from './records'
+import { isMaskedSecret, maskSecret } from './secrets'
+import { buildResourceSquarePost, ensureSquareBoosts, ensureSquarePosts, ensureSquareReports } from './square'
+import {
+  readAdminApplicationSnapshots,
+  readCurrentUserApplicationSnapshots,
+  readCurrentUserCouponSnapshots,
+  readWelfareState,
+  readWelfareStateRecord,
+  StateVersionConflictError,
+  stateVersionPayload,
+  writeWelfareState,
+  writeWelfareStateWithAtomicPointTransactions,
+} from './state-store'
+import {
+  adminTargetUser,
+  clientVisibleWelfareState,
+  ensureCollaborationApplications,
+  ensureDailyCheckIns,
+  ensureInvitationBindings,
+  publicBootstrapPayload,
+  publicBootstrapState,
+  sanitizeOwnedApplications,
+  sanitizeUser,
+  stateUsers,
+  userVisibleFromIds,
+} from './users'
+import {
+  appendWorkerStudentSupplementNotes,
+  assertEducationEmail,
+  assertVerifiedEducationEmailChallengeForState,
+  ensureStudentVerifications,
+  latestEducationEmailChallengeForState,
+  markWorkerEducationEmailVerified,
+  normalizeClientRequestId,
+  normalizeStudentEmail,
+  normalizeVerificationType,
+  positiveStudentReviewFee,
+  studentVerificationIdForRequest,
+  syncStudentVerifiedProfiles,
+  verificationTypeLabel,
+} from './verifications'
+
+export { allowUnstableNormalizedReads, getPool, shouldUseD1 } from './connection'
+export { isRecord } from './records'
+export {
+  readWelfareState,
+  readWelfareStateRecord,
+  StateVersionConflictError,
+  writeWelfareState,
+} from './state-store'
+export { sanitizeUser } from './users'
 
 export interface WorkerEnv {
   LOCAL_DB?: D1Database
@@ -110,677 +183,27 @@ export interface WorkerEnv {
   WEBHOOK_SECRET?: string
   ASYNC_JOBS?: Queue<unknown>
   USE_NORMALIZED_TABLES?: string // 'true' = 从规范化表读取
+  ALLOW_UNSTABLE_NORMALIZED_READS?: string // 'true' = 仅本地允许试验性规范化表读取
   ENABLE_TEMP_ADMIN_ENDPOINTS?: string // 'true' = 启用临时迁移/调试端点
+  ENABLE_LEGACY_STATE_WRITE?: string // 'true' = 临时允许 /api/welfare-state 全量写入
 }
 
-const STATE_KEY = 'default'
-const INITIAL_STATE_VERSION = 1
 const MAX_BODY_BYTES = 2 * 1024 * 1024
-const MASKED_SECRET_MARKER = '****'
 const ADMIN_LOGIN_MAX_FAILURES = 8
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000
 const PASSWORD_PBKDF2_ITERATIONS = 100000
-const POSTGRES_CONNECTION_TIMEOUT_MS = 15000
-const POSTGRES_QUERY_TIMEOUT_MS = 20000
-const POSTGRES_POOL_MAX = 20
-const POSTGRES_POOL_MIN = 2
-const POSTGRES_IDLE_TIMEOUT_MS = 30000
-const POSTGRES_PERF_LOG_THRESHOLD_MS = 500
-const POSTGRES_SNAPSHOT_BATCH_SIZE = 200
-
-type PointBalanceSyncMode = false | 'current-user' | 'all'
-
-interface ReadWelfareStateOptions {
-  syncPointBalances?: PointBalanceSyncMode
-  currentUserId?: string
-}
-
-interface WelfareStateRecord {
-  state: unknown
-  version: number
-}
-
-interface WriteWelfareStateOptions {
-  expectedVersion?: number
-  previousState?: unknown
-}
-
-type AtomicPointTransaction = Required<Pick<CreditTransaction, 'id' | 'userId' | 'delta' | 'type' | 'reason' | 'balanceAfter' | 'createdAt'>> & Pick<CreditTransaction, 'refId'>
-
-export class StateVersionConflictError extends Error {
-  constructor() {
-    super('业务状态已被其他请求更新，请刷新后重试')
-    this.name = 'StateVersionConflictError'
-  }
-}
-
-let pool: Pool | undefined
-let poolKey = ''
-let postgresSchemaKey = ''
-let postgresSchemaPromise: Promise<void> | undefined
-const d1SchemaPromises = new WeakMap<D1Database, Promise<void>>()
 const adminLoginAttempts = new Map<string, { failures: number, firstFailureAt: number, lockedUntil: number }>()
-
-interface EncryptedWelfareStateEnvelope {
-  __encrypted: true
-  payload: string
-  encryptedAt: string
-}
-
-function getConnectionString(env: WorkerEnv) {
-  return env.HYPERDRIVE?.connectionString
-}
-
-function stateEncryptionSecret(env: WorkerEnv) {
-  return env.WELFARE_STATE_SECRET_KEY?.trim() || env.NOTIFY_SECRET_KEY?.trim() || ''
-}
-
-function logWelfarePerf(label: string, startedAt: number, details = '') {
-  const duration = Date.now() - startedAt
-
-  // ✅ Phase 0: 记录所有操作以识别瓶颈
-  if (duration >= 1000) {
-    // 超过 1 秒：严重慢操作
-    console.error(`[welfare:perf:SLOW] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
-  }
-  else if (duration >= POSTGRES_PERF_LOG_THRESHOLD_MS) {
-    // 超过 500ms：警告级别
-    console.warn(`[welfare:perf:WARN] ${label} ${duration}ms${details ? ` ${details}` : ''}`)
-  }
-  return duration
-}
-
-function isEncryptedWelfareStateEnvelope(value: unknown): value is EncryptedWelfareStateEnvelope {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && (value as Record<string, unknown>).__encrypted === true
-    && typeof (value as Record<string, unknown>).payload === 'string'
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function maskSecret(value: unknown) {
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (!text)
-    return ''
-  if (text.length <= 8)
-    return MASKED_SECRET_MARKER
-  return `${text.slice(0, 4)}${MASKED_SECRET_MARKER}${text.slice(-4)}`
-}
-
-function isMaskedSecret(value: unknown) {
-  return typeof value === 'string' && value.includes(MASKED_SECRET_MARKER)
-}
-
-export function sanitizeUser(user: User): User {
-  const { passwordHash: _passwordHash, ...visibleUser } = user
-  return visibleUser
-}
-
-function publicUser(user: User): User {
-  return {
-    id: user.id,
-    role: user.role === 'admin' ? 'admin' : 'user',
-    profile: {
-      displayName: user.profile.displayName,
-      email: '',
-      avatar: user.profile.avatar,
-      githubUsername: user.profile.githubUsername,
-      githubAuthorized: !!user.profile.githubAuthorized,
-      studentVerified: !!user.profile.studentVerified,
-    },
-    points: 0,
-    accountStatus: 'active',
-    createdAt: user.createdAt,
-    lastLoginAt: '',
-  }
-}
-
-function userVisibleFromIds(users: User[], userIds: Iterable<string>, currentUserId: string) {
-  const visibleIds = new Set(userIds)
-  visibleIds.add(currentUserId)
-  return users
-    .filter(user => visibleIds.has(user.id))
-    .map(user => user.id === currentUserId ? sanitizeUser(user) : publicUser(user))
-}
-
-function publicApplicationForReview(application: WelfareApplication): WelfareApplication {
-  return {
-    id: application.id,
-    userId: application.userId,
-    type: application.type,
-    title: application.title,
-    description: '',
-    githubRepo: application.githubRepo ? '已关联开源仓库' : undefined,
-    hasOpenSourceBadge: application.hasOpenSourceBadge,
-    attachments: [],
-    status: application.status,
-    cost: 0,
-    costCharged: false,
-    aiReview: application.aiReview
-      ? {
-          status: application.aiReview.status,
-          summary: application.aiReview.summary,
-          risk: application.aiReview.risk,
-          reviewedAt: application.aiReview.reviewedAt,
-        }
-      : undefined,
-    aiReviewFeeRate: application.aiReviewFeeRate,
-    rejectionReviewFee: 0,
-    rejectionReviewFeeWaived: false,
-    storageExtended: false,
-    storageExtensionCost: 0,
-    retentionExpiresAt: application.retentionExpiresAt,
-    createdAt: application.createdAt,
-  }
-}
-
-function publicApplicationForDelivery(application: WelfareApplication, currentUserId: string): WelfareApplication {
-  const claimedByCurrentUser = application.deliveryAssigneeId === currentUserId
-  return {
-    ...publicApplicationForReview(application),
-    type: application.type,
-    status: application.status,
-    cost: application.cost,
-    answer: claimedByCurrentUser ? application.answer : undefined,
-    messages: claimedByCurrentUser
-      ? application.messages?.filter(item => item.type === 'system' || item.type === 'result_submission') ?? []
-      : [],
-    deliveryAssigneeId: application.deliveryAssigneeId,
-    deliveryClaimedAt: application.deliveryClaimedAt,
-    deliverySubmittedAt: application.deliverySubmittedAt,
-    deliveryReviewStatus: application.deliveryReviewStatus,
-    deliveryRewardPoints: application.deliveryRewardPoints,
-  }
-}
-
-function publicSquareApplication(application: WelfareApplication): WelfareApplication {
-  return {
-    id: application.id,
-    userId: application.userId,
-    type: application.type,
-    title: application.title,
-    description: '',
-    hasOpenSourceBadge: application.hasOpenSourceBadge,
-    attachments: [],
-    status: application.status,
-    cost: application.cost,
-    costCharged: false,
-    aiReviewFeeRate: application.aiReviewFeeRate,
-    rejectionReviewFee: 0,
-    rejectionReviewFeeWaived: false,
-    storageExtended: false,
-    storageExtensionCost: 0,
-    retentionExpiresAt: application.retentionExpiresAt,
-    createdAt: application.createdAt,
-    reviewedAt: application.reviewedAt,
-    completedAt: application.completedAt,
-  }
-}
-
-function sanitizeApplicationItemForPublicTemplate(item: Partial<ApplicationItem> & Pick<ApplicationItem, 'resourceType' | 'resourceSubtype' | 'payload'>): ApplicationItem {
-  const createdAt = item.createdAt || new Date().toISOString()
-  return {
-    id: item.id || '',
-    applicationId: item.applicationId || '',
-    resourceType: item.resourceType,
-    resourceSubtype: item.resourceSubtype,
-    payload: item.payload,
-    requestedQuota: item.requestedQuota,
-    requestedPermission: item.requestedPermission,
-    duration: item.duration,
-    approverGroup: item.approverGroup || '管理员',
-    approvalStatus: 'pending',
-    provisionStatus: 'not_required',
-    createdAt,
-    updatedAt: item.updatedAt || createdAt,
-  }
-}
-
-function sanitizePublicSquarePost(post: SquarePost): SquarePost {
-  return {
-    id: post.id,
-    userId: post.userId,
-    type: post.type,
-    title: post.title,
-    content: post.content,
-    applicationId: post.applicationId,
-    requestType: post.requestType,
-    template: post.template
-      ? {
-          type: post.template.type,
-          title: post.template.title,
-          description: post.template.description,
-          githubRepo: post.template.githubRepo,
-          extendStorage: post.template.extendStorage,
-          expediteProcessing: post.template.expediteProcessing,
-          selectedResourceTypes: post.template.selectedResourceTypes,
-          resourceItems: post.template.resourceItems?.map(sanitizeApplicationItemForPublicTemplate),
-          reason: post.template.reason,
-          businessBackground: post.template.businessBackground,
-          urgency: post.template.urgency,
-          expectedEffectiveAt: post.template.expectedEffectiveAt,
-          duration: post.template.duration,
-          acceptedTermIds: post.template.acceptedTermIds,
-        }
-      : undefined,
-    penaltyCount: post.penaltyCount,
-    lastPenaltyAt: post.lastPenaltyAt,
-    createdAt: post.createdAt,
-    updatedAt: post.updatedAt,
-  }
-}
-
-function sanitizePublicSquareBoost(boost: SquareBoost): SquareBoost {
-  return {
-    id: boost.id,
-    postId: boost.postId,
-    userId: boost.userId,
-    mode: boost.mode,
-    declaration: boost.declaration,
-    pointsGranted: boost.pointsGranted,
-    createdAt: boost.createdAt,
-    reportedAt: boost.reportedAt,
-  }
-}
-
-function sanitizeOwnedApplications(applications: WelfareApplication[], currentUserId: string) {
-  return applications.filter(item => item.userId === currentUserId)
-}
-
-function sanitizeReviewerApplications(applications: WelfareApplication[], currentUserId: string) {
-  return applications
-    .filter(item => item.type === 'pro' && item.userId !== currentUserId && ['pending_review', 'needs_supplement', 'processing'].includes(item.status))
-    .map(publicApplicationForReview)
-}
-
-function sanitizeDeliveryApplications(applications: WelfareApplication[], currentUserId: string) {
-  return applications
-    .filter(item =>
-      ['code', 'pro'].includes(item.type)
-      && item.userId !== currentUserId
-      && ['answered', 'pending_allocation', 'delivered'].includes(item.status)
-      && !item.deliveryRewardedAt
-      && (!item.deliveryAssigneeId || item.deliveryAssigneeId === currentUserId),
-    )
-    .map(item => publicApplicationForDelivery(item, currentUserId))
-}
-
-function clientVisibleWelfareStateForUser(state: Record<string, unknown>, currentUserId: string, currentUser: User) {
-  const users = Array.isArray(state.users) ? state.users.filter((item): item is User => isRecord(item) && typeof item.id === 'string') : []
-  const applications = Array.isArray(state.applications) ? state.applications.filter((item): item is WelfareApplication => isRecord(item) && typeof item.id === 'string') : []
-  const squarePosts = Array.isArray(state.squarePosts) ? state.squarePosts.filter((item): item is SquarePost => isRecord(item) && typeof item.id === 'string') : []
-  const squareBoosts = Array.isArray(state.squareBoosts) ? state.squareBoosts.filter((item): item is SquareBoost => isRecord(item) && typeof item.id === 'string') : []
-  const publicPostIds = new Set(squarePosts.map(item => item.id))
-  const publicApplicationIds = new Set(squarePosts.map(item => item.applicationId).filter((id): id is string => !!id))
-  const visibleApplications = [
-    ...sanitizeOwnedApplications(applications, currentUserId),
-    ...(currentUser.role === 'reviewer'
-      ? [
-          ...sanitizeReviewerApplications(applications, currentUserId),
-          ...sanitizeDeliveryApplications(applications, currentUserId),
-        ]
-      : []),
-    ...applications
-      .filter(item => publicApplicationIds.has(item.id) && item.userId !== currentUserId)
-      .map(publicSquareApplication),
-  ]
-  const applicationById = new Map<string, WelfareApplication>()
-  for (const application of visibleApplications)
-    applicationById.set(application.id, application)
-
-  const visibleSquareBoosts = squareBoosts
-    .filter(item => publicPostIds.has(item.postId))
-    .map(sanitizePublicSquareBoost)
-  const visibleUserIds = new Set<string>([
-    currentUserId,
-    ...squarePosts.map(item => item.userId),
-    ...visibleSquareBoosts.map(item => item.userId),
-    ...Array.from(applicationById.values()).map(item => item.userId),
-  ])
-  const invitationBindings = Array.isArray(state.invitationBindings)
-    ? state.invitationBindings.filter((item): item is InvitationBinding => isRecord(item) && (item.inviteeUserId === currentUserId || item.inviterUserId === currentUserId))
-    : []
-  for (const binding of invitationBindings) {
-    visibleUserIds.add(binding.inviterUserId)
-    visibleUserIds.add(binding.inviteeUserId)
-  }
-
-  return {
-    ...state,
-    currentUserId,
-    users: userVisibleFromIds(users, visibleUserIds, currentUserId),
-    applications: Array.from(applicationById.values()),
-    studentVerifications: Array.isArray(state.studentVerifications)
-      ? state.studentVerifications.filter((item): item is StudentVerification => isRecord(item) && item.userId === currentUserId)
-      : [],
-    educationEmailChallenges: Array.isArray(state.educationEmailChallenges)
-      ? state.educationEmailChallenges.filter((item): item is EducationEmailChallenge => isRecord(item) && item.userId === currentUserId)
-      : [],
-    coupons: Array.isArray(state.coupons) ? state.coupons.filter(item => isRecord(item) && item.userId === currentUserId) : [],
-    dailyCheckIns: Array.isArray(state.dailyCheckIns) ? state.dailyCheckIns.filter(item => isRecord(item) && item.userId === currentUserId) : [],
-    invitationBindings,
-    crowdReviews: Array.isArray(state.crowdReviews)
-      ? state.crowdReviews.filter((item): item is CrowdReview => isRecord(item) && item.reviewerId === currentUserId)
-      : [],
-    collaborationApplications: Array.isArray(state.collaborationApplications)
-      ? state.collaborationApplications.filter(item => isRecord(item) && item.userId === currentUserId)
-      : [],
-    squarePosts: squarePosts.map(sanitizePublicSquarePost),
-    squareBoosts: visibleSquareBoosts,
-    squareReports: Array.isArray(state.squareReports)
-      ? state.squareReports.filter((item): item is SquareReport => isRecord(item) && item.reporterId === currentUserId)
-      : [],
-    transactions: Array.isArray(state.transactions)
-      ? state.transactions.filter((item): item is CreditTransaction => isRecord(item) && item.userId === currentUserId)
-      : [],
-  }
-}
-
-function clientVisibleWelfareState(state: unknown, currentUserId = '') {
-  if (!isRecord(state))
-    return state
-
-  const users = Array.isArray(state.users) ? state.users : []
-  const currentUser = users.find(user => isRecord(user) && user.id === currentUserId)
-  const isAdmin = isRecord(currentUser) && currentUser.role === 'admin'
-
-  const applicationPolicy = isRecord(state.applicationPolicy)
-    ? {
-        ...state.applicationPolicy,
-        turnstileSecretKey: maskSecret(state.applicationPolicy.turnstileSecretKey),
-      }
-    : state.applicationPolicy
-
-  if (!isAdmin && isRecord(currentUser))
-    return clientVisibleWelfareStateForUser({ ...state, applicationPolicy }, currentUserId, currentUser as unknown as User)
-
-  return {
-    ...state,
-    currentUserId: currentUserId || undefined,
-    users: users.map(user => isRecord(user) ? sanitizeUser(user as unknown as User) : user),
-    studentVerifications: state.studentVerifications,
-    applicationPolicy,
-  }
-}
-
-function publicBootstrapState(state: unknown) {
-  const users = isRecord(state) && Array.isArray(state.users) ? state.users : []
-  const hasAdmin = users.some(user => isRecord(user) && user.role === 'admin')
-  return {
-    users: hasAdmin
-      ? [{
-          id: 'admin-present',
-          role: 'admin',
-          profile: {
-            displayName: '管理员',
-            email: '',
-            studentVerified: false,
-          },
-          points: 0,
-          accountStatus: 'active',
-          createdAt: '',
-          lastLoginAt: '',
-        }]
-      : [],
-    siteBanner: isRecord(state) ? state.siteBanner : undefined,
-    systemConfig: isRecord(state) ? state.systemConfig : undefined,
-    createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
-  }
-}
-
-function publicBootstrapPayload(state: unknown) {
-  const users = isRecord(state) && Array.isArray(state.users) ? state.users : []
-  const hasAdmin = users.some(user => isRecord(user) && user.role === 'admin')
-  return {
-    hasAdmin,
-    siteBanner: isRecord(state) ? state.siteBanner : undefined,
-    systemConfig: isRecord(state) ? state.systemConfig : undefined,
-    createdAt: isRecord(state) && typeof state.createdAt === 'string' ? state.createdAt : new Date().toISOString(),
-  }
-}
 
 export async function requestUserId(request: Request, env: WorkerEnv) {
   return await authenticatedUserId(request, env)
 }
 
-export async function canUpdateState(previousState: unknown, request: Request, env: WorkerEnv) {
-  if (!isRecord(previousState))
-    return false
-
+async function requireRequestUserId(request: Request, env: WorkerEnv) {
   const userId = await requestUserId(request, env)
   if (!userId)
-    return false
-
-  const users = Array.isArray(previousState.users) ? previousState.users : []
-  return users.some(item => isRecord(item) && item.id === userId && item.accountStatus !== 'suspended')
-}
-
-async function canUpdateSensitiveState(previousState: unknown, request: Request, env: WorkerEnv) {
-  if (!isRecord(previousState))
-    return false
-
-  const userId = await requestUserId(request, env)
-  if (!userId)
-    return false
-
-  const users = Array.isArray(previousState.users) ? previousState.users : []
-  const user = users.find(item => isRecord(item) && item.id === userId)
-  return isRecord(user) && user.role === 'admin'
-}
-
-export function isAdminUser(previousState: unknown, userId: string) {
-  if (!isRecord(previousState))
-    return false
-
-  const users = Array.isArray(previousState.users) ? previousState.users : []
-  const user = users.find(item => isRecord(item) && item.id === userId)
-  return isRecord(user) && user.role === 'admin'
-}
-
-function mergeScopedRecords(
-  previousValue: unknown,
-  nextValue: unknown,
-  predicate: (item: Record<string, unknown>) => boolean,
-) {
-  if (!Array.isArray(previousValue))
-    return []
-  if (!Array.isArray(nextValue))
-    return previousValue
-
-  const nextScopedRecords = nextValue.filter((item): item is Record<string, unknown> => isRecord(item) && predicate(item))
-  const nextById = new Map(nextScopedRecords
-    .filter(item => typeof item.id === 'string')
-    .map(item => [item.id as string, item]))
-  const previousIds = new Set<string>()
-  const merged = previousValue.map((previousItem) => {
-    if (!isRecord(previousItem) || typeof previousItem.id !== 'string' || !predicate(previousItem))
-      return previousItem
-
-    previousIds.add(previousItem.id)
-    return nextById.get(previousItem.id) ?? previousItem
-  })
-
-  for (const item of nextScopedRecords) {
-    if (typeof item.id === 'string' && previousIds.has(item.id))
-      continue
-    merged.push(item)
-  }
-
-  return merged
-}
-
-function mergeSquareBoostsForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
-  if (!Array.isArray(previousValue))
-    return []
-  if (!Array.isArray(nextValue))
-    return previousValue
-
-  const nextRecords = nextValue.filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.id === 'string')
-  const nextById = new Map(nextRecords.map(item => [item.id as string, item]))
-  const previousIds = new Set<string>()
-  const merged = previousValue.map((previousItem) => {
-    if (!isRecord(previousItem) || typeof previousItem.id !== 'string')
-      return previousItem
-
-    previousIds.add(previousItem.id)
-    const nextItem = nextById.get(previousItem.id)
-    if (!nextItem)
-      return previousItem
-    if (previousItem.userId === userId && nextItem.userId === userId)
-      return nextItem
-    if (nextItem.reportedBy === userId && typeof nextItem.reportedAt === 'string') {
-      return {
-        ...previousItem,
-        reportedAt: nextItem.reportedAt,
-        reportReason: typeof nextItem.reportReason === 'string' ? nextItem.reportReason : previousItem.reportReason,
-        reportedBy: userId,
-        cooldownUntil: typeof nextItem.cooldownUntil === 'string' ? nextItem.cooldownUntil : previousItem.cooldownUntil,
-        penaltyApplied: !!nextItem.penaltyApplied || !!previousItem.penaltyApplied,
-      }
-    }
-    return previousItem
-  })
-
-  for (const item of nextRecords) {
-    if (item.userId !== userId || previousIds.has(item.id as string))
-      continue
-    merged.push(item)
-  }
-
-  return merged
-}
-
-function mergeUsersForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
-  if (!Array.isArray(previousValue) || !Array.isArray(nextValue))
-    return previousValue
-
-  return previousValue.map((previousUser) => {
-    if (!isRecord(previousUser) || previousUser.id !== userId)
-      return previousUser
-
-    const nextUser = nextValue.find(item => isRecord(item) && item.id === userId)
-    if (!isRecord(nextUser) || !isRecord(nextUser.profile))
-      return previousUser
-
-    return {
-      ...previousUser,
-      profile: {
-        ...(isRecord(previousUser.profile) ? previousUser.profile : {}),
-        displayName: nextUser.profile.displayName,
-        email: nextUser.profile.email,
-        bio: nextUser.profile.bio,
-        selectedRepo: nextUser.profile.selectedRepo,
-      },
-    }
-  })
-}
-
-function mergeOwnedApplicationsForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
-  const merged = mergeScopedRecords(previousValue, nextValue, item => item.userId === userId)
-  if (!Array.isArray(merged) || !Array.isArray(previousValue))
-    return merged
-
-  const previousById = new Map(previousValue
-    .filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.id === 'string')
-    .map(item => [item.id as string, item]))
-
-  return merged.map((item) => {
-    if (!isRecord(item) || typeof item.id !== 'string')
-      return item
-
-    const previous = previousById.get(item.id)
-    if (!previous || previous.userId !== userId)
-      return item
-
-    return {
-      ...item,
-      userId: previous.userId,
-      type: previous.type,
-      status: previous.status,
-      baseCost: previous.baseCost,
-      cost: previous.cost,
-      costCharged: previous.costCharged,
-      rejectionReviewFee: previous.rejectionReviewFee,
-      rejectionReviewFeeWaived: previous.rejectionReviewFeeWaived,
-      rejectionFraudulent: previous.rejectionFraudulent,
-      answer: previous.answer,
-      reviewedAt: previous.reviewedAt,
-      completedAt: previous.completedAt,
-      aiReview: previous.aiReview,
-      storageExtensionCost: previous.storageExtensionCost,
-      expediteCost: previous.expediteCost,
-      deliveryAssigneeId: previous.deliveryAssigneeId,
-      deliveryClaimedAt: previous.deliveryClaimedAt,
-      deliverySubmittedAt: previous.deliverySubmittedAt,
-      deliveryReviewStatus: previous.deliveryReviewStatus,
-      deliveryRewardPoints: previous.deliveryRewardPoints,
-      deliveryRewardedAt: previous.deliveryRewardedAt,
-      deliveryRewardedBy: previous.deliveryRewardedBy,
-    }
-  })
-}
-
-function mergeStudentVerificationsForNonAdmin(previousValue: unknown, nextValue: unknown, userId: string) {
-  const merged = mergeScopedRecords(previousValue, nextValue, item => item.userId === userId)
-  if (!Array.isArray(merged) || !Array.isArray(previousValue))
-    return merged
-
-  const previousById = new Map(previousValue
-    .filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.id === 'string')
-    .map(item => [item.id as string, item]))
-
-  return merged.map((item) => {
-    if (!isRecord(item) || typeof item.id !== 'string')
-      return item
-
-    const previous = previousById.get(item.id)
-    if (!previous || previous.userId !== userId)
-      return item
-
-    const canSupplement = previous.status === 'needs_supplement' && item.status === 'pending'
-
-    return {
-      ...item,
-      userId: previous.userId,
-      status: canSupplement ? item.status : previous.status,
-      reviewFee: previous.reviewFee,
-      feeReturned: previous.feeReturned,
-      reply: canSupplement ? undefined : previous.reply,
-      reviewedAt: canSupplement ? undefined : previous.reviewedAt,
-      educationEmailVerified: canSupplement ? item.educationEmailVerified : previous.educationEmailVerified,
-      educationEmailVerifiedAt: canSupplement ? item.educationEmailVerifiedAt : previous.educationEmailVerifiedAt,
-      educationEmailVerificationSource: canSupplement ? item.educationEmailVerificationSource : previous.educationEmailVerificationSource,
-    }
-  })
-}
-
-async function mergeClientWritableState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {
-  const userId = await requestUserId(request, env)
-  if (!userId || isAdminUser(previousState, userId))
-    return nextState
-
-  const previousRecord = isRecord(previousState) ? previousState : {}
-  return {
-    ...previousRecord,
-    users: mergeUsersForNonAdmin(previousRecord.users, nextState.users, userId),
-    applications: mergeOwnedApplicationsForNonAdmin(previousRecord.applications, nextState.applications, userId),
-    studentVerifications: mergeStudentVerificationsForNonAdmin(previousRecord.studentVerifications, nextState.studentVerifications, userId),
-    educationEmailChallenges: mergeScopedRecords(previousRecord.educationEmailChallenges, nextState.educationEmailChallenges, item => item.userId === userId),
-    coupons: mergeScopedRecords(previousRecord.coupons, nextState.coupons, item => item.userId === userId),
-    dailyCheckIns: mergeScopedRecords(previousRecord.dailyCheckIns, nextState.dailyCheckIns, item => item.userId === userId),
-    invitationBindings: mergeScopedRecords(previousRecord.invitationBindings, nextState.invitationBindings, item => item.inviteeUserId === userId || item.inviterUserId === userId),
-    crowdReviews: mergeScopedRecords(previousRecord.crowdReviews, nextState.crowdReviews, item => item.reviewerId === userId),
-    collaborationApplications: previousRecord.collaborationApplications,
-    squarePosts: mergeScopedRecords(previousRecord.squarePosts, nextState.squarePosts, item => item.userId === userId),
-    squareBoosts: mergeSquareBoostsForNonAdmin(previousRecord.squareBoosts, nextState.squareBoosts, userId),
-    squareReports: mergeScopedRecords(previousRecord.squareReports, nextState.squareReports, item => item.reporterId === userId),
-    transactions: previousRecord.transactions,
-  } as unknown as T
+    throw new Error('请先登录')
+  return userId
 }
 
 function arrayRecords(value: unknown) {
@@ -1029,708 +452,6 @@ export async function applyTrustedPointTransactionsFromState(env: WorkerEnv, pre
   nextState.transactions = []
 }
 
-export async function mergeSensitiveWelfareState<T extends Record<string, unknown>>(previousState: unknown, nextState: T, request: Request, env: WorkerEnv): Promise<T> {
-  if (!isRecord(previousState) || !isRecord(nextState))
-    return nextState
-
-  const previousUsers = Array.isArray(previousState.users) ? previousState.users : []
-  const nextUsers = Array.isArray(nextState.users)
-    ? nextState.users.map((user) => {
-        if (!isRecord(user))
-          return user
-
-        const previousUser = previousUsers.find(item => isRecord(item) && item.id === user.id)
-        const previousPasswordHash = isRecord(previousUser) && typeof previousUser.passwordHash === 'string'
-          ? previousUser.passwordHash
-          : ''
-        if (!previousPasswordHash)
-          return user
-
-        return {
-          ...user,
-          passwordHash: previousPasswordHash,
-        }
-      })
-    : nextState.users
-
-  const previousPolicy = isRecord(previousState.applicationPolicy) ? previousState.applicationPolicy : {}
-  const nextPolicy = isRecord(nextState.applicationPolicy) ? nextState.applicationPolicy : previousPolicy
-  const previousTurnstileSecretKey = typeof previousPolicy.turnstileSecretKey === 'string'
-    ? previousPolicy.turnstileSecretKey.trim()
-    : ''
-  const nextTurnstileSecretKey = typeof nextPolicy.turnstileSecretKey === 'string'
-    ? nextPolicy.turnstileSecretKey.trim()
-    : ''
-
-  if (nextTurnstileSecretKey && !isMaskedSecret(nextTurnstileSecretKey) && await canUpdateSensitiveState(previousState, request, env)) {
-    return await mergeClientWritableState(previousState, {
-      ...nextState,
-      users: nextUsers,
-      applicationPolicy: nextPolicy,
-    }, request, env)
-  }
-
-  return await mergeClientWritableState(previousState, {
-    ...nextState,
-    users: nextUsers,
-    applicationPolicy: {
-      ...nextPolicy,
-      turnstileSecretKey: previousTurnstileSecretKey,
-    },
-  } as T, request, env)
-}
-
-async function decodeStoredState(env: WorkerEnv, storedState: unknown) {
-  if (!isEncryptedWelfareStateEnvelope(storedState))
-    return storedState
-
-  const secret = stateEncryptionSecret(env)
-  if (!secret)
-    throw new Error('WELFARE_STATE_SECRET_KEY 未配置，无法读取加密业务状态')
-
-  return JSON.parse(await decryptSecret(storedState.payload, secret))
-}
-
-async function encodeStoredState(env: WorkerEnv, state: unknown) {
-  const secret = stateEncryptionSecret(env)
-  if (!secret)
-    return state
-
-  return {
-    __encrypted: true,
-    payload: await encryptSecret(JSON.stringify(state), secret),
-    encryptedAt: new Date().toISOString(),
-  } satisfies EncryptedWelfareStateEnvelope
-}
-
-export function shouldUseD1(env: WorkerEnv) {
-  return !!env.LOCAL_DB && !env.HYPERDRIVE
-}
-
-export function getPool(env: WorkerEnv) {
-  const connectionString = getConnectionString(env)
-  if (!connectionString)
-    throw new Error('Hyperdrive binding is required')
-
-  if (!pool || poolKey !== connectionString) {
-    poolKey = connectionString
-    pool = new Pool({
-      connectionString,
-      max: POSTGRES_POOL_MAX,
-      min: POSTGRES_POOL_MIN,
-      idleTimeoutMillis: POSTGRES_IDLE_TIMEOUT_MS,
-      connectionTimeoutMillis: POSTGRES_CONNECTION_TIMEOUT_MS,
-      query_timeout: POSTGRES_QUERY_TIMEOUT_MS,
-      statement_timeout: POSTGRES_QUERY_TIMEOUT_MS,
-    })
-  }
-
-  return pool
-}
-
-async function runSchemaSetup(env: WorkerEnv) {
-  if (shouldUseD1(env)) {
-    await env.LOCAL_DB!
-      .prepare(`
-        create table if not exists welfare_app_state (
-          id text primary key,
-          state text not null,
-          updated_at text not null default current_timestamp,
-          version integer not null default 1,
-          mutation_id text
-        )
-      `)
-      .run()
-    try {
-      await env.LOCAL_DB!
-        .prepare('alter table welfare_app_state add column version integer not null default 1')
-        .run()
-    }
-    catch {
-      // Some D1 runtimes do not support ADD COLUMN IF NOT EXISTS; duplicate-column is harmless here.
-    }
-    try {
-      await env.LOCAL_DB!
-        .prepare('alter table welfare_app_state add column mutation_id text')
-        .run()
-    }
-    catch {
-      // Duplicate-column is harmless; this marker lets D1 point-ledger writes avoid comparing large state JSON blobs.
-    }
-    await ensureSnapshotSchema(env)
-    return
-  }
-
-  await getPool(env).query(`
-    create table if not exists welfare_app_state (
-      id text primary key,
-      state jsonb not null,
-      version integer not null default 1,
-      updated_at timestamptz not null default now(),
-      mutation_id text
-    )
-  `)
-  await getPool(env).query('alter table welfare_app_state add column if not exists version integer not null default 1')
-  await getPool(env).query('alter table welfare_app_state add column if not exists mutation_id text')
-  await ensureSnapshotSchema(env)
-}
-
-async function ensureSchema(env: WorkerEnv) {
-  if (shouldUseD1(env)) {
-    const db = env.LOCAL_DB!
-    const current = d1SchemaPromises.get(db)
-    if (current)
-      return current
-
-    const next = runSchemaSetup(env).catch((error) => {
-      if (d1SchemaPromises.get(db) === next)
-        d1SchemaPromises.delete(db)
-      throw error
-    })
-    d1SchemaPromises.set(db, next)
-    return next
-  }
-
-  const key = `pg:${env.HYPERDRIVE?.connectionString ?? ''}`
-  if (postgresSchemaPromise && postgresSchemaKey === key)
-    return postgresSchemaPromise
-
-  postgresSchemaKey = key
-  postgresSchemaPromise = runSchemaSetup(env).catch((error) => {
-    if (postgresSchemaKey === key)
-      postgresSchemaPromise = undefined
-    throw error
-  })
-  return postgresSchemaPromise
-}
-
-async function ensureSnapshotSchema(env: WorkerEnv) {
-  if (shouldUseD1(env)) {
-    await env.LOCAL_DB!
-      .prepare(`
-        create table if not exists welfare_applications (
-          id text primary key,
-          user_id text not null,
-          type text not null,
-          status text not null,
-          title text not null,
-          payload text not null,
-          created_at text not null,
-          updated_at text not null default current_timestamp
-        )
-      `)
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_status_created on welfare_applications (status, created_at asc, id asc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_user_status_created on welfare_applications (user_id, status, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare(`
-        create table if not exists user_coupons (
-          id text primary key,
-          user_id text not null,
-          name text not null,
-          scope text,
-          discount_type text,
-          discount_rate real not null,
-          discount_amount integer,
-          payload text not null,
-          created_at text not null,
-          expires_at text,
-          used_at text
-        )
-      `)
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_user_coupons_user_created on user_coupons (user_id, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_user_coupons_user_used on user_coupons (user_id, used_at)')
-      .run()
-    return
-  }
-
-  await getPool(env).query(`
-    create table if not exists welfare_applications (
-      id text primary key,
-      user_id text not null,
-      type text not null,
-      status text not null,
-      title text not null,
-      payload text not null,
-      created_at text not null,
-      updated_at text not null default current_timestamp
-    )
-  `)
-  await getPool(env).query('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
-  await getPool(env).query('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
-  await getPool(env).query('create index if not exists idx_welfare_applications_status_created on welfare_applications (status, created_at asc, id asc)')
-  await getPool(env).query('create index if not exists idx_welfare_applications_user_status_created on welfare_applications (user_id, status, created_at desc, id desc)')
-  await getPool(env).query(`
-    create table if not exists user_coupons (
-      id text primary key,
-      user_id text not null,
-      name text not null,
-      scope text,
-      discount_type text,
-      discount_rate real not null,
-      discount_amount integer,
-      payload text not null,
-      created_at text not null,
-      expires_at text,
-      used_at text
-    )
-  `)
-  await getPool(env).query('create index if not exists idx_user_coupons_user_created on user_coupons (user_id, created_at desc, id desc)')
-  await getPool(env).query('create index if not exists idx_user_coupons_user_used on user_coupons (user_id, used_at)')
-}
-
-function normalizeStateVersion(value: unknown) {
-  const version = Math.trunc(Number(value))
-  return Number.isFinite(version) && version > 0 ? version : INITIAL_STATE_VERSION
-}
-
-export async function readWelfareStateRecord(env: WorkerEnv, options: ReadWelfareStateOptions = {}): Promise<WelfareStateRecord> {
-  const totalStartedAt = Date.now()
-  const schemaStartedAt = Date.now()
-  await ensureSchema(env)
-  logWelfarePerf('ensureSchema', schemaStartedAt)
-
-  const readStartedAt = Date.now()
-  const record = shouldUseD1(env)
-    ? await (async () => {
-        const row = await env.LOCAL_DB!
-          .prepare('select state, version from welfare_app_state where id = ?1')
-          .bind(STATE_KEY)
-          .first<{ state: string, version?: number }>()
-        return {
-          state: row?.state ? JSON.parse(row.state) : {},
-          version: normalizeStateVersion(row?.version),
-        }
-      })()
-    : await (async () => {
-        const row = (await getPool(env).query<{ state: unknown, version?: number }>(
-          'select state, version from welfare_app_state where id = $1',
-          [STATE_KEY],
-        )).rows[0]
-        return {
-          state: row?.state ?? {},
-          version: normalizeStateVersion(row?.version),
-        }
-      })()
-  logWelfarePerf('read state record', readStartedAt, shouldUseD1(env) ? 'store=d1' : 'store=postgres')
-
-  const decodeStartedAt = Date.now()
-  const state = await decodeStoredState(env, record.state) as Partial<WelfareState>
-  state.applicationPolicy = normalizeApplicationPolicy(state.applicationPolicy)
-  logWelfarePerf('decode state', decodeStartedAt)
-
-  if (options.syncPointBalances === 'all') {
-    const syncStartedAt = Date.now()
-    await syncUserPointBalancesFromLedger(env, state)
-    logWelfarePerf('sync point balances', syncStartedAt, 'scope=all')
-  }
-  else if (options.syncPointBalances === 'current-user' && options.currentUserId) {
-    const syncStartedAt = Date.now()
-    await syncUserPointBalancesFromLedger(env, state, [options.currentUserId])
-    logWelfarePerf('sync point balances', syncStartedAt, 'scope=current-user')
-  }
-
-  const retentionStartedAt = Date.now()
-  const retainedState = syncStudentVerifiedProfiles(applyWelfareRetentionPolicy(state).state)
-  logWelfarePerf('apply retention policy', retentionStartedAt)
-  logWelfarePerf('readWelfareStateRecord total', totalStartedAt, `sync=${options.syncPointBalances || false}`)
-  return {
-    state: retainedState,
-    version: record.version,
-  }
-}
-
-export async function readWelfareState(env: WorkerEnv, options: ReadWelfareStateOptions = {}) {
-  // 🚀 新特性：从规范化表读取（通过环境变量控制）
-  if (env.USE_NORMALIZED_TABLES === 'true') {
-    const { readWelfareStateFromTables } = await import('./hybrid-read')
-    const state = await readWelfareStateFromTables(env) as unknown as Partial<WelfareState>
-    state.applicationPolicy = normalizeApplicationPolicy(state.applicationPolicy)
-    return syncStudentVerifiedProfiles(state)
-  }
-
-  return (await readWelfareStateRecord(env, options)).state
-}
-
-async function currentStateVersion(env: WorkerEnv) {
-  await ensureSchema(env)
-  if (shouldUseD1(env)) {
-    const row = await env.LOCAL_DB!
-      .prepare('select version from welfare_app_state where id = ?1')
-      .bind(STATE_KEY)
-      .first<{ version?: number }>()
-    return row ? normalizeStateVersion(row.version) : undefined
-  }
-
-  const row = (await getPool(env).query<{ version?: number }>(
-    'select version from welfare_app_state where id = $1',
-    [STATE_KEY],
-  )).rows[0]
-  return row ? normalizeStateVersion(row.version) : undefined
-}
-
-async function assertExpectedStateVersion(env: WorkerEnv, expectedVersion?: number) {
-  if (expectedVersion === undefined)
-    return
-
-  const currentVersion = await currentStateVersion(env)
-  if (currentVersion !== undefined && currentVersion !== expectedVersion)
-    throw new StateVersionConflictError()
-}
-
-function applicationSnapshotUpdatedAt(application: WelfareApplication) {
-  return application.completedAt
-    || application.reviewedAt
-    || application.submittedAt
-    || application.deliveryRewardedAt
-    || application.deliverySubmittedAt
-    || application.deliveryClaimedAt
-    || application.createdAt
-    || now()
-}
-
-function couponSnapshotDiscountRate(coupon: UserCoupon) {
-  const rate = Number(coupon.discountRate ?? 1)
-  return Number.isFinite(rate) ? rate : 1
-}
-
-function applicationSnapshotValues(application: WelfareApplication) {
-  return [
-    application.id,
-    application.userId,
-    application.type,
-    application.status,
-    application.title || '未命名申请',
-    JSON.stringify(application),
-    application.createdAt || now(),
-    applicationSnapshotUpdatedAt(application),
-  ]
-}
-
-function couponSnapshotValues(coupon: UserCoupon) {
-  return [
-    coupon.id,
-    coupon.userId,
-    coupon.name || '未命名优惠券',
-    coupon.scope ?? null,
-    coupon.discountType ?? 'rate',
-    couponSnapshotDiscountRate(coupon),
-    coupon.discountAmount ?? null,
-    JSON.stringify(coupon),
-    coupon.createdAt || now(),
-    coupon.expiresAt ?? null,
-    coupon.usedAt ?? null,
-  ]
-}
-
-async function runD1Statements(env: WorkerEnv, statements: Array<ReturnType<D1Database['prepare']>>) {
-  if (!statements.length)
-    return
-
-  const localDb = env.LOCAL_DB! as D1Database & {
-    batch?: (items: Array<ReturnType<D1Database['prepare']>>) => Promise<unknown[]>
-  }
-  if (typeof localDb.batch === 'function') {
-    await localDb.batch(statements)
-    return
-  }
-
-  for (const statement of statements)
-    await statement.run()
-}
-
-function postgresValuesPlaceholders(rowCount: number, columnCount: number) {
-  return Array.from({ length: rowCount }, (_, rowIndex) => {
-    const offset = rowIndex * columnCount
-    return `(${Array.from({ length: columnCount }, (__, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`
-  }).join(', ')
-}
-
-function chunks<T>(items: T[], size: number) {
-  const result: T[][] = []
-  for (let index = 0; index < items.length; index += size)
-    result.push(items.slice(index, index + size))
-  return result
-}
-
-async function syncD1StateSnapshots(env: WorkerEnv, applications: WelfareApplication[], coupons: UserCoupon[], deletedApplicationIds: string[], deletedCouponIds: string[]) {
-  const localDb = env.LOCAL_DB!
-  await runD1Statements(env, [
-    ...applications.map(application => localDb
-      .prepare(`
-        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-        on conflict (id)
-        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
-      `)
-      .bind(...applicationSnapshotValues(application))),
-    ...coupons.map(coupon => localDb
-      .prepare(`
-        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-        on conflict (id)
-        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
-      `)
-      .bind(...couponSnapshotValues(coupon))),
-    ...deletedApplicationIds.map(id => localDb
-      .prepare('delete from welfare_applications where id = ?1')
-      .bind(id)),
-    ...deletedCouponIds.map(id => localDb
-      .prepare('delete from user_coupons where id = ?1')
-      .bind(id)),
-  ])
-}
-
-async function syncPostgresStateSnapshots(env: WorkerEnv, applications: WelfareApplication[], coupons: UserCoupon[], deletedApplicationIds: string[], deletedCouponIds: string[]) {
-  const pool = getPool(env)
-  if (deletedApplicationIds.length)
-    await pool.query('delete from welfare_applications where id = any($1)', [deletedApplicationIds])
-  if (deletedCouponIds.length)
-    await pool.query('delete from user_coupons where id = any($1)', [deletedCouponIds])
-
-  for (const batch of chunks(applications, POSTGRES_SNAPSHOT_BATCH_SIZE)) {
-    const values = batch.flatMap(applicationSnapshotValues)
-    await pool.query(
-      `
-        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
-        values ${postgresValuesPlaceholders(batch.length, 8)}
-        on conflict (id)
-        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
-      `,
-      values,
-    )
-  }
-  for (const batch of chunks(coupons, POSTGRES_SNAPSHOT_BATCH_SIZE)) {
-    const values = batch.flatMap(couponSnapshotValues)
-    await pool.query(
-      `
-        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
-        values ${postgresValuesPlaceholders(batch.length, 11)}
-        on conflict (id)
-        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
-      `,
-      values,
-    )
-  }
-}
-
-function snapshotItems<T extends { id: string }>(state: unknown, key: 'applications' | 'coupons') {
-  return isRecord(state) && Array.isArray(state[key])
-    ? state[key].filter((item): item is T => isRecord(item) && typeof item.id === 'string')
-    : []
-}
-
-function changedSnapshotItems<T extends { id: string }>(previousState: unknown, nextItems: T[], key: 'applications' | 'coupons') {
-  if (!isRecord(previousState))
-    return nextItems
-
-  const previousItems = snapshotItems<T>(previousState, key)
-  const previousPayloadById = new Map(previousItems.map(item => [item.id, JSON.stringify(item)]))
-  return nextItems.filter(item => previousPayloadById.get(item.id) !== JSON.stringify(item))
-}
-
-function deletedSnapshotIds<T extends { id: string }>(previousState: unknown, nextItems: T[], key: 'applications' | 'coupons') {
-  if (!isRecord(previousState))
-    return []
-
-  const nextIds = new Set(nextItems.map(item => item.id))
-  return snapshotItems<T>(previousState, key)
-    .filter(item => !nextIds.has(item.id))
-    .map(item => item.id)
-}
-
-async function syncStateSnapshots(env: WorkerEnv, state: unknown, previousState?: unknown) {
-  if (!isRecord(state))
-    return
-
-  const allApplications = snapshotItems<WelfareApplication>(state, 'applications')
-  const allCoupons = snapshotItems<UserCoupon>(state, 'coupons')
-  const applications = previousState === undefined ? allApplications : changedSnapshotItems(previousState, allApplications, 'applications')
-  const coupons = previousState === undefined ? allCoupons : changedSnapshotItems(previousState, allCoupons, 'coupons')
-  const deletedApplicationIds = previousState === undefined ? [] : deletedSnapshotIds(previousState, allApplications, 'applications')
-  const deletedCouponIds = previousState === undefined ? [] : deletedSnapshotIds(previousState, allCoupons, 'coupons')
-  if (!applications.length && !coupons.length && !deletedApplicationIds.length && !deletedCouponIds.length)
-    return
-
-  if (shouldUseD1(env)) {
-    await syncD1StateSnapshots(env, applications, coupons, deletedApplicationIds, deletedCouponIds)
-    return
-  }
-
-  await syncPostgresStateSnapshots(env, applications, coupons, deletedApplicationIds, deletedCouponIds)
-}
-
-export async function writeWelfareState(env: WorkerEnv, state: unknown, options: WriteWelfareStateOptions = {}) {
-  await ensureSchema(env)
-  await assertExpectedStateVersion(env, options.expectedVersion)
-  await backfillPointTransactionsFromState(env, state)
-  const storedState = await encodeStoredState(env, state)
-  const nextVersion = options.expectedVersion !== undefined
-    ? options.expectedVersion + 1
-    : (await currentStateVersion(env) ?? 0) + 1
-  const mutationId = createId('mut')
-
-  if (shouldUseD1(env)) {
-    if (options.expectedVersion !== undefined) {
-      const result = await env.LOCAL_DB!
-        .prepare(`
-          update welfare_app_state
-          set state = ?2, updated_at = current_timestamp, version = ?3, mutation_id = ?5
-          where id = ?1 and version = ?4
-        `)
-        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, options.expectedVersion, mutationId)
-        .run() as { meta?: { changes?: number } }
-      if (!result.meta?.changes)
-        throw new StateVersionConflictError()
-    }
-    else {
-      await env.LOCAL_DB!
-        .prepare(`
-          insert into welfare_app_state (id, state, updated_at, version, mutation_id)
-          values (?1, ?2, current_timestamp, ?3, ?4)
-          on conflict (id)
-          do update set state = excluded.state, updated_at = current_timestamp, version = excluded.version, mutation_id = excluded.mutation_id
-        `)
-        .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, mutationId)
-        .run()
-    }
-    await syncStateSnapshots(env, state, options.previousState)
-    return nextVersion
-  }
-
-  if (options.expectedVersion !== undefined) {
-    const result = await getPool(env).query<{ version: number }>(
-      `
-        update welfare_app_state
-        set state = $2::jsonb, updated_at = now(), version = version + 1, mutation_id = $4
-        where id = $1 and version = $3
-        returning version
-      `,
-      [STATE_KEY, JSON.stringify(storedState), options.expectedVersion, mutationId],
-    )
-    const version = result.rows[0]?.version
-    if (!version)
-      throw new StateVersionConflictError()
-    await syncStateSnapshots(env, state, options.previousState)
-    return normalizeStateVersion(version)
-  }
-
-  await getPool(env).query(
-    `
-      insert into welfare_app_state (id, state, updated_at, version, mutation_id)
-      values ($1, $2::jsonb, now(), $3, $4)
-      on conflict (id)
-      do update set state = excluded.state, updated_at = now(), version = excluded.version, mutation_id = excluded.mutation_id
-    `,
-    [STATE_KEY, JSON.stringify(storedState), nextVersion, mutationId],
-  )
-  await syncStateSnapshots(env, state, options.previousState)
-  return nextVersion
-}
-
-function sanitizeTransientStateTransactions(state: unknown) {
-  if (isRecord(state) && Array.isArray(state.transactions))
-    state.transactions = []
-}
-
-async function writeWelfareStateWithAtomicPointTransactions(
-  env: WorkerEnv,
-  state: unknown,
-  pointTransactions: AtomicPointTransaction[],
-  options: { expectedVersion: number, previousState?: unknown },
-) {
-  await ensureSchema(env)
-  await ensurePointTransactionSchema(env)
-  await assertExpectedStateVersion(env, options.expectedVersion)
-  sanitizeTransientStateTransactions(state)
-  const storedState = await encodeStoredState(env, state)
-  const storedStateJson = JSON.stringify(storedState)
-  const nextVersion = options.expectedVersion + 1
-  const mutationId = createId('mut')
-
-  if (shouldUseD1(env)) {
-    const localDb = env.LOCAL_DB! as D1Database & {
-      batch: (statements: Array<ReturnType<D1Database['prepare']>>) => Promise<Array<{ meta?: { changes?: number } }>>
-    }
-    const statements = [
-      localDb
-        .prepare(`
-          update welfare_app_state
-          set state = ?2, updated_at = current_timestamp, version = ?3, mutation_id = ?5
-          where id = ?1 and version = ?4
-        `)
-        .bind(STATE_KEY, storedStateJson, nextVersion, options.expectedVersion, mutationId),
-      ...pointTransactions.map(tx =>
-        localDb
-          .prepare(`
-            insert into point_transactions (id, user_id, delta, type, reason, ref_id, balance_after, created_at)
-            select ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-            where exists (select 1 from welfare_app_state where id = ?9 and version = ?10 and mutation_id = ?11)
-            on conflict (id) do nothing
-          `)
-          .bind(tx.id, tx.userId, tx.delta, tx.type, tx.reason, tx.refId || null, tx.balanceAfter, tx.createdAt, STATE_KEY, nextVersion, mutationId),
-      ),
-    ]
-    const results = await localDb.batch(statements)
-    if (!results[0]?.meta?.changes)
-      throw new StateVersionConflictError()
-    await syncStateSnapshots(env, state, options.previousState)
-    return nextVersion
-  }
-
-  const client = await getPool(env).connect()
-  try {
-    await client.query('begin')
-    const result = await client.query<{ version: number }>(
-      `
-        update welfare_app_state
-        set state = $2::jsonb, updated_at = now(), version = version + 1, mutation_id = $4
-        where id = $1 and version = $3
-        returning version
-      `,
-      [STATE_KEY, storedStateJson, options.expectedVersion, mutationId],
-    )
-    const version = result.rows[0]?.version
-    if (!version) {
-      await client.query('rollback')
-      throw new StateVersionConflictError()
-    }
-
-    for (const tx of pointTransactions) {
-      await client.query(`
-        insert into point_transactions (id, user_id, delta, type, reason, ref_id, balance_after, created_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
-        on conflict (id) do nothing
-      `, [tx.id, tx.userId, tx.delta, tx.type, tx.reason, tx.refId || null, tx.balanceAfter, tx.createdAt])
-    }
-
-    await client.query('commit')
-    await syncStateSnapshots(env, state, options.previousState)
-    return normalizeStateVersion(version)
-  }
-  catch (error) {
-    await client.query('rollback').catch(() => undefined)
-    throw error
-  }
-  finally {
-    client.release()
-  }
-}
-
 export function json(payload: unknown, status = 200, headers?: HeadersInit) {
   return Response.json(payload, {
     status,
@@ -1757,48 +478,6 @@ export function errorResponse(error: unknown) {
   return json({
     error: message,
   }, message === '请先登录' ? 401 : 500)
-}
-
-export function assertStateShape(state: unknown): asserts state is Record<string, unknown> {
-  if (!state || typeof state !== 'object' || Array.isArray(state))
-    throw new Error('state must be an object')
-
-  const record = state as Record<string, unknown>
-  for (const key of ['users', 'applications', 'studentVerifications', 'educationEmailChallenges', 'crowdReviews', 'collaborationApplications', 'squarePosts', 'squareBoosts', 'squareReports', 'transactions']) {
-    if (record[key] !== undefined && !Array.isArray(record[key]))
-      throw new Error(`${key} must be an array`)
-  }
-
-  if (record.oauth !== undefined && (!record.oauth || typeof record.oauth !== 'object' || Array.isArray(record.oauth)))
-    throw new Error('oauth must be an object')
-}
-
-export function outOfScopeRecordLabel(state: Record<string, unknown>, userId: string) {
-  const scopedCollections: Array<{
-    key: string
-    label: string
-    belongsToUser: (item: Record<string, unknown>) => boolean
-  }> = [
-    { key: 'studentVerifications', label: '认证申请数据', belongsToUser: item => item.userId === userId },
-    { key: 'educationEmailChallenges', label: '教育邮箱认证数据', belongsToUser: item => item.userId === userId },
-    { key: 'coupons', label: '优惠券数据', belongsToUser: item => item.userId === userId },
-    { key: 'dailyCheckIns', label: '签到数据', belongsToUser: item => item.userId === userId },
-    { key: 'invitationBindings', label: '邀请绑定数据', belongsToUser: item => item.inviteeUserId === userId || item.inviterUserId === userId },
-    { key: 'crowdReviews', label: '协作建议数据', belongsToUser: item => item.reviewerId === userId },
-    { key: 'collaborationApplications', label: '协作申请数据', belongsToUser: item => item.userId === userId },
-    { key: 'squareReports', label: '广场举报数据', belongsToUser: item => item.reporterId === userId },
-    { key: 'transactions', label: '积分流水数据', belongsToUser: item => item.userId === userId },
-  ]
-
-  for (const collection of scopedCollections) {
-    const value = state[collection.key]
-    if (!Array.isArray(value))
-      continue
-    if (value.some(item => isRecord(item) && !collection.belongsToUser(item)))
-      return collection.label
-  }
-
-  return ''
 }
 
 export async function readPayload(request: Request) {
@@ -1957,43 +636,6 @@ function sanitizeWorkerRichText(value: unknown) {
   return escaped
 }
 
-function formatWorkerDate(value?: string) {
-  if (!value)
-    return '-'
-
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
-function appendWorkerStudentSupplementNotes(existingNotes: string, supplementNotes: string, supplementedAt: string) {
-  const previousNotes = existingNotes.trim() || '<p>（此前未填写材料说明）</p>'
-  return `${previousNotes}<h3>补充资料（${formatWorkerDate(supplementedAt)}）</h3>${supplementNotes}`
-}
-
-function stateUsers(state: Partial<WelfareState>) {
-  return Array.isArray(state.users) ? state.users : []
-}
-
-function syncStudentVerifiedProfiles(state: Partial<WelfareState>) {
-  const approvedStudentUserIds = new Set((Array.isArray(state.studentVerifications) ? state.studentVerifications : [])
-    .filter(verification => normalizeVerificationType(verification.verificationType) === 'student' && verification.status === 'approved')
-    .map(verification => verification.userId))
-
-  for (const user of stateUsers(state)) {
-    user.profile.studentVerified = approvedStudentUserIds.has(user.id)
-  }
-
-  return state
-}
-
-function stateApplications(state: Partial<WelfareState>) {
-  return Array.isArray(state.applications) ? state.applications : []
-}
-
 function localDateKey(value: string | Date) {
   const date = value instanceof Date ? value : new Date(value)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -2011,275 +653,6 @@ function shiftDateKey(dateKey: string, days: number) {
   const date = new Date(`${dateKey}T00:00:00`)
   date.setDate(date.getDate() + days)
   return localDateKey(date)
-}
-
-function timeToMinutes(value: string) {
-  const match = value.match(/^(\d{2}):(\d{2})$/)
-  if (!match)
-    return undefined
-
-  return Number(match[1]) * 60 + Number(match[2])
-}
-
-function isWithinOpenWindow(policy: { openStart: string, openEnd: string }, current = new Date()) {
-  const start = timeToMinutes(policy.openStart)
-  const end = timeToMinutes(policy.openEnd)
-  if (start === undefined || end === undefined || start === end)
-    return true
-
-  const currentMinutes = current.getHours() * 60 + current.getMinutes()
-  if (start < end)
-    return currentMinutes >= start && currentMinutes <= end
-  return currentMinutes >= start || currentMinutes <= end
-}
-
-function isActiveApplicationStatus(status: string) {
-  return ['draft', 'reserved', 'pending_review', 'needs_supplement', 'processing', 'answered', 'submitted', 'in_review', 'approved', 'partial_approved', 'pending_allocation'].includes(status)
-}
-
-function isActiveStudentStatus(status: string) {
-  return ['pending', 'needs_supplement'].includes(status)
-}
-
-function activeRequestCountForState(state: Partial<WelfareState>, userId: string) {
-  return stateApplications(state).filter(item => item.userId === userId && isActiveApplicationStatus(item.status)).length
-    + (state.studentVerifications ?? []).filter(item => item.userId === userId && isActiveStudentStatus(item.status)).length
-}
-
-function recentSubmissionCooldownUntilForState(state: Partial<WelfareState>, userId: string, createdAt: string) {
-  const cooldownMs = (state.applicationPolicy?.submitCooldownSeconds ?? 0) * 1000
-  if (cooldownMs <= 0)
-    return undefined
-
-  const lastSubmittedAt = stateApplications(state)
-    .filter(item => item.userId === userId && item.status !== 'draft')
-    .map(item => new Date(item.createdAt).getTime())
-    .filter(Number.isFinite)
-    .sort((left, right) => right - left)[0]
-  if (!lastSubmittedAt)
-    return undefined
-
-  const until = lastSubmittedAt + cooldownMs
-  if (new Date(createdAt).getTime() < until)
-    return new Date(until).toISOString()
-}
-
-function rejectionFeeWaiverBlockedUntilForState(state: Partial<WelfareState>, userId: string) {
-  const currentTime = Date.now()
-  return stateApplications(state)
-    .filter(item => item.userId === userId && !!item.waiveRejectionReviewFeeBlockedUntil)
-    .map(item => item.waiveRejectionReviewFeeBlockedUntil!)
-    .filter((value) => {
-      const time = new Date(value).getTime()
-      return Number.isFinite(time) && time > currentTime
-    })
-    .sort()
-    .at(-1)
-}
-
-function assertCanCreateRequestForState(state: Partial<WelfareState>, userId: string) {
-  const systemConfig = state.systemConfig
-  if (systemConfig && !systemConfig.siteEnabled)
-    throw new Error(systemConfig.siteClosedReason)
-
-  if (activeRequestCountForState(state, userId) >= MAX_ACTIVE_USER_REQUESTS)
-    throw new Error(`一个用户最多只能同时创建 ${MAX_ACTIVE_USER_REQUESTS} 个待处理请求`)
-}
-
-function assertApplicationPolicyForState(state: Partial<WelfareState>, input: {
-  userId: string
-  type: SubmitApplicationPayload['type']
-  title: string
-  description: string
-  createdAt: string
-  powNonce?: string
-  turnstileVerified?: boolean
-}) {
-  const systemConfig = state.systemConfig
-  if (systemConfig && !systemConfig.siteEnabled)
-    throw new Error(systemConfig.siteClosedReason)
-
-  const policy = state.applicationPolicy
-  const kindPolicy = policy?.categories?.[input.type]
-  if (!policy || !kindPolicy)
-    throw new Error('申请策略未配置')
-  if (!kindPolicy.enabled)
-    throw new Error(kindPolicy.closedReason || `${input.type.toUpperCase()} 申请暂未开放`)
-  if (!isWithinOpenWindow(kindPolicy, new Date(input.createdAt)))
-    throw new Error(`${input.type.toUpperCase()} 申请不在当前开放时间段`)
-
-  const plainLength = richTextToPlainText(input.description).trim().length
-  if (plainLength < policy.minDescriptionChars)
-    throw new Error(`申请内容不得少于 ${policy.minDescriptionChars} 字`)
-
-  const cooldownUntil = recentSubmissionCooldownUntilForState(state, input.userId, input.createdAt)
-  if (cooldownUntil)
-    throw new Error(`提交过于频繁，请在 ${cooldownUntil} 后再提交`)
-
-  const today = localDateKey(input.createdAt)
-  const sameDayApplications = stateApplications(state)
-    .filter(item => item.type === input.type && item.status !== 'draft' && localDateKey(item.createdAt) === today)
-  if (kindPolicy.dailyLimit > 0 && sameDayApplications.length >= kindPolicy.dailyLimit)
-    throw new Error(`${input.type.toUpperCase()} 今日申请名额已满`)
-  if (kindPolicy.perUserDailyLimit > 0 && sameDayApplications.filter(item => item.userId === input.userId).length >= kindPolicy.perUserDailyLimit)
-    throw new Error(`你今日 ${input.type.toUpperCase()} 申请次数已达上限`)
-
-  if (policy.turnstileEnabled && !input.turnstileVerified)
-    throw new Error('请先完成人机验证')
-  if (policy.powEnabled) {
-    const challenge = applicationPowChallenge(input)
-    if (!isValidApplicationPow(challenge, input.powNonce, policy.powDifficulty))
-      throw new Error('PoW 校验未通过，请重新提交')
-  }
-}
-
-function squareDiscountSnapshot(cost: number, shareToSquare: boolean) {
-  if (!shareToSquare)
-    return { cost, discountRate: 1, discountAmount: 0 }
-
-  const payableCost = applyRateDiscount(cost, SQUARE_SHARE_DISCOUNT_RATE)
-  return {
-    cost: payableCost,
-    discountRate: SQUARE_SHARE_DISCOUNT_RATE,
-    discountAmount: Math.max(0, cost - payableCost),
-  }
-}
-
-function applyCouponDiscount(cost: number, coupon?: UserCoupon) {
-  if (!coupon)
-    return { payableCost: cost, discountAmount: 0 }
-
-  let discountAmount = 0
-  if (coupon.discountType === 'fixed_points' || coupon.discountType === 'fixed_ldc') {
-    discountAmount = coupon.discountAmount ?? 0
-  }
-  else {
-    const payableCost = applyRateDiscount(cost, coupon.discountRate)
-    discountAmount = Math.max(0, cost - payableCost)
-  }
-
-  if (coupon.maxDiscount)
-    discountAmount = Math.min(discountAmount, coupon.maxDiscount)
-
-  const payableCost = Math.max(0, cost - Math.min(cost, discountAmount))
-  return {
-    payableCost,
-    discountAmount: Math.max(0, cost - payableCost),
-  }
-}
-
-function availableResourceCoupon(state: Partial<WelfareState>, userId: string, couponId: string | undefined, cost: number, resourceTypes: ResourceType[], createdAt: string) {
-  if (!couponId)
-    return undefined
-
-  const coupon = (state.coupons ?? []).find(item => item.id === couponId)
-  if (!coupon || coupon.userId !== userId || coupon.usedAt)
-    throw new Error('优惠券不可用、不适用于当前资源或已过期')
-  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() <= new Date(createdAt).getTime())
-    throw new Error('优惠券不可用、不适用于当前资源或已过期')
-  if (coupon.scope && coupon.scope !== 'general' && coupon.scope !== 'resource')
-    throw new Error('优惠券不可用、不适用于当前资源或已过期')
-  if (coupon.minSpend && cost < coupon.minSpend)
-    throw new Error('优惠券不可用、不适用于当前资源或已过期')
-  if (coupon.resourceTypes?.length && !resourceTypes.some(type => coupon.resourceTypes?.includes(type)))
-    throw new Error('优惠券不可用、不适用于当前资源或已过期')
-  return coupon
-}
-
-function resourceCheckoutSnapshotForState(state: Partial<WelfareState>, userId: string, items: SubmitResourceApplicationPayload['resourceItems'], couponId: string | undefined, createdAt: string, shareToSquare = false) {
-  const baseCost = items.reduce((sum, item) => sum + estimatedResourceItemCost(item), 0)
-  const activityCost = items.reduce((sum, item) => sum + discountedResourceItemCost(item, createdAt), 0)
-  const resourceTypes = Array.from(new Set(items.map(item => item.resourceType)))
-  const coupon = availableResourceCoupon(state, userId, couponId, activityCost, resourceTypes, createdAt)
-  const couponResult = applyCouponDiscount(activityCost, coupon)
-  const squareResult = squareDiscountSnapshot(couponResult.payableCost, shareToSquare)
-  return {
-    baseCost,
-    activityCost,
-    cost: squareResult.cost,
-    activityDiscountRate: baseCost > 0 ? activityCost / baseCost : 1,
-    activityDiscountAmount: Math.max(0, baseCost - activityCost),
-    coupon,
-    couponDiscountAmount: couponResult.discountAmount,
-    squareDiscountRate: squareResult.discountRate,
-    squareDiscountAmount: squareResult.discountAmount,
-  }
-}
-
-function assertResourceTypeCanApplyForState(state: Partial<WelfareState>, resourceType: ResourceType, user: User) {
-  const config = resourceTypeConfigForPolicy(resourceType, state.applicationPolicy)
-  if (!config)
-    throw new Error('资源类型无效')
-  const userLevel = buildUserLevelCard(user, {
-    applications: stateApplications(state),
-    studentVerifications: state.studentVerifications ?? [],
-  })
-  if (!canApplyResourceType(config, userLevel.priority))
-    throw new Error(config.unavailableReason || `${config.displayName} 暂不可申请`)
-}
-
-function buildResourceDescription(payload: SubmitResourceApplicationPayload) {
-  return sanitizeWorkerRichText(payload.reason || payload.businessBackground)
-}
-
-function buildResourceTermsAcceptances(resourceTypes: ResourceType[], acceptedTermIds: SubmitResourceApplicationPayload['acceptedTermIds'], userId: string, acceptedAt: string) {
-  const requiredTerms = termsForResourceTypes(resourceTypes)
-  const accepted = new Set(acceptedTermIds)
-  const missing = requiredTerms.filter(term => !accepted.has(term.id))
-  if (missing.length)
-    throw new Error(`请确认所有条款：${missing.map(term => term.title).join('、')}`)
-
-  return requiredTerms.map(term => ({
-    termId: term.id,
-    version: term.version,
-    acceptedBy: userId,
-    acceptedAt,
-  }))
-}
-
-function publicResourceItemPayload(payload: Record<string, any>) {
-  const { attachments: _attachments, ...publicPayload } = payload
-  return publicPayload
-}
-
-function buildResourceSquarePost(application: WelfareApplication, payload: SubmitResourceApplicationPayload, actualResourceTypes: ResourceType[], squarePostId: string, createdAt: string): SquarePost {
-  return {
-    id: squarePostId,
-    userId: application.userId,
-    type: 'application_template',
-    title: application.title,
-    content: sanitizeWorkerRichText(payload.squarePostContent || payload.reason),
-    applicationId: application.id,
-    requestType: 'resource',
-    template: {
-      title: application.title,
-      departmentId: payload.departmentId,
-      projectId: payload.projectId,
-      reason: payload.reason,
-      businessBackground: payload.businessBackground,
-      urgency: payload.urgency,
-      expectedEffectiveAt: payload.expectedEffectiveAt,
-      costCenter: payload.costCenter,
-      ownerId: payload.ownerId,
-      duration: payload.duration,
-      selectedResourceTypes: actualResourceTypes,
-      resourceItems: payload.resourceItems.map(item => ({
-        resourceType: item.resourceType,
-        resourceSubtype: item.resourceSubtype,
-        payload: publicResourceItemPayload(item.payload),
-        requestedQuota: item.requestedQuota,
-        requestedPermission: item.requestedPermission,
-        duration: item.duration,
-      })),
-      acceptedTermIds: payload.acceptedTermIds,
-    },
-    createdAt,
-    updatedAt: createdAt,
-  }
-}
-
-function stateVersionPayload(version: number) {
-  return { version }
 }
 
 export async function authenticatedUser(request: Request, env: WorkerEnv, state: Partial<WelfareState>) {
@@ -2304,146 +677,8 @@ function assertReviewerUser(user: User) {
     throw new Error('需要协作处理员权限')
 }
 
-function ensureApplications(state: Partial<WelfareState>) {
-  state.applications ??= []
-  return state.applications
-}
-
-function ensureSquarePosts(state: Partial<WelfareState>) {
-  state.squarePosts ??= []
-  return state.squarePosts
-}
-
-function ensureCoupons(state: Partial<WelfareState>) {
-  state.coupons ??= []
-  return state.coupons
-}
-
-function ensureDailyCheckIns(state: Partial<WelfareState>) {
-  state.dailyCheckIns ??= []
-  return state.dailyCheckIns
-}
-
-function ensureInvitationBindings(state: Partial<WelfareState>) {
-  state.invitationBindings ??= []
-  return state.invitationBindings
-}
-
-function ensureSquareBoosts(state: Partial<WelfareState>) {
-  state.squareBoosts ??= []
-  return state.squareBoosts
-}
-
-function ensureSquareReports(state: Partial<WelfareState>) {
-  state.squareReports ??= []
-  return state.squareReports
-}
-
-function ensureStudentVerifications(state: Partial<WelfareState>) {
-  state.studentVerifications ??= []
-  return state.studentVerifications
-}
-
 function normalizeInviteCode(value: unknown) {
   return typeof value === 'string' ? value.trim().toUpperCase() : ''
-}
-
-function createUserCouponFromRule(userId: string, source: UserCoupon['source'], template: Pick<NonNullable<WelfareState['couponTemplates']>[number], 'id' | 'name' | 'rule' | 'ttlDays'>, createdAt = now(), codeId?: string): UserCoupon {
-  const ttlDays = Math.max(0, Math.min(3650, Math.trunc(Number(template.ttlDays ?? DAILY_CHECK_IN_COUPON_TTL_DAYS))))
-  return {
-    id: createId('coupon'),
-    userId,
-    name: template.name,
-    discountRate: Math.max(0.01, Math.min(1, Number(template.rule.discountRate ?? 1))),
-    source,
-    scope: template.rule.scope,
-    discountType: template.rule.discountType ?? 'rate',
-    discountAmount: template.rule.discountAmount,
-    resourceTypes: template.rule.resourceTypes,
-    minSpend: template.rule.minSpend,
-    maxDiscount: template.rule.maxDiscount,
-    templateId: template.id,
-    codeId,
-    createdAt,
-    expiresAt: ttlDays > 0 ? addDays(createdAt, ttlDays) : undefined,
-  }
-}
-
-function createDailyCoupon(userId: string, source: UserCoupon['source'], discountRate: number, createdAt: string) {
-  return {
-    id: createId('coupon'),
-    userId,
-    name: source === 'daily_streak_7' ? '连续签到 7 天福利券' : '连续签到 3 天福利券',
-    discountRate,
-    source,
-    scope: 'general',
-    discountType: 'rate',
-    createdAt,
-    expiresAt: addDays(createdAt, DAILY_CHECK_IN_COUPON_TTL_DAYS),
-  } satisfies UserCoupon
-}
-
-function normalizeVerificationType(value: unknown) {
-  return value === 'frontline' ? 'frontline' : 'student'
-}
-
-function verificationTypeLabel(type: 'student' | 'frontline') {
-  return type === 'frontline' ? '一线认证' : '学生认证'
-}
-
-function normalizeStudentEmail(value: unknown) {
-  return typeof value === 'string' ? value.trim().toLowerCase() : ''
-}
-
-function assertEducationEmail(value: string) {
-  assertEducationEmailAddress(value)
-}
-
-function normalizeClientRequestId(value: unknown) {
-  return typeof value === 'string' ? value.trim().slice(0, 128) : ''
-}
-
-async function studentVerificationIdForRequest(userId: string, clientRequestId: string) {
-  if (!clientRequestId)
-    return createId('stu')
-
-  const digest = await sha256Hex(`student-verification:${userId}:${clientRequestId}`)
-  return `stu_${digest.slice(0, 32)}`
-}
-
-function markWorkerEducationEmailVerified(verification: StudentVerification, verifiedAt: string, source: 'mail_auto' | 'admin_approved') {
-  if (!verification.educationEmail)
-    return
-
-  verification.educationEmailVerified = true
-  verification.educationEmailVerifiedAt ||= verifiedAt
-  verification.educationEmailVerificationSource ||= source
-}
-
-function positiveStudentReviewFee(verification: StudentVerification) {
-  const fee = Math.trunc(Number(verification.reviewFee ?? STUDENT_REVIEW_FEE))
-  if (!Number.isFinite(fee) || fee <= 0)
-    throw new Error('认证审核费无效')
-
-  return fee
-}
-
-function latestEducationEmailChallengeForState(state: Partial<WelfareState>, userId: string, email: string) {
-  return (state.educationEmailChallenges ?? [])
-    .filter((item) => {
-      if (item.userId !== userId || item.email !== email)
-        return false
-      const expiresAt = new Date(item.expiresAt).getTime()
-      return Number.isFinite(expiresAt) && expiresAt > Date.now()
-    })
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
-}
-
-function assertVerifiedEducationEmailChallengeForState(challenge: EducationEmailChallenge | undefined, wantsVerified: boolean) {
-  if (!wantsVerified)
-    throw new Error('邮箱证明需要先通过收件 API 验证后才能提交')
-  if (!challenge?.verifiedAt)
-    throw new Error('邮箱证明尚未通过收件 API 验证，请先发送证明邮件并完成验证')
 }
 
 async function applyStandardApplicationCommand(env: WorkerEnv, state: Partial<WelfareState>, user: User, payload: SubmitApplicationPayload) {
@@ -2671,7 +906,7 @@ async function applyResourceApplicationCommand(env: WorkerEnv, state: Partial<We
       userId: user.id,
       type: 'resource',
       title,
-      description: buildResourceDescription(payload),
+      description: buildResourceDescription(payload, sanitizeWorkerRichText),
       createdAt,
       powNonce: payload.powNonce,
       turnstileVerified: payload.turnstileVerified,
@@ -2713,7 +948,7 @@ async function applyResourceApplicationCommand(env: WorkerEnv, state: Partial<We
     userId: user.id,
     type: 'resource',
     title,
-    description: buildResourceDescription(payload),
+    description: buildResourceDescription(payload, sanitizeWorkerRichText),
     hasOpenSourceBadge: false,
     attachments: attachmentsFromPayload(payload.attachments),
     status: isDraft ? 'draft' : 'in_review',
@@ -2783,7 +1018,7 @@ async function applyResourceApplicationCommand(env: WorkerEnv, state: Partial<We
       checkout.coupon.usedApplicationId = application.id
     }
     if (squarePostId)
-      ensureSquarePosts(state).unshift(buildResourceSquarePost(application, payload, actualResourceTypes, squarePostId, createdAt))
+      ensureSquarePosts(state).unshift(buildResourceSquarePost(application, payload, actualResourceTypes, squarePostId, createdAt, sanitizeWorkerRichText))
   }
 
   ensureCoupons(state)
@@ -3348,76 +1583,8 @@ export async function supplementStudentVerificationAction(request: Request, env:
   })
 }
 
-function ensureCollaborationApplications(state: Partial<WelfareState>) {
-  state.collaborationApplications ??= []
-  return state.collaborationApplications
-}
-
-function safeAttachmentUrl(value: unknown) {
-  if (typeof value !== 'string')
-    return undefined
-  const text = value.trim()
-  if (!text)
-    return undefined
-  if (text.startsWith('/api/uploads/') || text.startsWith('/uploads/'))
-    return text
-  return undefined
-}
-
-function attachmentsFromPayload(value: unknown): AttachmentMeta[] {
-  if (!Array.isArray(value))
-    return []
-
-  return value
-    .filter((item): item is Record<string, unknown> => isRecord(item))
-    .map((item) => {
-      const type = typeof item.type === 'string' ? item.type : 'application/octet-stream'
-      return {
-        id: typeof item.id === 'string' ? item.id : createId('att'),
-        name: typeof item.name === 'string' ? item.name : '附件',
-        size: Math.max(0, Math.trunc(Number(item.size || 0))),
-        type,
-        r2Key: typeof item.r2Key === 'string' ? item.r2Key : undefined,
-        url: safeAttachmentUrl(item.url),
-        dataUrl: type.startsWith('image/') && isImageDataUrl(item.dataUrl) ? item.dataUrl : undefined,
-      }
-    })
-}
-
-function isImageDataUrl(value: unknown): value is string {
-  return typeof value === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value)
-}
-
-function totalAttachmentBytes(attachments: AttachmentMeta[]) {
-  return attachments.reduce((sum, item) => sum + Math.max(0, Math.trunc(Number(item.size || 0))), 0)
-}
-
-function resourceItemAttachmentsFromPayload(items: SubmitResourceApplicationPayload['resourceItems'] = []) {
-  return items.flatMap(item => attachmentsFromPayload(item.payload?.attachments))
-}
-
-function totalResourceApplicationAttachmentBytes(payload: Pick<SubmitResourceApplicationPayload, 'attachments' | 'resourceItems'>) {
-  return totalAttachmentBytes([
-    ...attachmentsFromPayload(payload.attachments),
-    ...resourceItemAttachmentsFromPayload(payload.resourceItems),
-  ])
-}
-
 function cloneState<T>(state: T): T {
   return JSON.parse(JSON.stringify(state)) as T
-}
-
-function pushApplicationMessage(application: WelfareApplication, userId: string, type: ApplicationMessageType, content: string, attachments: AttachmentMeta[] = []) {
-  application.messages ??= []
-  application.messages.push({
-    id: createId('msg'),
-    applicationId: application.id,
-    userId,
-    type,
-    content,
-    attachments,
-    createdAt: now(),
-  })
 }
 
 function isDeliveryApplication(application: WelfareApplication) {
@@ -3538,6 +1705,7 @@ export async function loginAdmin(request: Request, env: WorkerEnv) {
 }
 
 export async function submitCollaborationApplication(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -3567,6 +1735,7 @@ export async function submitCollaborationApplication(request: Request, env: Work
 }
 
 export async function reviewCollaborationApplication(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -3602,6 +1771,7 @@ export async function reviewCollaborationApplication(request: Request, env: Work
 }
 
 export async function claimDeliveryApplication(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -3626,6 +1796,7 @@ export async function claimDeliveryApplication(request: Request, env: WorkerEnv)
 }
 
 export async function cancelDeliveryClaim(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -3653,6 +1824,7 @@ export async function cancelDeliveryClaim(request: Request, env: WorkerEnv) {
 }
 
 export async function submitDeliveryResult(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -3688,6 +1860,7 @@ export async function submitDeliveryResult(request: Request, env: WorkerEnv) {
 }
 
 export async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -3786,98 +1959,6 @@ export async function currentUserProfileResponse(request: Request, env: WorkerEn
   const current = await visibleCurrentUserState(request, env)
   const currentUser = stateUsers(current.state).find(item => item.id === current.userId) ?? sanitizeUser(current.user)
   return json({ currentUser, currentUserId: current.userId, version: current.version })
-}
-
-function parsePositiveIntegerParam(value: string | null, fallback: number, max: number) {
-  const parsed = Math.trunc(Number(value))
-  if (!Number.isFinite(parsed) || parsed <= 0)
-    return fallback
-  return Math.min(parsed, max)
-}
-
-function parseOffsetParam(value: string | null) {
-  const parsed = Math.trunc(Number(value))
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-}
-
-function parseStatusParam(value: string | null) {
-  if (!value)
-    return []
-  return value
-    .split(',')
-    .map(item => item.trim())
-    .filter(Boolean)
-}
-
-async function readCurrentUserApplicationSnapshots(env: WorkerEnv, userId: string, options: { status?: string[], limit?: number, offset?: number } = {}) {
-  await ensureSchema(env)
-  const status = options.status?.filter(Boolean) ?? []
-  const limit = options.limit ?? 50
-  const offset = options.offset ?? 0
-
-  if (shouldUseD1(env)) {
-    const statusClause = status.length ? ` and status in (${status.map(() => '?').join(', ')})` : ''
-    const result = await env.LOCAL_DB!
-      .prepare(`select payload from welfare_applications where user_id = ?${statusClause} order by created_at desc, id desc limit ? offset ?`)
-      .bind(userId, ...status, limit, offset)
-      .all<{ payload: string }>()
-    return (result.results ?? []).map(row => JSON.parse(row.payload) as WelfareApplication)
-  }
-
-  const result = status.length
-    ? await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications where user_id = $1 and status = any($2) order by created_at desc, id desc limit $3 offset $4',
-        [userId, status, limit, offset],
-      )
-    : await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications where user_id = $1 order by created_at desc, id desc limit $2 offset $3',
-        [userId, limit, offset],
-      )
-  return result.rows.map(row => JSON.parse(row.payload) as WelfareApplication)
-}
-
-async function readAdminApplicationSnapshots(env: WorkerEnv, options: { status?: string[], limit?: number, offset?: number } = {}) {
-  await ensureSchema(env)
-  const status = options.status?.filter(Boolean) ?? []
-  const limit = options.limit ?? 100
-  const offset = options.offset ?? 0
-
-  if (shouldUseD1(env)) {
-    const statusClause = status.length ? ` where status in (${status.map(() => '?').join(', ')})` : ''
-    const result = await env.LOCAL_DB!
-      .prepare(`select payload from welfare_applications${statusClause} order by created_at desc, id desc limit ? offset ?`)
-      .bind(...status, limit, offset)
-      .all<{ payload: string }>()
-    return (result.results ?? []).map(row => JSON.parse(row.payload) as WelfareApplication)
-  }
-
-  const result = status.length
-    ? await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications where status = any($1) order by created_at desc, id desc limit $2 offset $3',
-        [status, limit, offset],
-      )
-    : await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications order by created_at desc, id desc limit $1 offset $2',
-        [limit, offset],
-      )
-  return result.rows.map(row => JSON.parse(row.payload) as WelfareApplication)
-}
-
-async function readCurrentUserCouponSnapshots(env: WorkerEnv, userId: string) {
-  await ensureSchema(env)
-  if (shouldUseD1(env)) {
-    const result = await env.LOCAL_DB!
-      .prepare('select payload from user_coupons where user_id = ?1 order by created_at desc, id desc')
-      .bind(userId)
-      .all<{ payload: string }>()
-    return (result.results ?? []).map(row => JSON.parse(row.payload) as UserCoupon)
-  }
-
-  const result = await getPool(env).query<{ payload: string }>(
-    'select payload from user_coupons where user_id = $1 order by created_at desc, id desc',
-    [userId],
-  )
-  return result.rows.map(row => JSON.parse(row.payload) as UserCoupon)
 }
 
 export async function currentUserApplicationsResponse(request: Request, env: WorkerEnv) {
@@ -3980,8 +2061,8 @@ export async function collaborationStateResponse(request: Request, env: WorkerEn
 }
 
 async function adminVisibleState(request: Request, env: WorkerEnv) {
-  const userId = await requestUserId(request, env)
-  const { state, version } = await readWelfareStateRecord(env, userId ? { syncPointBalances: 'current-user', currentUserId: userId } : undefined)
+  const userId = await requireRequestUserId(request, env)
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
   const sourceState = state as Partial<WelfareState>
   const user = await authenticatedUser(request, env, sourceState)
   assertAdminUser(user)
@@ -4050,6 +2131,7 @@ async function commitAdminStateAction(
   env: WorkerEnv,
   mutate: (state: Partial<WelfareState>, user: User, payload: Record<string, unknown>) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void,
 ) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const previousState = record.state as Partial<WelfareState>
   const originalState = cloneState(previousState)
@@ -4121,13 +2203,6 @@ export async function updateAdminOauthAction(request: Request, env: WorkerEnv) {
     }
     return { oauth: state.oauth }
   })
-}
-
-function adminTargetUser(state: Partial<WelfareState>, userId: unknown) {
-  const user = stateUsers(state).find(item => item.id === userId)
-  if (!user)
-    throw new Error('用户不存在')
-  return user
 }
 
 export async function updateAdminUserRoleAction(request: Request, env: WorkerEnv) {
@@ -4204,24 +2279,6 @@ export async function adjustAdminUserPointsAction(request: Request, env: WorkerE
   })
 }
 
-function adminApplication(state: Partial<WelfareState>, applicationId: unknown) {
-  const application = stateApplications(state).find(item => item.id === applicationId)
-  if (!application)
-    throw new Error('申请不存在')
-  return application
-}
-
-function sanitizeMessageType(value: unknown): ApplicationMessageType {
-  return value === 'comment' || value === 'supplement' || value === 'result_submission' || value === 'system' ? value : 'comment'
-}
-
-function sanitizeResourceLifecycleAction(value: unknown): ResourceLifecycleAction {
-  const actions: ResourceLifecycleAction[] = ['approve', 'reject', 'provision', 'activate', 'request_renewal', 'approve_renewal', 'reject_renewal', 'mark_expired', 'queue_reclaim', 'return', 'release', 'close']
-  if (actions.includes(value as ResourceLifecycleAction))
-    return value as ResourceLifecycleAction
-  throw new Error('资源生命周期动作无效')
-}
-
 export async function reviewAdminApplicationItemAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, _admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
@@ -4249,7 +2306,7 @@ export async function reviewAdminApplicationItemAction(request: Request, env: Wo
     item.lifecycleStatus = status === 'rejected' ? 'rejected' : 'provisioning'
     item.expiresAt = typeof item.expiresAt === 'string' ? item.expiresAt : typeof item.approvedPayload?.expiresAt === 'string' ? item.approvedPayload.expiresAt : typeof item.payload?.expiresAt === 'string' ? item.payload.expiresAt : undefined
     item.updatedAt = now()
-    application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [], application.status)
+    application.status = aggregateResourceApplicationStatusForReview(application.resourceItems ?? [], application.status)
     if (['pending_allocation', 'delivered', 'approved', 'partial_approved', 'rejected'].includes(application.status)) {
       application.reviewedAt = item.updatedAt
       if (['delivered', 'rejected'].includes(application.status))
@@ -4258,63 +2315,6 @@ export async function reviewAdminApplicationItemAction(request: Request, env: Wo
     application.answer = `<p>资源申请审批已更新：${resourceTypeLabel(item.resourceType)} / ${item.resourceSubtype} / ${resourceApprovalStatusText(item.approvalStatus)}。</p>`
     return { applicationId: application.id, item }
   })
-}
-
-function aggregateResourceApplicationStatusForWorker(items: Pick<ApplicationItem, 'approvalStatus' | 'provisionStatus'>[], currentStatus?: WelfareApplication['status']) {
-  if (!items.length)
-    return 'draft' as WelfareApplication['status']
-  if (items.some(item => item.approvalStatus === 'pending'))
-    return 'in_review' as WelfareApplication['status']
-
-  const approvedItems = items.filter(item => ['approved', 'adjusted_approved'].includes(item.approvalStatus))
-  const rejectedCount = items.filter(item => item.approvalStatus === 'rejected').length
-  if (!approvedItems.length && rejectedCount === items.length)
-    return 'rejected' as WelfareApplication['status']
-  if (approvedItems.length && approvedItems.every(item => item.provisionStatus === 'completed'))
-    return 'delivered' as WelfareApplication['status']
-  if (approvedItems.length)
-    return 'pending_allocation' as WelfareApplication['status']
-  return currentStatus === 'partial_approved' ? 'partial_approved' as WelfareApplication['status'] : 'rejected' as WelfareApplication['status']
-}
-
-function stringPayloadField(payload: Record<string, unknown>, key: string) {
-  const value = payload[key]
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function normalizeManualProvisionPayload(payload: Record<string, unknown>) {
-  const resourceName = stringPayloadField(payload, 'resourceName')
-  const resourceType = stringPayloadField(payload, 'resourceType')
-  const accessUrl = stringPayloadField(payload, 'accessUrl')
-  const credential = stringPayloadField(payload, 'credential')
-  const expiresAt = stringPayloadField(payload, 'expiresAt')
-  const note = stringPayloadField(payload, 'note')
-  if (!resourceName)
-    throw new Error('请填写资源名称')
-  if (!resourceType)
-    throw new Error('请选择资源类型')
-  if (!accessUrl && !credential)
-    throw new Error('请至少填写访问地址或凭据')
-  return {
-    resourceName,
-    resourceType,
-    accessUrl,
-    credential,
-    expiresAt,
-    note,
-  }
-}
-
-function manualProvisionNote(provisionPayload: ReturnType<typeof normalizeManualProvisionPayload>) {
-  const parts = [
-    `资源：${provisionPayload.resourceName}`,
-    `类型：${provisionPayload.resourceType}`,
-    provisionPayload.accessUrl ? `访问地址：${provisionPayload.accessUrl}` : '',
-    provisionPayload.credential ? `凭据：${provisionPayload.credential}` : '',
-    provisionPayload.expiresAt ? `有效期：${provisionPayload.expiresAt}` : '',
-    provisionPayload.note ? `备注：${provisionPayload.note}` : '',
-  ].filter(Boolean)
-  return parts.join('\n')
 }
 
 export async function completeAdminResourceProvisionAction(request: Request, env: WorkerEnv) {
@@ -4335,7 +2335,7 @@ export async function completeAdminResourceProvisionAction(request: Request, env
     item.provisionCompletedAt = now()
     item.activatedAt = item.lifecycleStatus === 'active' ? item.provisionCompletedAt : item.activatedAt
     item.updatedAt = item.provisionCompletedAt
-    application.status = aggregateResourceApplicationStatusForWorker(application.resourceItems ?? [], application.status)
+    application.status = aggregateResourceApplicationStatusForReview(application.resourceItems ?? [], application.status)
     if (application.status === 'delivered')
       application.completedAt = item.provisionCompletedAt
     return { applicationId: application.id, item }
@@ -4405,8 +2405,7 @@ export async function updateAdminResourceLifecycleAction(request: Request, env: 
 export async function answerAdminApplicationAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, async (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (!['pending_review', 'processing'].includes(application.status))
-      throw new Error('该申请已经处理')
+    assertCanAnswerApplication(application.status)
     const answer = sanitizeWorkerRichText(payload.answer)
     if (isRichTextEmpty(answer))
       throw new Error('请填写审核答复')
@@ -4423,10 +2422,7 @@ export async function answerAdminApplicationAction(request: Request, env: Worker
       application.costCharged = true
     }
     const reviewedAt = now()
-    application.status = 'pending_allocation'
-    application.answer = answer
-    application.reviewedAt = reviewedAt
-    application.processingStartedAt ??= reviewedAt
+    transitionApplicationAnswered(application, answer, reviewedAt)
     pushApplicationMessage(application, admin.id, 'system', answer)
     return { applicationId: application.id }
   })
@@ -4435,15 +2431,12 @@ export async function answerAdminApplicationAction(request: Request, env: Worker
 export async function rejectAdminApplicationAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, async (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (!['pending_review', 'processing'].includes(application.status))
-      throw new Error('该申请已经处理')
+    assertCanRejectApplication(application.status)
     const reason = sanitizeWorkerRichText(payload.reason)
     if (isRichTextEmpty(reason))
       throw new Error('请填写退回原因')
     const reviewedAt = now()
     const fraudulent = !!payload.fraudulent
-    application.status = 'rejected'
-    application.rejectionFraudulent = fraudulent
     if (application.costCharged && application.cost > 0) {
       await appendPointTransaction(env, {
         id: transactionId('application_refund', application.id),
@@ -4485,8 +2478,7 @@ export async function rejectAdminApplicationAction(request: Request, env: Worker
         allowDebt: true,
       }, state)
     }
-    application.answer = reason
-    application.reviewedAt = reviewedAt
+    transitionApplicationRejected(application, reason, reviewedAt, fraudulent)
     pushApplicationMessage(application, admin.id, 'system', reason)
     return { applicationId: application.id }
   })
@@ -4495,11 +2487,9 @@ export async function rejectAdminApplicationAction(request: Request, env: Worker
 export async function completeAdminApplicationAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (!['answered', 'delivered'].includes(application.status))
-      throw new Error('只有已答复或已交付的申请可以标记完成')
+    assertCanCompleteApplication(application.status)
     const completedAt = now()
-    application.status = 'completed'
-    application.completedAt = completedAt
+    transitionApplicationCompleted(application, completedAt)
     pushApplicationMessage(application, admin.id, 'system', '<p>管理员已确认所有结果，申请完成。</p>')
     return { applicationId: application.id }
   })
@@ -4508,27 +2498,14 @@ export async function completeAdminApplicationAction(request: Request, env: Work
 export async function requestAdminApplicationSupplementAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (!['pending_review', 'processing'].includes(application.status))
-      throw new Error('只有审核中的申请可以请求补充材料')
+    assertCanRequestApplicationSupplement(application.status)
     const content = sanitizeWorkerRichText(payload.content)
     if (isRichTextEmpty(content))
       throw new Error('请填写补充材料要求')
-    application.status = 'needs_supplement'
-    application.processingStartedAt ??= now()
+    transitionApplicationSupplementRequested(application, now())
     pushApplicationMessage(application, admin.id, 'system', content)
     return { applicationId: application.id }
   })
-}
-
-function appendWorkerApplicationMessage(application: WelfareApplication, user: User, payload: Record<string, unknown>) {
-  const content = sanitizeWorkerRichText(payload.content)
-  if (isRichTextEmpty(content))
-    throw new Error('请输入消息内容')
-  const attachments = attachmentsFromPayload(payload.attachments)
-  if (totalAttachmentBytes(attachments) > MAX_ATTACHMENT_BYTES)
-    throw new Error('附件总大小不能超过 200MB')
-  pushApplicationMessage(application, user.id, sanitizeMessageType(payload.type), content, attachments)
-  return { applicationId: application.id }
 }
 
 export async function addCurrentUserApplicationMessageAction(request: Request, env: WorkerEnv) {
@@ -4542,18 +2519,19 @@ export async function addCurrentUserApplicationMessageAction(request: Request, e
       throw new Error('该申请状态不支持追加消息')
     if (payload.type === 'result_submission' || payload.type === 'system')
       throw new Error('用户不能提交管理员结果消息')
-    return appendWorkerApplicationMessage(application, user, payload)
+    return appendWorkerApplicationMessage(application, user, payload, sanitizeWorkerRichText)
   })
 }
 
 export async function addAdminApplicationMessageAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    return appendWorkerApplicationMessage(application, admin, payload)
+    return appendWorkerApplicationMessage(application, admin, payload, sanitizeWorkerRichText)
   })
 }
 
 export async function reviewAdminStudentVerificationAction(request: Request, env: WorkerEnv) {
+  await requireRequestUserId(request, env)
   const record = await readWelfareStateRecord(env)
   const state = record.state as Partial<WelfareState>
   const admin = await authenticatedUser(request, env, state)
@@ -4648,27 +2626,6 @@ export async function revokeAdminStudentVerificationAction(request: Request, env
   })
 }
 
-function normalizeWorkerCouponRule(input: Record<string, unknown>) {
-  const scope: CouponScope = input.scope === 'recharge' || input.scope === 'general' ? input.scope : 'resource'
-  const discountType: CouponDiscountType = input.discountType === 'fixed_points' || input.discountType === 'fixed_ldc' || input.discountType === 'rate'
-    ? input.discountType
-    : scope === 'recharge' ? 'fixed_ldc' : 'rate'
-  const knownTypes = new Set(RESOURCE_TYPE_CONFIGS.map(item => item.resourceType))
-  return {
-    scope,
-    discountType,
-    discountRate: Math.max(0.01, Math.min(1, Number(input.discountRate || 1))),
-    discountAmount: Math.max(0, Math.trunc(Number(input.discountAmount || 0))),
-    resourceTypes: Array.isArray(input.resourceTypes) ? Array.from(new Set(input.resourceTypes.filter((item): item is ResourceType => knownTypes.has(item as ResourceType)))) : [],
-    minSpend: Math.max(0, Math.trunc(Number(input.minSpend || 0))),
-    maxDiscount: Math.max(0, Math.trunc(Number(input.maxDiscount || 0))),
-  }
-}
-
-function createCouponCodeValue() {
-  return Math.random().toString(36).slice(2, 10).toUpperCase()
-}
-
 export async function createAdminCouponTemplateAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const name = typeof payload.name === 'string' ? payload.name.trim() : ''
@@ -4686,7 +2643,7 @@ export async function createAdminCouponTemplateAction(request: Request, env: Wor
       description: typeof payload.description === 'string' && payload.description.trim() ? payload.description.trim() : undefined,
       enabled: payload.enabled !== false,
       rule,
-      ttlDays: Math.max(0, Math.min(3650, Math.trunc(Number(payload.ttlDays ?? DAILY_CHECK_IN_COUPON_TTL_DAYS)))),
+      ttlDays: Math.max(0, Math.min(3650, Math.trunc(Number(payload.ttlDays ?? DEFAULT_COUPON_TTL_DAYS)))),
       totalGrantLimit: payload.totalGrantLimit ? Math.max(1, Math.trunc(Number(payload.totalGrantLimit))) : undefined,
       grantedCount: 0,
       createdAt,
@@ -4755,8 +2712,7 @@ export async function submitCrowdReviewAction(request: Request, env: WorkerEnv) 
     const application = stateApplications(state).find(item => item.id === targetId && item.type === 'pro')
     if (!application)
       throw new Error('申请不存在')
-    if (!['pending_review', 'processing'].includes(application.status))
-      throw new Error('该申请已经处理')
+    assertCanAnswerApplication(application.status)
     if (application.userId === user.id)
       throw new Error('不能审核自己的申请')
     const decision = payload.decision === 'approve' || payload.decision === 'reject' || payload.decision === 'needs_admin' ? payload.decision : ''
@@ -4926,8 +2882,8 @@ export async function currentUserStateResponse(request: Request, env: WorkerEnv)
 }
 
 export async function adminStateResponse(request: Request, env: WorkerEnv) {
-  const userId = await requestUserId(request, env)
-  const { state, version } = await readWelfareStateRecord(env, userId ? { syncPointBalances: 'current-user', currentUserId: userId } : undefined)
+  const userId = await requireRequestUserId(request, env)
+  const { state, version } = await readWelfareStateRecord(env, { syncPointBalances: 'current-user', currentUserId: userId })
   const user = await authenticatedUser(request, env, state as Partial<WelfareState>)
   assertAdminUser(user)
   return json({ state: clientVisibleWelfareState(state, user.id), currentUserId: user.id, version })

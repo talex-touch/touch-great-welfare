@@ -102,7 +102,8 @@ function json(payload: unknown, status = 200, headers?: HeadersInit) {
 }
 
 function errorResponse(error: unknown, status = 500) {
-  return json({ error: error instanceof Error ? error.message : '服务端错误' }, status)
+  const message = error instanceof Error ? error.message : '服务端错误'
+  return json({ error: message }, message === '请先登录' ? 401 : status)
 }
 
 function getRequestOrigin(request: Request) {
@@ -434,9 +435,12 @@ async function assertAdminRequest(request: Request, env: WorkerEnv) {
 
 async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {
   if (request.method === 'GET') {
+    const userId = await authenticatedUserId(request, env)
+    if (!userId)
+      throw new Error('请先登录')
+
     const settings = await getEffectiveGitHubAppSettings(env, request)
     const state = await readWelfareState(env) as Partial<WelfareState>
-    const userId = await authenticatedUserId(request, env)
     const user = Array.isArray(state.users) ? state.users.find(item => item.id === userId) : undefined
     if (user?.role !== 'admin') {
       return json({

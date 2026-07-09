@@ -1,9 +1,8 @@
+export { allowUnstableNormalizedReads, getPool, shouldUseD1 } from './connection'
+export { applyTrustedPointTransactionsFromState } from './core'
+export type { WorkerEnv } from './core'
 export {
-  applyTrustedPointTransactionsFromState,
-  getPool,
   readWelfareState,
   readWelfareStateRecord,
-  shouldUseD1,
   writeWelfareState,
-} from './core'
-export type { WorkerEnv } from './core'
+} from './state-store'

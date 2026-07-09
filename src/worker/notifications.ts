@@ -38,7 +38,7 @@ import {
 import { base64UrlDecode, base64UrlEncode, decryptSecret, encryptSecret } from './crypto'
 import { appendPointTransaction, pointTransactionId } from './points'
 import { sendSmtpEmail } from './smtp-helper'
-import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
+import { allowUnstableNormalizedReads, getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
 
 type NotificationStatus = 'processed' | 'failed'
 type NotificationDeliveryProvider = '' | EmailDeliveryProvider | 'feishu_webhook' | 'web_push'
@@ -1695,7 +1695,7 @@ async function deletePushSubscriptionByEndpoint(env: WorkerEnv, userId: string, 
 
 async function hasEnoughPoints(env: WorkerEnv, userId: string, points: number) {
   // 优化：直接查询 users 表，避免读取整个 state
-  if (env.USE_NORMALIZED_TABLES === 'true') {
+  if (allowUnstableNormalizedReads(env)) {
     const db = env.LOCAL_DB
     if (!db)
       return false
