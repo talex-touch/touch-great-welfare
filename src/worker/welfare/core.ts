@@ -77,15 +77,19 @@ import { dispatchWelfareStateChangeNotifications } from '../notifications'
 import { appendPointTransaction, ensurePointTransactionSchema, pointTransactionId, syncUserPointBalancesFromLedger } from '../points'
 import { authenticatedUserId, createSessionCookie } from '../session'
 import {
-  aggregateResourceApplicationStatusForReview,
   assertCanAnswerApplication,
   assertCanCompleteApplication,
   assertCanRejectApplication,
   assertCanRequestApplicationSupplement,
+  assertCanReviewResourceApplication,
+  assertResourceApplication,
+  transitionApplicationAllocationCompleted,
   transitionApplicationAnswered,
   transitionApplicationCompleted,
   transitionApplicationRejected,
   transitionApplicationSupplementRequested,
+  transitionResourceItemReviewed,
+  transitionResourceProvisionCompleted,
 } from './application-state-machine'
 import {
   adminApplication,
@@ -2282,37 +2286,19 @@ export async function adjustAdminUserPointsAction(request: Request, env: WorkerE
 export async function reviewAdminApplicationItemAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, _admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (application.type !== 'resource')
-      throw new Error('资源申请不存在')
-    if (!['submitted', 'in_review'].includes(application.status))
-      throw new Error('该申请不在审批中')
+    assertCanReviewResourceApplication(application)
     const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
     if (!item)
       throw new Error('资源明细不存在')
-    if (item.approvalStatus !== 'pending')
-      throw new Error('该资源明细已经审批')
     const status = payload.status as ResourceApprovalStatus
-    if (!['approved', 'adjusted_approved', 'rejected'].includes(status))
-      throw new Error('审批状态无效')
     const note = typeof payload.rejectReason === 'string' ? payload.rejectReason.trim() : typeof payload.note === 'string' ? payload.note.trim() : ''
-    if (status === 'rejected' && !note)
-      throw new Error('驳回资源明细时必须填写原因')
-    if (status === 'adjusted_approved' && !isRecord(payload.approvedPayload))
-      throw new Error('调整后通过必须填写批准后的额度/权限')
-    item.approvalStatus = status
-    item.approvedPayload = isRecord(payload.approvedPayload) ? payload.approvedPayload : undefined
-    item.rejectReason = status === 'rejected' ? note || undefined : undefined
-    item.provisionStatus = ['approved', 'adjusted_approved'].includes(status) ? 'pending' : 'not_required'
-    item.lifecycleStatus = status === 'rejected' ? 'rejected' : 'provisioning'
-    item.expiresAt = typeof item.expiresAt === 'string' ? item.expiresAt : typeof item.approvedPayload?.expiresAt === 'string' ? item.approvedPayload.expiresAt : typeof item.payload?.expiresAt === 'string' ? item.payload.expiresAt : undefined
-    item.updatedAt = now()
-    application.status = aggregateResourceApplicationStatusForReview(application.resourceItems ?? [], application.status)
-    if (['pending_allocation', 'delivered', 'approved', 'partial_approved', 'rejected'].includes(application.status)) {
-      application.reviewedAt = item.updatedAt
-      if (['delivered', 'rejected'].includes(application.status))
-        application.completedAt = item.updatedAt
-    }
-    application.answer = `<p>资源申请审批已更新：${resourceTypeLabel(item.resourceType)} / ${item.resourceSubtype} / ${resourceApprovalStatusText(item.approvalStatus)}。</p>`
+    const reviewedAt = now()
+    const answer = `<p>资源申请审批已更新：${resourceTypeLabel(item.resourceType)} / ${item.resourceSubtype} / ${resourceApprovalStatusText(status)}。</p>`
+    transitionResourceItemReviewed(application, item, {
+      status,
+      approvedPayload: isRecord(payload.approvedPayload) ? payload.approvedPayload : undefined,
+      note,
+    }, reviewedAt, answer)
     return { applicationId: application.id, item }
   })
 }
@@ -2320,24 +2306,17 @@ export async function reviewAdminApplicationItemAction(request: Request, env: Wo
 export async function completeAdminResourceProvisionAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, _admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (application.type !== 'resource')
-      throw new Error('资源申请不存在')
+    assertResourceApplication(application)
     const item = application.resourceItems?.find(resourceItem => resourceItem.id === payload.itemId)
     if (!item)
       throw new Error('资源明细不存在')
-    if (!['approved', 'adjusted_approved'].includes(item.approvalStatus))
-      throw new Error('只有通过的资源明细需要开通')
     const provisionPayload = normalizeManualProvisionPayload(payload)
-    item.provisionStatus = 'completed'
-    item.lifecycleStatus = resolveResourceLifecycleStatus({ ...item, provisionStatus: 'completed', lifecycleStatus: undefined })
-    item.provisionPayload = provisionPayload
-    item.provisionNote = manualProvisionNote(provisionPayload)
-    item.provisionCompletedAt = now()
-    item.activatedAt = item.lifecycleStatus === 'active' ? item.provisionCompletedAt : item.activatedAt
-    item.updatedAt = item.provisionCompletedAt
-    application.status = aggregateResourceApplicationStatusForReview(application.resourceItems ?? [], application.status)
-    if (application.status === 'delivered')
-      application.completedAt = item.provisionCompletedAt
+    const lifecycleStatus = resolveResourceLifecycleStatus({ ...item, provisionStatus: 'completed', lifecycleStatus: undefined })
+    transitionResourceProvisionCompleted(application, item, {
+      lifecycleStatus,
+      payload: provisionPayload,
+      note: manualProvisionNote(provisionPayload),
+    }, now())
     return { applicationId: application.id, item }
   })
 }
@@ -2345,16 +2324,11 @@ export async function completeAdminResourceProvisionAction(request: Request, env
 export async function completeAdminApplicationAllocationAction(request: Request, env: WorkerEnv) {
   return commitAdminStateAction(request, env, (state, admin, payload) => {
     const application = adminApplication(state, payload.applicationId)
-    if (application.status !== 'pending_allocation')
-      throw new Error('只有待分配资源的申请可以完成发放')
     const allocationPayload = normalizeManualProvisionPayload(payload)
+    const allocationNote = manualProvisionNote(allocationPayload)
     const completedAt = now()
-    application.status = 'delivered'
-    application.allocationPayload = allocationPayload
-    application.allocationNote = manualProvisionNote(allocationPayload)
-    application.allocationCompletedAt = completedAt
-    application.completedAt = completedAt
-    pushApplicationMessage(application, admin.id, 'system', `<p>管理员已完成资源发放。</p><pre>${escapeHtml(application.allocationNote)}</pre>`)
+    transitionApplicationAllocationCompleted(application, allocationPayload, allocationNote, completedAt)
+    pushApplicationMessage(application, admin.id, 'system', `<p>管理员已完成资源发放。</p><pre>${escapeHtml(allocationNote)}</pre>`)
     return { applicationId: application.id }
   })
 }

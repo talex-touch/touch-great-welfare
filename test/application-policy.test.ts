@@ -19,6 +19,7 @@ const {
   verificationTypeLabel,
   useWelfareStore,
 } = await import('../src/composables/welfare')
+const { useWelfareUiState } = await import('../src/composables/welfare-ui')
 
 function user(overrides: Partial<User> = {}): User {
   return {
@@ -581,7 +582,6 @@ describe('application policy', () => {
 
   it('relies on the submit action to reject stale student verification balances', async () => {
     const store = useWelfareStore()
-    const { useWelfareUiState } = await import('../src/composables/welfare-ui')
     const ui = useWelfareUiState()
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockClear()

@@ -6,10 +6,15 @@ const {
   assertCanRejectApplication,
   assertCanCompleteApplication,
   assertCanRequestApplicationSupplement,
+  assertCanReviewResourceApplication,
+  assertResourceApplication,
+  transitionApplicationAllocationCompleted,
   transitionApplicationAnswered,
   transitionApplicationCompleted,
   transitionApplicationRejected,
   transitionApplicationSupplementRequested,
+  transitionResourceItemReviewed,
+  transitionResourceProvisionCompleted,
 } = await import('../src/worker/welfare/application-state-machine')
 
 describe('worker application state machine', () => {
@@ -76,6 +81,117 @@ describe('worker application state machine', () => {
     expect(application).toMatchObject({
       status: 'completed',
       completedAt: '2026-06-04T00:00:00.000Z',
+    })
+  })
+
+  it('centralizes resource item review transitions', () => {
+    const item = {
+      id: 'item_1',
+      applicationId: 'app_1',
+      resourceType: 'database',
+      resourceSubtype: 'postgresql',
+      payload: { expiresAt: '2026-08-01T00:00:00.000Z' },
+      approverGroup: '管理员',
+      approvalStatus: 'pending',
+      provisionStatus: 'not_required',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+    }
+    const application = {
+      id: 'app_1',
+      userId: 'user_1',
+      type: 'resource',
+      title: '数据库申请',
+      description: '测试',
+      hasOpenSourceBadge: false,
+      attachments: [],
+      status: 'in_review',
+      cost: 0,
+      costCharged: false,
+      aiReviewFeeRate: 0,
+      rejectionReviewFee: 0,
+      rejectionReviewFeeWaived: false,
+      storageExtended: false,
+      storageExtensionCost: 0,
+      retentionExpiresAt: '2026-08-01T00:00:00.000Z',
+      resourceItems: [item],
+      createdAt: '2026-07-01T00:00:00.000Z',
+    }
+
+    transitionResourceItemReviewed(application as never, item as never, {
+      status: 'approved',
+      approvedPayload: { expiresAt: '2026-09-01T00:00:00.000Z' },
+      note: '',
+    }, '2026-07-02T00:00:00.000Z', '<p>审批通过</p>')
+
+    expect(item).toMatchObject({
+      approvalStatus: 'approved',
+      provisionStatus: 'pending',
+      lifecycleStatus: 'provisioning',
+      expiresAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-07-02T00:00:00.000Z',
+    })
+    expect(application).toMatchObject({
+      status: 'pending_allocation',
+      reviewedAt: '2026-07-02T00:00:00.000Z',
+      answer: '<p>审批通过</p>',
+    })
+  })
+
+  it('rejects invalid resource review decisions', () => {
+    const application = { type: 'resource', status: 'in_review', resourceItems: [] }
+    const item = { approvalStatus: 'pending', payload: {} }
+
+    expect(() => transitionResourceItemReviewed(application as never, item as never, {
+      status: 'rejected',
+      note: '',
+    }, '2026-07-02T00:00:00.000Z', '')).toThrow('驳回资源明细时必须填写原因')
+    expect(() => transitionResourceItemReviewed(application as never, item as never, {
+      status: 'adjusted_approved',
+      note: '',
+    }, '2026-07-02T00:00:00.000Z', '')).toThrow('调整后通过必须填写批准后的额度/权限')
+
+    expect(() => assertResourceApplication({ type: 'code' })).toThrow('资源申请不存在')
+    expect(() => assertCanReviewResourceApplication({ type: 'resource', status: 'pending_allocation' })).toThrow('该申请不在审批中')
+  })
+
+  it('centralizes resource provision and allocation completion', () => {
+    const item = {
+      approvalStatus: 'approved',
+      provisionStatus: 'pending',
+      lifecycleStatus: 'provisioning',
+      payload: {},
+    }
+    const application = {
+      type: 'resource',
+      status: 'pending_allocation',
+      resourceItems: [item],
+    }
+
+    transitionResourceProvisionCompleted(application as never, item as never, {
+      lifecycleStatus: 'active',
+      payload: { resourceName: 'PostgreSQL' },
+      note: '资源：PostgreSQL',
+    }, '2026-07-03T00:00:00.000Z')
+    expect(item).toMatchObject({
+      provisionStatus: 'completed',
+      lifecycleStatus: 'active',
+      provisionCompletedAt: '2026-07-03T00:00:00.000Z',
+      activatedAt: '2026-07-03T00:00:00.000Z',
+    })
+    expect(application).toMatchObject({
+      status: 'delivered',
+      completedAt: '2026-07-03T00:00:00.000Z',
+    })
+
+    const ordinaryApplication = { status: 'pending_allocation' }
+    transitionApplicationAllocationCompleted(ordinaryApplication as never, { resourceName: 'Codex' }, '资源：Codex', '2026-07-04T00:00:00.000Z')
+    expect(ordinaryApplication).toMatchObject({
+      status: 'delivered',
+      allocationPayload: { resourceName: 'Codex' },
+      allocationNote: '资源：Codex',
+      allocationCompletedAt: '2026-07-04T00:00:00.000Z',
+      completedAt: '2026-07-04T00:00:00.000Z',
     })
   })
 })
