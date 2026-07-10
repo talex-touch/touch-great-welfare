@@ -3,7 +3,7 @@
  */
 
 import type { Pool } from 'pg'
-import type { WorkerEnv } from '../../core'
+import type { WorkerEnv } from '../../env'
 import { ApplicationRepository } from './application-repository'
 import { getMigrationConfig, setMigrationConfig } from './base'
 import { UserRepository } from './user-repository'

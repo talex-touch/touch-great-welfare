@@ -130,7 +130,7 @@ export default {
       || url.pathname.startsWith('/api/square/')
       || url.pathname.startsWith('/api/collaboration/')
       || url.pathname.startsWith('/api/deliveries/')
-      || url.pathname.startsWith('/api/admin/welfare')
+      || url.pathname.startsWith('/api/admin/welfare/')
       || url.pathname.startsWith('/api/admin/config/')
       || url.pathname === '/api/admin/applications'
       || url.pathname.startsWith('/api/admin/applications/')
@@ -150,7 +150,7 @@ export default {
       return handleGitHubAppRequest(request, env)
     if (url.pathname.startsWith('/api/oauth/'))
       return handleOAuthRequest(request, env)
-    if (url.pathname.startsWith('/api/notifications'))
+    if (url.pathname === '/api/notifications' || url.pathname.startsWith('/api/notifications/'))
       return handleNotificationRequest(request, env)
     if (url.pathname.startsWith('/api/points/'))
       return handlePointRequest(request, env)

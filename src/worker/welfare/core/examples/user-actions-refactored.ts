@@ -5,7 +5,7 @@
  * 重构为使用 Repository 的代码
  */
 
-import type { WorkerEnv } from '../../core'
+import type { WorkerEnv } from '../../env'
 import type { User, UserProfile } from '~/shared/welfare-types'
 import { readWelfareStateRecord, writeWelfareState } from '../../core'
 import { getPool } from '../database/connection'
@@ -58,7 +58,6 @@ export async function updateCurrentProfileAction(
   // 8. 保存 state（向后兼容）
   await writeWelfareState(env, state, {
     expectedVersion: stateRecord.version,
-    previousState: stateRecord.state,
   })
 
   return new Response(JSON.stringify({ ok: true }), {

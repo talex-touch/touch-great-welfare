@@ -58,6 +58,16 @@ describe('worker route matrix', () => {
     expect(await response.text()).toBe('Not Found')
   })
 
+  it.each([
+    '/api/notifications-disabled',
+    '/api/admin/welfare-disabled',
+  ])('does not route adjacent path prefixes for %s', async (path) => {
+    const response = await expectFastResponse(new Request(`https://example.com${path}`))
+
+    expect(response.status).toBe(404)
+    expect(await response.text()).toBe('Not Found')
+  })
+
   it('returns method boundaries from the welfare router', async () => {
     const response = await expectFastResponse(new Request('https://example.com/api/session', {
       method: 'POST',
@@ -156,6 +166,13 @@ describe('worker route matrix', () => {
     }
   })
 
+  it('converts legacy state storage failures into deterministic JSON', async () => {
+    const response = await expectFastResponse(new Request('https://example.com/api/welfare-state'))
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ error: 'Hyperdrive binding is required' })
+  })
+
   it('serves public config with masked secrets from the worker entrypoint', async () => {
     const response = await expectFastResponse(new Request('https://example.com/api/config/public'), localDbEnv({
       applicationPolicy: {
@@ -233,26 +250,54 @@ describe('worker route matrix', () => {
 
   it.each([
     ['GET', '/api/ai/config'],
+    ['PUT', '/api/ai/config'],
     ['GET', '/api/ai/temporary-keys'],
     ['POST', '/api/ai/temporary-key'],
+    ['DELETE', '/api/ai/temporary-keys/key_1'],
     ['POST', '/api/ai/reviews'],
+    ['POST', '/api/ai/applications/app_1/provision'],
+    ['POST', '/api/ai/images'],
     ['GET', '/api/sub2api/config'],
+    ['PUT', '/api/sub2api/config'],
+    ['POST', '/api/sub2api/test'],
     ['GET', '/api/sub2api/keys'],
     ['POST', '/api/sub2api/keys'],
     ['DELETE', '/api/sub2api/keys/key_1'],
     ['GET', '/api/notifications/provider-config'],
+    ['PUT', '/api/notifications/provider-config'],
+    ['POST', '/api/notifications/provider-config/vapid/generate'],
+    ['POST', '/api/notifications/provider-config/feishu/authorize'],
+    ['POST', '/api/notifications/provider-config/feishu/mailboxes'],
+    ['POST', '/api/notifications/provider-config/email-test'],
+    ['GET', '/api/notifications/admin-announcements'],
+    ['POST', '/api/notifications/admin-announcements'],
+    ['GET', '/api/notifications/system-logs'],
     ['GET', '/api/notifications'],
     ['GET', '/api/notifications/settings'],
     ['PUT', '/api/notifications/settings'],
+    ['POST', '/api/notifications/email-test'],
+    ['POST', '/api/notifications/push-subscriptions'],
+    ['DELETE', '/api/notifications/push-subscriptions'],
     ['PATCH', '/api/notifications/read-all'],
+    ['PATCH', '/api/notifications/notification_1/read'],
     ['DELETE', '/api/notifications/push-subscriptions/sub_1'],
     ['GET', '/api/database-provision/config'],
+    ['PUT', '/api/database-provision/config'],
     ['POST', '/api/database-provision/test'],
     ['POST', '/api/database-provision/onepanel-status'],
     ['GET', '/api/education-mail/config'],
+    ['PUT', '/api/education-mail/config'],
+    ['POST', '/api/education-mail/test'],
+    ['POST', '/api/education-mail/sync'],
+    ['POST', '/api/education-mail/verify'],
     ['GET', '/api/github-app/config'],
+    ['PUT', '/api/github-app/config'],
     ['GET', '/api/oauth/configs'],
+    ['PUT', '/api/oauth/configs'],
     ['GET', '/api/points/transactions'],
+    ['PUT', '/api/recharge/config'],
+    ['POST', '/api/recharge/create'],
+    ['GET', '/api/recharge/status?out_trade_no=order_1'],
     ['POST', '/api/turnstile/verify'],
     ['POST', '/api/uploads/images'],
   ])('guards integration config route %s %s before touching storage', async (method, path) => {
@@ -275,6 +320,68 @@ describe('worker route matrix', () => {
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toEqual({ error: 'Webhook secret is not configured' })
+  })
+
+  it('rejects non-GET recharge return callbacks', async () => {
+    const response = await expectFastResponse(new Request('https://example.com/api/recharge/return', {
+      method: 'POST',
+    }))
+
+    expect(response.status).toBe(405)
+    await expect(response.json()).resolves.toEqual({ error: 'Method Not Allowed' })
+  })
+
+  it('serves anonymous recharge config without exposing merchant secrets', async () => {
+    const response = await expectFastResponse(new Request('https://example.com/api/recharge/config'), localDbEnv({
+      users: [],
+      transactions: [],
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      configured: false,
+      pid: '',
+      keyMasked: '',
+      paymentType: 'epay',
+    })
+  })
+
+  it('keeps recharge provider callbacks deterministic without database config', async () => {
+    const response = await expectFastResponse(new Request('https://example.com/api/recharge/notify'))
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toBe('fail')
+  })
+
+  it('redirects recharge return callbacks without touching storage', async () => {
+    const response = await expectFastResponse(new Request('https://example.com/api/recharge/return?out_trade_no=order_1'))
+
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toBe('https://example.com/dashboard/profile?recharge=order_1')
+  })
+
+  it.each([
+    ['POST', '/api/github-app/authorize'],
+    ['POST', '/api/github-app/callback'],
+    ['POST', '/api/oauth/authorize'],
+    ['POST', '/api/oauth/callback'],
+    ['GET', '/api/notifications/provider-config/feishu/callback'],
+  ])('keeps public integration action %s %s deterministic without external calls', async (method, path) => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockClear()
+    const response = await expectFastResponse(new Request(`https://example.com${path}`, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: method === 'GET' ? undefined : '{}',
+    }), localDbEnv({
+      users: [],
+      transactions: [],
+      systemConfig: { siteEnabled: true, loginEnabled: true },
+    }))
+
+    expect(response.status, `${method} ${path}`).toBe(500)
+    expect(await response.json()).toHaveProperty('error')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it.each([

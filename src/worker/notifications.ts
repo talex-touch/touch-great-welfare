@@ -3577,7 +3577,7 @@ export async function handleNotificationRequest(request: Request, env: WorkerEnv
     }
 
     if (path === '/provider-config/feishu/callback' && request.method === 'GET')
-      return completeFeishuMailAuthorization(request, env)
+      return await completeFeishuMailAuthorization(request, env)
 
     if (path === '/admin-announcements' && request.method === 'GET') {
       await assertAdminRequest(request, env)

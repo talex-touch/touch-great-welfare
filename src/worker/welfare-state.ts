@@ -1,4 +1,4 @@
-export type { WorkerEnv } from './welfare/core'
+export type { WorkerEnv } from './welfare/env'
 export {
   handleApplicationSubmitRequest,
   handleWelfareStateRequest,

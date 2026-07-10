@@ -8,7 +8,7 @@
  */
 
 import type { Pool } from 'pg'
-import type { WorkerEnv } from '../../core'
+import type { WorkerEnv } from '../../env'
 
 // 迁移配置
 export interface MigrationConfig {

@@ -1,4 +1,4 @@
-import type { WorkerEnv } from './core'
+import type { WorkerEnv } from './env'
 import { Pool } from 'pg'
 
 const POSTGRES_CONNECTION_TIMEOUT_MS = 15000
@@ -20,8 +20,8 @@ export function shouldUseD1(env: WorkerEnv) {
 
 export function allowUnstableNormalizedReads(env: WorkerEnv) {
   return env.USE_NORMALIZED_TABLES === 'true'
+    && env.ALLOW_UNSTABLE_NORMALIZED_READS === 'true'
     && shouldUseD1(env)
-    && (env.ALLOW_UNSTABLE_NORMALIZED_READS === 'true' || !env.HYPERDRIVE)
 }
 
 export function getPool(env: WorkerEnv) {

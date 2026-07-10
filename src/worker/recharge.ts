@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { UserCoupon, WelfareState } from '~/shared/welfare-types'
 import { normalizeSystemConfig } from '~/shared/welfare-domain'
-import { assertSafeExternalUrl, normalizeUrlBase } from './auth'
+import { assertSafeExternalUrl, errorResponse, fetchWithTimeout, json, maskSecret, normalizeUrlBase, readJson } from './auth'
 import { decryptSecret, encryptSecret } from './crypto'
 import {
   buildEpaySubmitUrl,
@@ -58,17 +58,7 @@ interface RechargeCreatePayload {
 }
 
 const ORDER_PREFIX = 'TGW'
-const MAX_JSON_BYTES = 64 * 1024
 const DEFAULT_POINTS_PER_LDC = 10
-
-function json(payload: unknown, status = 200) {
-  return Response.json(payload, {
-    status,
-    headers: {
-      'cache-control': 'no-store',
-    },
-  })
-}
 
 function text(payload: string, status = 200) {
   return new Response(payload, {
@@ -78,10 +68,6 @@ function text(payload: string, status = 200) {
       'content-type': 'text/plain; charset=utf-8',
     },
   })
-}
-
-function errorResponse(error: unknown, status = 500) {
-  return json({ error: error instanceof Error ? error.message : '服务端错误' }, status)
 }
 
 function getRequestOrigin(request: Request) {
@@ -221,42 +207,6 @@ async function getLdcConfig(env: WorkerEnv) {
     pid: settings.pid,
     key: settings.key,
   })
-}
-
-function maskSecret(value?: string) {
-  const text = value?.trim() ?? ''
-  if (!text)
-    return ''
-  if (text.length <= 8)
-    return '••••'
-  return `${text.slice(0, 4)}••••${text.slice(-4)}`
-}
-
-async function readJson<T>(request: Request): Promise<T> {
-  const contentLength = Number(request.headers.get('content-length') ?? 0)
-  if (contentLength > MAX_JSON_BYTES)
-    throw new Error('请求体过大')
-
-  const text = await request.text()
-  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BYTES)
-    throw new Error('请求体过大')
-
-  return JSON.parse(text || '{}') as T
-}
-
-async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = 15000) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    return await fetch(input, {
-      ...init,
-      signal: controller.signal,
-    })
-  }
-  finally {
-    clearTimeout(timer)
-  }
 }
 
 async function ensureRechargeSchema(env: WorkerEnv) {
@@ -435,18 +385,18 @@ function assertWelfareState(input: Partial<WelfareState>): asserts input is Welf
 async function getCurrentUserId(request: Request, env: WorkerEnv) {
   const userId = await authenticatedUserId(request, env)
   if (!userId)
-    throw new Error('请先登录后再充值')
+    throw new Error('请先登录')
 
   return userId
 }
 
 async function getCurrentUser(request: Request, env: WorkerEnv) {
-  const state = await readWelfareState(env) as Partial<WelfareState>
-  assertWelfareState(state)
-
   const userId = await authenticatedUserId(request, env)
   if (!userId)
     throw new Error('请先登录')
+
+  const state = await readWelfareState(env) as Partial<WelfareState>
+  assertWelfareState(state)
 
   const user = state.users.find(item => item.id === userId)
   if (!user)
@@ -540,6 +490,7 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   if (request.method !== 'POST')
     return json({ error: 'Method Not Allowed' }, 405)
 
+  const userId = await getCurrentUserId(request, env)
   const payload = await readJson<RechargeCreatePayload>(request)
   const amount = Number(payload.amount)
   if (!Number.isInteger(amount))
@@ -556,7 +507,6 @@ async function handleRechargeCreate(request: Request, env: WorkerEnv) {
   if (!systemConfig.rechargeEnabled)
     throw new Error(systemConfig.rechargeClosedReason)
 
-  const userId = await getCurrentUserId(request, env)
   const user = state.users.find(item => item.id === userId)
   if (!user)
     throw new Error('请先登录后再充值')
@@ -694,6 +644,9 @@ async function handleRechargeNotify(request: Request, env: WorkerEnv) {
 }
 
 async function handleRechargeReturn(request: Request) {
+  if (request.method !== 'GET')
+    return json({ error: 'Method Not Allowed' }, 405)
+
   const url = new URL(request.url)
   const outTradeNo = url.searchParams.get('out_trade_no') || url.searchParams.get('trade_no') || ''
   const redirectUrl = new URL('/dashboard/profile', url.origin)
@@ -707,6 +660,7 @@ async function handleRechargeStatus(request: Request, env: WorkerEnv) {
   if (request.method !== 'GET')
     return json({ error: 'Method Not Allowed' }, 405)
 
+  const user = await getCurrentUser(request, env)
   const url = new URL(request.url)
   const outTradeNo = url.searchParams.get('out_trade_no')?.trim()
   if (!outTradeNo)
@@ -716,7 +670,6 @@ async function handleRechargeStatus(request: Request, env: WorkerEnv) {
   if (!order)
     return json({ error: '充值订单不存在' }, 404)
 
-  const user = await getCurrentUser(request, env)
   if (user.role !== 'admin' && order.user_id !== user.id)
     return json({ error: '无权读取该充值订单' }, 403)
 

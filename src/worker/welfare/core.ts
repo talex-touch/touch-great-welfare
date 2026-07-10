@@ -1,3 +1,4 @@
+import type { WorkerEnv } from './env'
 import type { AtomicPointTransaction } from './state-store'
 import type {
   CouponTemplate,
@@ -42,14 +43,10 @@ import {
 import { analyzeEducationEmail, educationEmailAdminRecommendationLabel } from '~/shared/education-email'
 import {
   ACTIVITY_END_AT,
-  BASE_REQUEST_COST,
-  calculateActivityPrice,
-  calculateLlmApiBudgetActivityPrice,
   COLLABORATION_APPLICATION_MIN_REASON_CHARS,
   COLLABORATION_DELIVERY_REWARD_MAX,
   COLLABORATION_DELIVERY_REWARD_MIN,
   createUserInviteCode,
-  DAILY_CHECK_IN_MAX_POINTS,
   EDUCATION_EMAIL_CHALLENGE_TTL_HOURS,
   EDUCATION_EMAIL_REVIEW_INBOX,
   INVITATION_BIND_WINDOW_HOURS,
@@ -66,7 +63,6 @@ import {
   SQUARE_BOOST_REPORT_PENALTY_POINTS,
   SQUARE_BOOST_REWARD_POINTS,
   SQUARE_DAILY_BOOST_LIMIT,
-  SQUARE_MIN_DISCOUNT_RATE,
   STORAGE_EXTENSION_COST,
   STUDENT_REVIEW_FEE,
 } from '~/shared/welfare-domain'
@@ -74,8 +70,8 @@ import { isRichTextEmpty, richTextToPlainText } from '~/utils/rich-text'
 import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
 import { base64UrlDecode, base64UrlEncode, sha256Hex } from '../crypto'
 import { dispatchWelfareStateChangeNotifications } from '../notifications'
-import { appendPointTransaction, ensurePointTransactionSchema, pointTransactionId, syncUserPointBalancesFromLedger } from '../points'
-import { authenticatedUserId, createSessionCookie } from '../session'
+import { appendPointTransaction, pointTransactionId, syncUserPointBalancesFromLedger } from '../points'
+import { createSessionCookie } from '../session'
 import {
   assertCanAnswerApplication,
   assertCanCompleteApplication,
@@ -110,7 +106,7 @@ import {
   totalAttachmentBytes,
   totalResourceApplicationAttachmentBytes,
 } from './applications'
-import { getPool, shouldUseD1 } from './connection'
+import { assertAdminUser, authenticatedUser, requestUserId, requireRequestUserId } from './auth'
 import {
   createCouponCodeValue,
   createDailyCoupon,
@@ -121,6 +117,7 @@ import {
   resourceCheckoutSnapshotForState,
   squareDiscountSnapshot,
 } from './coupons'
+import { errorResponse, json, readPayload } from './http'
 import { parseOffsetParam, parsePositiveIntegerParam, parseStatusParam } from './query'
 import { isRecord } from './records'
 import { isMaskedSecret, maskSecret } from './secrets'
@@ -129,13 +126,15 @@ import {
   readAdminApplicationSnapshots,
   readCurrentUserApplicationSnapshots,
   readCurrentUserCouponSnapshots,
+} from './state-snapshots'
+import {
   readWelfareState,
   readWelfareStateRecord,
-  StateVersionConflictError,
   stateVersionPayload,
   writeWelfareState,
   writeWelfareStateWithAtomicPointTransactions,
 } from './state-store'
+import { appendTrustedPointTransaction, hasPointTransaction } from './trusted-points'
 import {
   adminTargetUser,
   clientVisibleWelfareState,
@@ -165,7 +164,10 @@ import {
   verificationTypeLabel,
 } from './verifications'
 
+export { assertAdminUser, authenticatedUser, requestUserId, requireRequestUserId } from './auth'
 export { allowUnstableNormalizedReads, getPool, shouldUseD1 } from './connection'
+export type { WorkerEnv } from './env'
+export { errorResponse, forbidden, json, readPayload } from './http'
 export { isRecord } from './records'
 export {
   readWelfareState,
@@ -173,328 +175,14 @@ export {
   StateVersionConflictError,
   writeWelfareState,
 } from './state-store'
+export { applyTrustedPointTransactionsFromState } from './trusted-points'
 export { sanitizeUser } from './users'
 
-export interface WorkerEnv {
-  LOCAL_DB?: D1Database
-  AI_ASSETS?: R2Bucket
-  HYPERDRIVE?: {
-    connectionString: string
-  }
-  NOTIFY_SECRET_KEY?: string
-  TURNSTILE_SECRET_KEY?: string
-  WELFARE_STATE_SECRET_KEY?: string
-  WEBHOOK_SECRET?: string
-  ASYNC_JOBS?: Queue<unknown>
-  USE_NORMALIZED_TABLES?: string // 'true' = 从规范化表读取
-  ALLOW_UNSTABLE_NORMALIZED_READS?: string // 'true' = 仅本地允许试验性规范化表读取
-  ENABLE_TEMP_ADMIN_ENDPOINTS?: string // 'true' = 启用临时迁移/调试端点
-  ENABLE_LEGACY_STATE_WRITE?: string // 'true' = 临时允许 /api/welfare-state 全量写入
-}
-
-const MAX_BODY_BYTES = 2 * 1024 * 1024
 const ADMIN_LOGIN_MAX_FAILURES = 8
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000
 const PASSWORD_PBKDF2_ITERATIONS = 100000
 const adminLoginAttempts = new Map<string, { failures: number, firstFailureAt: number, lockedUntil: number }>()
-
-export async function requestUserId(request: Request, env: WorkerEnv) {
-  return await authenticatedUserId(request, env)
-}
-
-async function requireRequestUserId(request: Request, env: WorkerEnv) {
-  const userId = await requestUserId(request, env)
-  if (!userId)
-    throw new Error('请先登录')
-  return userId
-}
-
-function arrayRecords(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => isRecord(item) && typeof item.id === 'string') : []
-}
-
-function recordMap(value: unknown) {
-  return new Map(arrayRecords(value).map(item => [item.id as string, item]))
-}
-
-function numberField(record: Record<string, unknown>, key: string, fallback = 0) {
-  const value = Number(record[key])
-  return Number.isFinite(value) ? value : fallback
-}
-
-function boolField(record: Record<string, unknown>, key: string) {
-  return record[key] === true || record[key] === 1 || record[key] === '1'
-}
-
-function transactionId(scope: string, refId: string) {
-  return pointTransactionId(scope, refId)
-}
-
-function expectedApplicationBaseCost(application: Record<string, unknown>) {
-  const type = typeof application.type === 'string' ? application.type : ''
-  const createdAt = typeof application.createdAt === 'string' ? application.createdAt : now()
-  if (type === 'code' && application.llmApiBudgetUsd !== undefined) {
-    const model = resolveSelectableLlmApiModel(typeof application.llmApiModelKey === 'string' ? application.llmApiModelKey : undefined)
-    const budgetUsd = numberField(application, 'llmApiBudgetUsd', model.defaultBudgetUsd)
-    return calculateLlmApiBudgetActivityPrice(calculateLlmApiCostPoints(budgetUsd, model), budgetUsd, model, createdAt)
-  }
-  if (type === 'code' || type === 'image' || type === 'pro')
-    return calculateActivityPrice(BASE_REQUEST_COST[type], createdAt)
-  return 0
-}
-
-function assertTrustedNewApplication(application: Record<string, unknown>, userId: string) {
-  if (application.userId !== userId)
-    throw new Error('无权提交其他用户的申请')
-
-  const type = typeof application.type === 'string' ? application.type : ''
-  const status = typeof application.status === 'string' ? application.status : ''
-  if (!['code', 'image', 'pro', 'resource'].includes(type))
-    throw new Error('申请类型无效')
-  if (type === 'resource' && !['draft', 'in_review'].includes(status))
-    throw new Error('资源申请初始状态无效')
-  if (type !== 'resource' && status !== 'pending_review')
-    throw new Error('申请初始状态无效')
-
-  const cost = numberField(application, 'cost')
-  const isDraft = type === 'resource' && status === 'draft'
-  if (isDraft)
-    return
-
-  if (!boolField(application, 'costCharged'))
-    throw new Error('申请必须由服务端记录预扣费')
-  if (cost < 0)
-    throw new Error('申请费用无效')
-
-  const minimumBaseCost = Math.floor(expectedApplicationBaseCost(application) * SQUARE_MIN_DISCOUNT_RATE)
-  if (minimumBaseCost > 0 && cost < minimumBaseCost)
-    throw new Error('申请费用低于服务端规则')
-}
-
-async function appendTrustedPointTransaction(env: WorkerEnv, state: unknown, input: Parameters<typeof appendPointTransaction>[1]) {
-  await appendPointTransaction(env, input, state)
-}
-
-async function hasPointTransaction(env: WorkerEnv, id: string) {
-  await ensurePointTransactionSchema(env)
-  if (shouldUseD1(env)) {
-    const row = await env.LOCAL_DB!
-      .prepare('select id from point_transactions where id = ?1')
-      .bind(id)
-      .first<{ id: string }>()
-    return !!row
-  }
-
-  const result = await getPool(env).query<{ id: string }>('select id from point_transactions where id = $1', [id])
-  return !!result.rows[0]
-}
-
-export async function applyTrustedPointTransactionsFromState(env: WorkerEnv, previousState: unknown, nextState: unknown, userId: string) {
-  if (!isRecord(previousState) || !isRecord(nextState))
-    return
-
-  const previousApplications = recordMap(previousState.applications)
-  for (const application of arrayRecords(nextState.applications)) {
-    if (application.userId !== userId)
-      continue
-
-    const previousApplication = previousApplications.get(application.id as string)
-    if (previousApplication) {
-      if (previousApplication.status !== 'draft' || application.type !== 'resource' || application.status !== 'in_review' || application.costCharged !== true)
-        continue
-    }
-    else {
-      assertTrustedNewApplication(application, userId)
-      if (application.type === 'resource' && application.status === 'draft')
-        continue
-    }
-
-    const applicationId = application.id as string
-    const cost = Math.trunc(numberField(application, 'cost'))
-    if (cost > 0) {
-      await appendTrustedPointTransaction(env, previousState, {
-        id: transactionId('application_cost', applicationId),
-        userId,
-        delta: -cost,
-        type: 'spend',
-        reason: `${String(application.type || '申请').toUpperCase()} 申请预扣`,
-        refId: applicationId,
-        createdAt: typeof application.createdAt === 'string' ? application.createdAt : now(),
-      })
-    }
-
-    const storageExtensionCost = Math.trunc(numberField(application, 'storageExtensionCost', boolField(application, 'storageExtended') ? STORAGE_EXTENSION_COST : 0))
-    if (storageExtensionCost > 0) {
-      await appendTrustedPointTransaction(env, previousState, {
-        id: transactionId('storage_extension', applicationId),
-        userId,
-        delta: -storageExtensionCost,
-        type: 'spend',
-        reason: '延长申请存储服务 7 天预扣',
-        refId: applicationId,
-        createdAt: typeof application.createdAt === 'string' ? application.createdAt : now(),
-      })
-    }
-
-    const expediteCost = Math.trunc(numberField(application, 'expediteCost', boolField(application, 'expedited') ? PRO_EXPEDITE_COST : 0))
-    if (expediteCost > 0) {
-      await appendTrustedPointTransaction(env, previousState, {
-        id: transactionId('expedite', applicationId),
-        userId,
-        delta: -expediteCost,
-        type: 'spend',
-        reason: 'Pro 处理加速预扣',
-        refId: applicationId,
-        createdAt: typeof application.createdAt === 'string' ? application.createdAt : now(),
-      })
-    }
-  }
-
-  const previousVerifications = recordMap(previousState.studentVerifications)
-  for (const verification of arrayRecords(nextState.studentVerifications)) {
-    if (previousVerifications.has(verification.id as string) || verification.userId !== userId)
-      continue
-    if (verification.status !== 'pending' || boolField(verification, 'feeReturned'))
-      throw new Error('认证申请状态无效')
-
-    const verificationId = verification.id as string
-    const reviewFee = Math.trunc(numberField(verification, 'reviewFee', STUDENT_REVIEW_FEE))
-    if (reviewFee !== STUDENT_REVIEW_FEE)
-      throw new Error('认证审核费无效')
-
-    await appendTrustedPointTransaction(env, previousState, {
-      id: transactionId('student_review', verificationId),
-      userId,
-      delta: -STUDENT_REVIEW_FEE,
-      type: 'spend',
-      reason: '认证审核费',
-      refId: verificationId,
-      createdAt: typeof verification.createdAt === 'string' ? verification.createdAt : now(),
-    })
-  }
-
-  const previousCheckIns = recordMap(previousState.dailyCheckIns)
-  for (const checkIn of arrayRecords(nextState.dailyCheckIns)) {
-    if (previousCheckIns.has(checkIn.id as string) || checkIn.userId !== userId)
-      continue
-    const points = Math.trunc(numberField(checkIn, 'points'))
-    if (points < 1 || points > DAILY_CHECK_IN_MAX_POINTS)
-      throw new Error('签到奖励积分无效')
-
-    await appendTrustedPointTransaction(env, previousState, {
-      id: transactionId('daily_checkin', checkIn.id as string),
-      userId,
-      delta: points,
-      type: 'grant',
-      reason: `每日签到奖励（连续 ${Math.max(1, Math.trunc(numberField(checkIn, 'streak', 1)))} 天）`,
-      refId: checkIn.id as string,
-      createdAt: typeof checkIn.createdAt === 'string' ? checkIn.createdAt : now(),
-    })
-  }
-
-  const previousBoosts = recordMap(previousState.squareBoosts)
-  for (const boost of arrayRecords(nextState.squareBoosts)) {
-    if (previousBoosts.has(boost.id as string) || boost.userId !== userId)
-      continue
-    const mode = typeof boost.mode === 'string' ? boost.mode : 'boost'
-    const pointsGranted = Math.trunc(numberField(boost, 'pointsGranted'))
-    if (mode === 'post_approval_vote') {
-      if (pointsGranted !== 0)
-        throw new Error('结束后助力投票不能发放积分')
-      continue
-    }
-    if (pointsGranted !== SQUARE_BOOST_REWARD_POINTS)
-      throw new Error('助力奖励积分无效')
-
-    await appendTrustedPointTransaction(env, previousState, {
-      id: transactionId('square_boost', boost.id as string),
-      userId,
-      delta: SQUARE_BOOST_REWARD_POINTS,
-      type: 'grant',
-      reason: '广场拼一刀助力奖励',
-      refId: boost.id as string,
-      createdAt: typeof boost.createdAt === 'string' ? boost.createdAt : now(),
-    })
-  }
-
-  const previousReports = recordMap(previousState.squareReports)
-  const previousBoostById = recordMap(previousState.squareBoosts)
-  const nextBoostById = recordMap(nextState.squareBoosts)
-  for (const report of arrayRecords(nextState.squareReports)) {
-    if (previousReports.has(report.id as string) || report.reporterId !== userId)
-      continue
-    const boostId = typeof report.boostId === 'string' ? report.boostId : ''
-    const previousBoost = previousBoostById.get(boostId)
-    const nextBoost = nextBoostById.get(boostId)
-    if (!previousBoost || !nextBoost || previousBoost.penaltyApplied === true || nextBoost.penaltyApplied !== true || nextBoost.reportedBy !== userId)
-      throw new Error('举报扣分状态无效')
-    const targetUserId = typeof previousBoost.userId === 'string' ? previousBoost.userId : ''
-    if (!targetUserId || targetUserId === userId)
-      throw new Error('举报目标无效')
-
-    await appendTrustedPointTransaction(env, previousState, {
-      id: transactionId('square_report_penalty', boostId),
-      userId: targetUserId,
-      delta: -SQUARE_BOOST_REPORT_PENALTY_POINTS,
-      type: 'spend',
-      reason: '广场助力被举报扣除积分',
-      refId: boostId,
-      createdAt: typeof report.createdAt === 'string' ? report.createdAt : now(),
-      allowDebt: true,
-    })
-  }
-
-  const previousUsers = arrayRecords(previousState.users)
-  const pointsByUser = new Map(previousUsers.map(user => [user.id as string, user.points]))
-  if (Array.isArray(nextState.users)) {
-    for (const user of nextState.users) {
-      if (isRecord(user) && typeof user.id === 'string' && pointsByUser.has(user.id))
-        user.points = pointsByUser.get(user.id)
-    }
-  }
-  nextState.transactions = []
-}
-
-export function json(payload: unknown, status = 200, headers?: HeadersInit) {
-  return Response.json(payload, {
-    status,
-    headers: {
-      'cache-control': 'no-store',
-      ...headers,
-    },
-  })
-}
-
-export function forbidden(message = '需要管理员权限') {
-  return json({ error: message }, 403)
-}
-
-export function errorResponse(error: unknown) {
-  if (error instanceof StateVersionConflictError) {
-    return json({
-      code: 'STATE_VERSION_CONFLICT',
-      error: error.message,
-    }, 409)
-  }
-
-  const message = error instanceof Error ? error.message : '服务端错误'
-  return json({
-    error: message,
-  }, message === '请先登录' ? 401 : 500)
-}
-
-export async function readPayload(request: Request) {
-  const contentLength = Number(request.headers.get('content-length') ?? 0)
-  if (contentLength > MAX_BODY_BYTES)
-    throw new Error('请求体过大')
-
-  const text = await request.text()
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES)
-    throw new Error('请求体过大')
-
-  return JSON.parse(text || '{}') as { state?: unknown }
-}
 
 function normalizeEmail(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
@@ -657,23 +345,6 @@ function shiftDateKey(dateKey: string, days: number) {
   const date = new Date(`${dateKey}T00:00:00`)
   date.setDate(date.getDate() + days)
   return localDateKey(date)
-}
-
-export async function authenticatedUser(request: Request, env: WorkerEnv, state: Partial<WelfareState>) {
-  const userId = await requestUserId(request, env)
-  if (!userId)
-    throw new Error('请先登录')
-
-  const user = stateUsers(state).find(item => item.id === userId)
-  if (!user || user.accountStatus === 'suspended')
-    throw new Error('请先登录')
-
-  return user
-}
-
-export function assertAdminUser(user: User) {
-  if (user.role !== 'admin')
-    throw new Error('需要管理员权限')
 }
 
 function assertReviewerUser(user: User) {
@@ -849,7 +520,7 @@ async function applyStandardApplicationCommand(env: WorkerEnv, state: Partial<We
 
   if (application.cost > 0) {
     await appendTrustedPointTransaction(env, state, {
-      id: transactionId('application_cost', application.id),
+      id: pointTransactionId('application_cost', application.id),
       userId: user.id,
       delta: -application.cost,
       type: 'spend',
@@ -860,7 +531,7 @@ async function applyStandardApplicationCommand(env: WorkerEnv, state: Partial<We
   }
   if (storageExtensionCost > 0) {
     await appendTrustedPointTransaction(env, state, {
-      id: transactionId('storage_extension', application.id),
+      id: pointTransactionId('storage_extension', application.id),
       userId: user.id,
       delta: -storageExtensionCost,
       type: 'spend',
@@ -871,7 +542,7 @@ async function applyStandardApplicationCommand(env: WorkerEnv, state: Partial<We
   }
   if (expediteCost > 0) {
     await appendTrustedPointTransaction(env, state, {
-      id: transactionId('expedite', application.id),
+      id: pointTransactionId('expedite', application.id),
       userId: user.id,
       delta: -expediteCost,
       type: 'spend',
@@ -1006,7 +677,7 @@ async function applyResourceApplicationCommand(env: WorkerEnv, state: Partial<We
   if (!isDraft) {
     if (application.cost > 0) {
       await appendTrustedPointTransaction(env, state, {
-        id: transactionId('application_cost', application.id),
+        id: pointTransactionId('application_cost', application.id),
         userId: user.id,
         delta: -application.cost,
         type: 'spend',
@@ -1123,7 +794,7 @@ export async function checkInTodayAction(request: Request, env: WorkerEnv) {
     }
     checkIns.unshift(checkIn)
     await appendTrustedPointTransaction(env, state, {
-      id: transactionId('daily_checkin', checkIn.id),
+      id: pointTransactionId('daily_checkin', checkIn.id),
       userId: user.id,
       delta: points,
       type: 'grant',
@@ -1267,7 +938,7 @@ export async function boostSquarePostAction(request: Request, env: WorkerEnv) {
   boosts.unshift(boost)
   user.points += SQUARE_BOOST_REWARD_POINTS
   const result = await commitActionStateWithPointTransactions(env, originalState, mutableState, version, [{
-    id: transactionId('square_boost', `${postId}_${user.id}`),
+    id: pointTransactionId('square_boost', `${postId}_${user.id}`),
     userId: user.id,
     delta: SQUARE_BOOST_REWARD_POINTS,
     type: 'grant',
@@ -1311,7 +982,7 @@ export async function reportSquareBoostAction(request: Request, env: WorkerEnv) 
     boost.cooldownUntil = addDays(createdAt, SQUARE_BOOST_REPORT_COOLDOWN_DAYS)
     if (!boost.penaltyApplied) {
       await appendTrustedPointTransaction(env, state, {
-        id: transactionId('square_report_penalty', boost.id),
+        id: pointTransactionId('square_report_penalty', boost.id),
         userId: boost.userId,
         delta: -SQUARE_BOOST_REPORT_PENALTY_POINTS,
         type: 'spend',
@@ -1386,7 +1057,7 @@ export async function submitStudentVerificationAction(request: Request, env: Wor
   if (!clientRequestId)
     throw new Error('提交认证缺少幂等请求 ID，请刷新后重试')
   const verificationId = await studentVerificationIdForRequest(user.id, clientRequestId)
-  const reviewTransactionId = transactionId('student_review', verificationId)
+  const reviewTransactionId = pointTransactionId('student_review', verificationId)
   const existingVerification = ensureStudentVerifications(mutableState).find(item => item.id === verificationId)
   if (existingVerification) {
     if (existingVerification.userId !== user.id)
@@ -1609,7 +1280,7 @@ async function commitActionState(env: WorkerEnv, previousState: Partial<WelfareS
   const retained = syncStudentVerifiedProfiles(applyWelfareRetentionPolicy(nextState).state)
   if (isRecord(retained))
     delete retained.currentUserId
-  const version = await writeWelfareState(env, retained, { ...(expectedVersion === undefined ? {} : { expectedVersion }), previousState })
+  const version = await writeWelfareState(env, retained, expectedVersion === undefined ? {} : { expectedVersion })
   await dispatchWelfareStateChangeNotifications(env, previousState, retained)
   return { state: retained, version }
 }
@@ -1624,7 +1295,7 @@ export async function commitActionStateWithPointTransactions(
   const retained = syncStudentVerifiedProfiles(applyWelfareRetentionPolicy(nextState).state)
   if (isRecord(retained))
     delete retained.currentUserId
-  const version = await writeWelfareStateWithAtomicPointTransactions(env, retained, pointTransactions, { expectedVersion, previousState })
+  const version = await writeWelfareStateWithAtomicPointTransactions(env, retained, pointTransactions, { expectedVersion })
   await dispatchWelfareStateChangeNotifications(env, previousState, retained)
   return { state: retained, version }
 }
@@ -1907,7 +1578,7 @@ export async function reviewDeliveryResult(request: Request, env: WorkerEnv) {
   pushApplicationMessage(application, user.id, 'system', note || `<p>管理员已复核通过协作交付，发放 ${rewardPoints} 积分奖励。</p>`)
 
   await appendPointTransaction(env, {
-    id: transactionId('delivery_reward', application.id),
+    id: pointTransactionId('delivery_reward', application.id),
     userId: application.deliveryAssigneeId,
     delta: rewardPoints,
     type: 'grant',
@@ -1980,13 +1651,12 @@ export async function currentUserApplicationsResponse(request: Request, env: Wor
   const status = parseStatusParam(url.searchParams.get('status'))
   const limit = parsePositiveIntegerParam(url.searchParams.get('limit'), 50, 100)
   const offset = parseOffsetParam(url.searchParams.get('offset'))
-  const hasExplicitSnapshotQuery = status.length > 0 || offset > 0 || url.searchParams.has('limit')
-  const snapshotApplications = await readCurrentUserApplicationSnapshots(env, userId, { status, limit, offset })
+  const snapshot = await readCurrentUserApplicationSnapshots(env, userId, { status, limit, offset })
   const fallbackApplications = sanitizeOwnedApplications(stateApplications(sourceState), userId)
     .filter(item => !status.length || status.includes(item.status))
     .slice(offset, offset + limit)
-  const applications = snapshotApplications.length || hasExplicitSnapshotQuery
-    ? snapshotApplications
+  const applications = snapshot.stateVersion === version
+    ? snapshot.items
     : fallbackApplications
   const visibleUserIds = new Set(applications.map(item => item.userId))
   visibleUserIds.add(userId)
@@ -2010,9 +1680,9 @@ export async function currentUserWalletResponse(request: Request, env: WorkerEnv
   if (!user)
     throw new Error('请先登录')
 
-  const snapshotCoupons = await readCurrentUserCouponSnapshots(env, userId)
-  const coupons = snapshotCoupons.length
-    ? snapshotCoupons
+  const snapshot = await readCurrentUserCouponSnapshots(env, userId)
+  const coupons = snapshot.stateVersion === version
+    ? snapshot.items
     : (Array.isArray(sourceState.coupons) ? sourceState.coupons.filter(item => isRecord(item) && item.userId === userId) : [])
 
   return json({
@@ -2095,13 +1765,12 @@ export async function adminApplicationsResponse(request: Request, env: WorkerEnv
   const status = parseStatusParam(url.searchParams.get('status'))
   const limit = parsePositiveIntegerParam(url.searchParams.get('limit'), 100, 200)
   const offset = parseOffsetParam(url.searchParams.get('offset'))
-  const hasExplicitSnapshotQuery = status.length > 0 || offset > 0 || url.searchParams.has('limit')
-  const snapshotApplications = await readAdminApplicationSnapshots(env, { status, limit, offset })
+  const snapshot = await readAdminApplicationSnapshots(env, { status, limit, offset })
   const fallbackApplications = stateApplications(current.state)
     .filter(item => !status.length || status.includes(item.status))
     .slice(offset, offset + limit)
-  const applications = snapshotApplications.length || hasExplicitSnapshotQuery
-    ? snapshotApplications
+  const applications = snapshot.stateVersion === current.version
+    ? snapshot.items
     : fallbackApplications
   const visibleUserIds = new Set(applications.map(item => item.userId))
   visibleUserIds.add(current.user.id)
@@ -2385,7 +2054,7 @@ export async function answerAdminApplicationAction(request: Request, env: Worker
       throw new Error('请填写审核答复')
     if (!application.costCharged && application.cost > 0) {
       await appendPointTransaction(env, {
-        id: transactionId('application_cost', application.id),
+        id: pointTransactionId('application_cost', application.id),
         userId: application.userId,
         delta: -application.cost,
         type: 'spend',
@@ -2413,7 +2082,7 @@ export async function rejectAdminApplicationAction(request: Request, env: Worker
     const fraudulent = !!payload.fraudulent
     if (application.costCharged && application.cost > 0) {
       await appendPointTransaction(env, {
-        id: transactionId('application_refund', application.id),
+        id: pointTransactionId('application_refund', application.id),
         userId: application.userId,
         delta: application.cost,
         type: 'refund',
@@ -2425,7 +2094,7 @@ export async function rejectAdminApplicationAction(request: Request, env: Worker
     }
     if (application.expediteCost) {
       await appendPointTransaction(env, {
-        id: transactionId('expedite_refund', application.id),
+        id: pointTransactionId('expedite_refund', application.id),
         userId: application.userId,
         delta: application.expediteCost,
         type: 'refund',
@@ -2442,7 +2111,7 @@ export async function rejectAdminApplicationAction(request: Request, env: Worker
     if (!application.rejectionReviewFeeWaived || fraudulent) {
       const fee = application.rejectionReviewFee || calculateRejectionReviewFee(application.cost)
       await appendPointTransaction(env, {
-        id: transactionId('rejection_review_fee', application.id),
+        id: pointTransactionId('rejection_review_fee', application.id),
         userId: application.userId,
         delta: -fee,
         type: 'spend',
@@ -2543,7 +2212,7 @@ export async function reviewAdminStudentVerificationAction(request: Request, env
     if (!verification.feeReturned) {
       const reviewFee = positiveStudentReviewFee(verification)
       verification.feeReturned = true
-      const refundTransactionId = transactionId('student_review_refund', verification.id)
+      const refundTransactionId = pointTransactionId('student_review_refund', verification.id)
       if (!(await hasPointTransaction(env, refundTransactionId))) {
         const balanceAfter = target.points + reviewFee
         target.points = balanceAfter

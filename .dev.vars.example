@@ -16,7 +16,7 @@ ENABLE_TEMP_ADMIN_ENDPOINTS=false
 # Keep false; segmented domain APIs are the supported write path.
 ENABLE_LEGACY_STATE_WRITE=false
 
-# Optional and experimental: enables incomplete normalized-table reads in local D1 only.
-# Keep false unless actively testing hybrid-read coverage.
+# Optional and experimental: both flags enable application/coupon snapshot overlays in local D1.
+# Other fields still come from the full state record; keep false unless testing this path.
 USE_NORMALIZED_TABLES=false
 ALLOW_UNSTABLE_NORMALIZED_READS=false

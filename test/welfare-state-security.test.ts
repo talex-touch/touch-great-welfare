@@ -1,4 +1,4 @@
-import type { User, WelfareApplication, WelfareState } from '../src/composables/welfare'
+import type { User, UserCoupon, WelfareApplication, WelfareState } from '../src/composables/welfare'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.stubGlobal('fetch', vi.fn(async () =>
@@ -104,10 +104,19 @@ function dateKeyOffset(days: number) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-function createMemoryD1(initialState: WelfareState) {
+interface MemoryD1Options {
+  applicationSnapshots?: WelfareApplication[]
+  couponSnapshots?: UserCoupon[]
+  snapshotStateVersion?: number | null
+}
+
+function createMemoryD1(initialState: WelfareState, options: MemoryD1Options = {}) {
   let storedState: unknown = initialState
   let storedVersion = 1
   let storedMutationId = ''
+  let applicationSnapshots = [...(options.applicationSnapshots ?? initialState.applications)]
+  let couponSnapshots = [...(options.couponSnapshots ?? initialState.coupons)]
+  let snapshotStateVersion = options.snapshotStateVersion === undefined ? 1 : options.snapshotStateVersion
   let bumpVersionAfterNextVersionRead = false
   const pointTransactions: Record<string, unknown>[] = []
   const queries: Array<{ method: 'all' | 'first' | 'run', query: string, values: unknown[] }> = []
@@ -153,6 +162,8 @@ function createMemoryD1(initialState: WelfareState) {
             }
             return { version }
           }
+          if (query.includes('select state_version from welfare_snapshot_metadata'))
+            return snapshotStateVersion === null ? null : { state_version: snapshotStateVersion }
           if (query.includes('select * from recharge_merchant_config'))
             return rechargeConfig
           if (query.includes('select * from recharge_orders where out_trade_no'))
@@ -182,6 +193,38 @@ function createMemoryD1(initialState: WelfareState) {
             storedState = JSON.parse(String(this.values[1])) as unknown
             storedVersion = Number(this.values[2] || storedVersion + 1)
             storedMutationId = typeof this.values[3] === 'string' ? this.values[3] : storedMutationId
+            return { meta: { changes: 1 } }
+          }
+          if (query.includes('insert into welfare_snapshot_metadata')) {
+            snapshotStateVersion = Number(this.values[1])
+            return { meta: { changes: 1 } }
+          }
+          if (query.includes('insert into welfare_applications')) {
+            const application = JSON.parse(String(this.values[5])) as WelfareApplication
+            applicationSnapshots = [
+              ...applicationSnapshots.filter(item => item.id !== application.id),
+              application,
+            ]
+            return { meta: { changes: 1 } }
+          }
+          if (query.includes('insert into user_coupons')) {
+            const coupon = JSON.parse(String(this.values[7])) as UserCoupon
+            couponSnapshots = [
+              ...couponSnapshots.filter(item => item.id !== coupon.id),
+              coupon,
+            ]
+            return { meta: { changes: 1 } }
+          }
+          if (query.includes('delete from welfare_applications')) {
+            applicationSnapshots = query.includes('where id')
+              ? applicationSnapshots.filter(item => item.id !== this.values[0])
+              : []
+            return { meta: { changes: 1 } }
+          }
+          if (query.includes('delete from user_coupons')) {
+            couponSnapshots = query.includes('where id')
+              ? couponSnapshots.filter(item => item.id !== this.values[0])
+              : []
             return { meta: { changes: 1 } }
           }
           if (query.includes('insert into recharge_orders')) {
@@ -293,11 +336,39 @@ function createMemoryD1(initialState: WelfareState) {
               })),
             }
           }
-          if (query.includes('select payload from welfare_applications')) {
-            const applications = recordLike(storedState) && Array.isArray(storedState.applications) ? storedState.applications : []
+          if (query.includes('select id, payload from welfare_applications')) {
             return {
-              results: applications
-                .filter(item => recordLike(item) && item.userId === this.values[0])
+              results: applicationSnapshots.map(item => ({ id: item.id, payload: JSON.stringify(item) })),
+            }
+          }
+          if (query.includes('select id, payload from user_coupons')) {
+            return {
+              results: couponSnapshots.map(item => ({ id: item.id, payload: JSON.stringify(item) })),
+            }
+          }
+          if (query.includes('select payload from welfare_applications')) {
+            const hasUserFilter = query.includes('where user_id')
+            const statusPlaceholderCount = query.match(/status in \(([^)]+)\)/)?.[1].match(/\?/g)?.length ?? 0
+            const userValueCount = hasUserFilter ? 1 : 0
+            const statuses = this.values.slice(userValueCount, userValueCount + statusPlaceholderCount).map(String)
+            const hasPagination = query.includes(' limit ?')
+            const limit = hasPagination ? Number(this.values.at(-2)) : applicationSnapshots.length
+            const offset = hasPagination ? Number(this.values.at(-1)) : 0
+            return {
+              results: applicationSnapshots
+                .filter(item => !hasUserFilter || item.userId === this.values[0])
+                .filter(item => !statuses.length || statuses.includes(item.status))
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+                .slice(offset, offset + limit)
+                .map(item => ({ payload: JSON.stringify(item) })),
+            }
+          }
+          if (query.includes('select payload from user_coupons')) {
+            const hasUserFilter = query.includes('where user_id')
+            return {
+              results: couponSnapshots
+                .filter(item => !hasUserFilter || item.userId === this.values[0])
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
                 .map(item => ({ payload: JSON.stringify(item) })),
             }
           }
@@ -534,6 +605,8 @@ describe('welfare state security', () => {
 
     const schemaQueries = d1.queries.filter(item => item.method === 'run' && item.query.includes('create table if not exists welfare_app_state'))
     expect(schemaQueries).toHaveLength(1)
+    const snapshotSchemaQueries = d1.queries.filter(item => item.method === 'run' && item.query.includes('create table if not exists welfare_snapshot_metadata'))
+    expect(snapshotSchemaQueries).toHaveLength(1)
   })
 
   it('allows admin password login without an existing session', async () => {
@@ -612,7 +685,8 @@ describe('welfare state security', () => {
 
     await writeWelfareState(env, await readWelfareState(env))
 
-    expect(d1.batchCalls).toContain(3)
+    expect(d1.batchCalls).toHaveLength(1)
+    expect(d1.queries.some(item => item.query.includes('insert into welfare_snapshot_metadata') && item.values[1] === 2)).toBe(true)
   })
 
   it('hides delivery answer and internal messages before a reviewer claims the application', async () => {
@@ -698,7 +772,7 @@ describe('welfare state security', () => {
     const d1 = createMemoryD1(previous)
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
 
-    await writeWelfareState(env, next, { expectedVersion: 1, previousState: previous })
+    await writeWelfareState(env, next, { expectedVersion: 1 })
 
     expect(d1.queries.some(item => item.query.includes('delete from welfare_applications') && item.values[0] === 'app_deleted')).toBe(true)
     expect(d1.queries.some(item => item.query.includes('delete from user_coupons') && item.values[0] === 'coupon_deleted')).toBe(true)
@@ -725,7 +799,8 @@ describe('welfare state security', () => {
     }), env)
 
     expect(response.status).toBe(200)
-    expect(d1.batchCalls.at(-1)).toBe(1)
+    expect(d1.batchCalls.at(-1)).toBe(2)
+    expect(d1.queries.filter(item => item.query.includes('insert into welfare_applications')).map(item => item.values[0])).toEqual(['app_1'])
   })
 
   it('keeps anonymous bootstrap reads off the point ledger', async () => {
@@ -1657,6 +1732,152 @@ describe('welfare state security', () => {
     expect(walletPayload.transactions).toEqual([])
   })
 
+  it('falls back to full state for explicit application queries while snapshots are stale', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      applications: [codeApplication()],
+    }, {
+      applicationSnapshots: [],
+      snapshotStateVersion: null,
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/applications/mine?status=pending_review&limit=10', {
+      headers: { cookie },
+    }), env)
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { applications: WelfareApplication[] }
+    expect(payload.applications.map(item => item.id)).toEqual(['app_1'])
+  })
+
+  it('overlays current normalized snapshots without dropping state-only fields', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      siteBanner: { enabled: true, title: '保留公告', body: '完整状态字段' },
+      applications: [codeApplication({ title: '状态申请' })],
+      coupons: [{ id: 'coupon_1', userId: 'user_1', name: '状态券', discountRate: 0.9, source: 'manual', createdAt: '2026-06-02T00:00:00.000Z' }],
+    }, {
+      applicationSnapshots: [codeApplication({ title: '规范化申请' })],
+      couponSnapshots: [{ id: 'coupon_1', userId: 'user_1', name: '规范化券', discountRate: 0.8, source: 'manual', createdAt: '2026-06-02T00:00:00.000Z' }],
+      snapshotStateVersion: 1,
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      USE_NORMALIZED_TABLES: 'true',
+      ALLOW_UNSTABLE_NORMALIZED_READS: 'true',
+    }
+
+    const latest = await readWelfareState(env) as WelfareState
+
+    expect(latest.siteBanner).toEqual({ enabled: true, title: '保留公告', body: '完整状态字段' })
+    expect(latest.applications.map(item => item.title)).toEqual(['规范化申请'])
+    expect(latest.coupons.map(item => item.name)).toEqual(['规范化券'])
+  })
+
+  it('requires explicit unstable opt-in before whole-state snapshot overlays', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      applications: [codeApplication({ title: '状态申请' })],
+    }, {
+      applicationSnapshots: [codeApplication({ title: '规范化申请' })],
+      snapshotStateVersion: 1,
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      USE_NORMALIZED_TABLES: 'true',
+    }
+
+    const latest = await readWelfareState(env) as WelfareState
+
+    expect(latest.applications.map(item => item.title)).toEqual(['状态申请'])
+  })
+
+  it('keeps full-state collections when normalized snapshot watermarks are stale', async () => {
+    const d1 = createMemoryD1({
+      ...state(),
+      applications: [codeApplication({ title: '状态申请' })],
+    }, {
+      applicationSnapshots: [codeApplication({ title: '旧规范化申请' })],
+      snapshotStateVersion: null,
+    })
+    const env = {
+      LOCAL_DB: d1 as unknown as D1Database,
+      NOTIFY_SECRET_KEY: 'test-secret',
+      USE_NORMALIZED_TABLES: 'true',
+      ALLOW_UNSTABLE_NORMALIZED_READS: 'true',
+    }
+
+    const latest = await readWelfareState(env) as WelfareState
+
+    expect(latest.applications.map(item => item.title)).toEqual(['状态申请'])
+  })
+
+  it('falls back to full state when coupon snapshots contain stale rows', async () => {
+    const currentCoupon = { id: 'coupon_current', userId: 'user_1', name: '当前券', discountRate: 0.8, source: 'manual' as const, createdAt: '2026-06-03T00:00:00.000Z' }
+    const staleCoupon = { id: 'coupon_stale', userId: 'user_1', name: '旧券', discountRate: 0.9, source: 'manual' as const, createdAt: '2026-06-02T00:00:00.000Z' }
+    const d1 = createMemoryD1({
+      ...state(),
+      coupons: [currentCoupon],
+    }, {
+      couponSnapshots: [staleCoupon],
+      snapshotStateVersion: null,
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'user_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/wallet/summary', {
+      headers: { cookie },
+    }), env)
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { coupons: UserCoupon[] }
+    expect(payload.coupons.map(item => item.id)).toEqual(['coupon_current'])
+  })
+
+  it('falls back to full state for filtered admin application queries while snapshots are stale', async () => {
+    const admin = user({ id: 'admin_1', role: 'admin' })
+    const d1 = createMemoryD1({
+      ...state(),
+      users: [admin, user({ id: 'user_2' })],
+      applications: [codeApplication({ userId: 'user_2' })],
+    }, {
+      applicationSnapshots: [],
+      snapshotStateVersion: null,
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+    const cookie = await createSessionCookie(new Request('https://example.com/'), env, 'admin_1')
+
+    const response = await handleWelfareStateRequest(new Request('https://example.com/api/admin/applications?status=pending_review&limit=10', {
+      headers: { cookie },
+    }), env)
+
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { applications: WelfareApplication[] }
+    expect(payload.applications.map(item => item.id)).toEqual(['app_1'])
+  })
+
+  it('rebuilds stale snapshots before advancing their state version', async () => {
+    const current = {
+      ...state(),
+      applications: [codeApplication()],
+    }
+    const d1 = createMemoryD1(current, {
+      applicationSnapshots: [codeApplication({ id: 'app_stale', title: '旧快照' })],
+      snapshotStateVersion: null,
+    })
+    const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
+
+    await writeWelfareState(env, current, { expectedVersion: 1 })
+
+    expect(d1.queries.some(item => item.query.trim() === 'delete from welfare_applications')).toBe(true)
+    expect(d1.queries.some(item => item.query.includes('insert into welfare_applications') && item.values[0] === 'app_1')).toBe(true)
+    expect(d1.queries.some(item => item.query.includes('insert into welfare_snapshot_metadata') && item.values[1] === 2)).toBe(true)
+  })
+
   it('accepts domain check-in actions while keeping the legacy action compatible', async () => {
     const d1 = createMemoryD1(state())
     const env = { LOCAL_DB: d1 as unknown as D1Database, NOTIFY_SECRET_KEY: 'test-secret' }
@@ -1671,6 +1892,7 @@ describe('welfare state security', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true, version: 2, checkIn: { userId: 'user_1' } })
     expect(d1.pointTransactions).toHaveLength(1)
+    expect(d1.queries.some(item => item.query.includes('insert into welfare_snapshot_metadata') && item.values[1] === 2)).toBe(true)
 
     const legacy = await handleWelfareStateRequest(new Request('https://example.com/api/welfare-state', {
       method: 'POST',

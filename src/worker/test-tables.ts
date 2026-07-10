@@ -12,7 +12,7 @@ export async function handleTestNewTables(env: WorkerEnv) {
         users: state.users?.length || 0,
         applications: state.applications?.length || 0,
         studentVerifications: state.studentVerifications?.length || 0,
-        pointTransactions: state.pointTransactions?.length || 0,
+        pointTransactions: state.transactions?.length || 0,
       },
       sampleUser: state.users?.[0] || null,
       sampleApplication: state.applications?.[0] || null,

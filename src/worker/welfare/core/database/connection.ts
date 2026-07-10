@@ -2,7 +2,7 @@
  * 数据库连接管理
  */
 
-import type { WorkerEnv } from '../../core'
+import type { WorkerEnv } from '../../env'
 import { Pool } from 'pg'
 import {
   POSTGRES_CONNECTION_TIMEOUT_MS,

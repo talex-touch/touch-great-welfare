@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './welfare-state'
 import type { WelfareState } from '~/shared/welfare-types'
 import { createUserInviteCode, normalizeSystemConfig } from '~/shared/welfare-domain'
-import { assertSafeExternalUrl } from './auth'
+import { assertAdminRequest, assertSafeExternalUrl } from './auth'
 import { bytesToHex, decryptSecret, encryptSecret } from './crypto'
 import { authenticatedUserId, createSessionCookie } from './session'
 import { getPool, readWelfareState, readWelfareStateRecord, shouldUseD1, writeWelfareState } from './welfare-state'
@@ -420,17 +420,6 @@ async function getEffectiveGitHubAppSettings(env: WorkerEnv, request: Request) {
 
 function isConfigured(settings: { clientId: string, clientSecret: string }) {
   return !!(settings.clientId.trim() && settings.clientSecret.trim())
-}
-
-async function assertAdminRequest(request: Request, env: WorkerEnv) {
-  const state = await readWelfareState(env) as Partial<WelfareState>
-  if (!Array.isArray(state.users))
-    throw new Error('用户状态未初始化')
-
-  const userId = await authenticatedUserId(request, env)
-  const user = state.users.find(item => item.id === userId)
-  if (!user || user.role !== 'admin')
-    throw new Error('需要管理员权限')
 }
 
 async function handleGitHubAppConfig(request: Request, env: WorkerEnv) {

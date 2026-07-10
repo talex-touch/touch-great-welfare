@@ -1,4 +1,4 @@
-import type { WorkerEnv } from './core'
+import type { WorkerEnv } from './env'
 import { clearSessionCookie } from '../session'
 import {
   addAdminApplicationMessageAction,
@@ -30,9 +30,7 @@ import {
   currentUserStateResponse,
   currentUserVerificationResponse,
   currentUserWalletResponse,
-  errorResponse,
   grantAdminCouponsAction,
-  json,
   loginAdmin,
   publicConfigResponse,
   redeemCouponCodeAction,
@@ -66,6 +64,7 @@ import {
   updateCurrentProfileAction,
   vouchInvitationAction,
 } from './core'
+import { errorResponse, json } from './http'
 import { legacyFullStateSave } from './legacy-state-write'
 
 export { handleApplicationSubmitRequest } from './core'
@@ -152,7 +151,7 @@ export async function handleWelfareStateRequest(request: Request, env: WorkerEnv
       if (url.pathname === '/api/welfare-state/admin')
         return await adminStateResponse(request, env)
       if (url.pathname === '/api/welfare-state')
-        return currentStateResponse(request, env)
+        return await currentStateResponse(request, env)
     }
 
     if (request.method === 'DELETE') {

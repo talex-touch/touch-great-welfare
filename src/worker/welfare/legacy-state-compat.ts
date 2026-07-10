@@ -1,11 +1,7 @@
-import type { WorkerEnv } from './core'
-import { authenticatedUserId } from '../session'
+import type { WorkerEnv } from './env'
+import { requestUserId } from './auth'
 import { isRecord } from './records'
 import { isMaskedSecret } from './secrets'
-
-async function requestUserId(request: Request, env: WorkerEnv) {
-  return await authenticatedUserId(request, env)
-}
 
 async function canUpdateSensitiveState(previousState: unknown, request: Request, env: WorkerEnv) {
   if (!isRecord(previousState))

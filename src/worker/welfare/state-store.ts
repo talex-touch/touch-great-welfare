@@ -1,17 +1,25 @@
-import type { WorkerEnv } from './core'
-import type { CreditTransaction, UserCoupon, WelfareApplication, WelfareState } from '~/shared/welfare-types'
+import type { WorkerEnv } from './env'
+import type { CreditTransaction, WelfareState } from '~/shared/welfare-types'
 import { normalizeApplicationPolicy } from '~/composables/welfare'
 import { applyWelfareRetentionPolicy } from '../../shared/welfare-retention'
 import { decryptSecret, encryptSecret } from '../crypto'
 import { backfillPointTransactionsFromState, ensurePointTransactionSchema, syncUserPointBalancesFromLedger } from '../points'
 import { allowUnstableNormalizedReads, getPool, shouldUseD1 } from './connection'
 import { isRecord } from './records'
+import { ensureSnapshotSchema, syncStateSnapshots } from './state-snapshots'
 import { syncStudentVerifiedProfiles } from './verifications'
+
+export {
+  readAdminApplicationSnapshots,
+  readCurrentUserApplicationSnapshots,
+  readCurrentUserCouponSnapshots,
+  readSnapshotStateVersion,
+  type WelfareSnapshotRecord,
+} from './state-snapshots'
 
 const STATE_KEY = 'default'
 const INITIAL_STATE_VERSION = 1
 const POSTGRES_PERF_LOG_THRESHOLD_MS = 500
-const POSTGRES_SNAPSHOT_BATCH_SIZE = 200
 
 export type PointBalanceSyncMode = false | 'current-user' | 'all'
 
@@ -31,7 +39,6 @@ export function stateVersionPayload(version: number) {
 
 export interface WriteWelfareStateOptions {
   expectedVersion?: number
-  previousState?: unknown
 }
 
 export type AtomicPointTransaction = Required<Pick<CreditTransaction, 'id' | 'userId' | 'delta' | 'type' | 'reason' | 'balanceAfter' | 'createdAt'>> & Pick<CreditTransaction, 'refId'>
@@ -51,10 +58,6 @@ interface EncryptedWelfareStateEnvelope {
   __encrypted: true
   payload: string
   encryptedAt: string
-}
-
-function now() {
-  return new Date().toISOString()
 }
 
 function createId(prefix: string) {
@@ -184,95 +187,6 @@ export async function ensureSchema(env: WorkerEnv) {
   return postgresSchemaPromise
 }
 
-async function ensureSnapshotSchema(env: WorkerEnv) {
-  if (shouldUseD1(env)) {
-    await env.LOCAL_DB!
-      .prepare(`
-        create table if not exists welfare_applications (
-          id text primary key,
-          user_id text not null,
-          type text not null,
-          status text not null,
-          title text not null,
-          payload text not null,
-          created_at text not null,
-          updated_at text not null default current_timestamp
-        )
-      `)
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_status_created on welfare_applications (status, created_at asc, id asc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_welfare_applications_user_status_created on welfare_applications (user_id, status, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare(`
-        create table if not exists user_coupons (
-          id text primary key,
-          user_id text not null,
-          name text not null,
-          scope text,
-          discount_type text,
-          discount_rate real not null,
-          discount_amount integer,
-          payload text not null,
-          created_at text not null,
-          expires_at text,
-          used_at text
-        )
-      `)
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_user_coupons_user_created on user_coupons (user_id, created_at desc, id desc)')
-      .run()
-    await env.LOCAL_DB!
-      .prepare('create index if not exists idx_user_coupons_user_used on user_coupons (user_id, used_at)')
-      .run()
-    return
-  }
-
-  await getPool(env).query(`
-    create table if not exists welfare_applications (
-      id text primary key,
-      user_id text not null,
-      type text not null,
-      status text not null,
-      title text not null,
-      payload text not null,
-      created_at text not null,
-      updated_at text not null default current_timestamp
-    )
-  `)
-  await getPool(env).query('create index if not exists idx_welfare_applications_user_created on welfare_applications (user_id, created_at desc, id desc)')
-  await getPool(env).query('create index if not exists idx_welfare_applications_status on welfare_applications (status)')
-  await getPool(env).query('create index if not exists idx_welfare_applications_status_created on welfare_applications (status, created_at asc, id asc)')
-  await getPool(env).query('create index if not exists idx_welfare_applications_user_status_created on welfare_applications (user_id, status, created_at desc, id desc)')
-  await getPool(env).query(`
-    create table if not exists user_coupons (
-      id text primary key,
-      user_id text not null,
-      name text not null,
-      scope text,
-      discount_type text,
-      discount_rate real not null,
-      discount_amount integer,
-      payload text not null,
-      created_at text not null,
-      expires_at text,
-      used_at text
-    )
-  `)
-  await getPool(env).query('create index if not exists idx_user_coupons_user_created on user_coupons (user_id, created_at desc, id desc)')
-  await getPool(env).query('create index if not exists idx_user_coupons_user_used on user_coupons (user_id, used_at)')
-}
-
 function normalizeStateVersion(value: unknown) {
   const version = Math.trunc(Number(value))
   return Number.isFinite(version) && version > 0 ? version : INITIAL_STATE_VERSION
@@ -345,77 +259,6 @@ export async function readWelfareState(env: WorkerEnv, options: ReadWelfareState
   return (await readWelfareStateRecord(env, options)).state
 }
 
-export async function readCurrentUserApplicationSnapshots(env: WorkerEnv, userId: string, options: { status?: string[], limit?: number, offset?: number } = {}) {
-  await ensureSchema(env)
-  const status = options.status?.filter(Boolean) ?? []
-  const limit = options.limit ?? 50
-  const offset = options.offset ?? 0
-
-  if (shouldUseD1(env)) {
-    const statusClause = status.length ? ` and status in (${status.map(() => '?').join(', ')})` : ''
-    const result = await env.LOCAL_DB!
-      .prepare(`select payload from welfare_applications where user_id = ?${statusClause} order by created_at desc, id desc limit ? offset ?`)
-      .bind(userId, ...status, limit, offset)
-      .all<{ payload: string }>()
-    return (result.results ?? []).map(row => JSON.parse(row.payload) as WelfareApplication)
-  }
-
-  const result = status.length
-    ? await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications where user_id = $1 and status = any($2) order by created_at desc, id desc limit $3 offset $4',
-        [userId, status, limit, offset],
-      )
-    : await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications where user_id = $1 order by created_at desc, id desc limit $2 offset $3',
-        [userId, limit, offset],
-      )
-  return result.rows.map(row => JSON.parse(row.payload) as WelfareApplication)
-}
-
-export async function readAdminApplicationSnapshots(env: WorkerEnv, options: { status?: string[], limit?: number, offset?: number } = {}) {
-  await ensureSchema(env)
-  const status = options.status?.filter(Boolean) ?? []
-  const limit = options.limit ?? 100
-  const offset = options.offset ?? 0
-
-  if (shouldUseD1(env)) {
-    const statusClause = status.length ? ` where status in (${status.map(() => '?').join(', ')})` : ''
-    const result = await env.LOCAL_DB!
-      .prepare(`select payload from welfare_applications${statusClause} order by created_at desc, id desc limit ? offset ?`)
-      .bind(...status, limit, offset)
-      .all<{ payload: string }>()
-    return (result.results ?? []).map(row => JSON.parse(row.payload) as WelfareApplication)
-  }
-
-  const result = status.length
-    ? await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications where status = any($1) order by created_at desc, id desc limit $2 offset $3',
-        [status, limit, offset],
-      )
-    : await getPool(env).query<{ payload: string }>(
-        'select payload from welfare_applications order by created_at desc, id desc limit $1 offset $2',
-        [limit, offset],
-      )
-  return result.rows.map(row => JSON.parse(row.payload) as WelfareApplication)
-}
-
-export async function readCurrentUserCouponSnapshots(env: WorkerEnv, userId: string) {
-  await ensureSchema(env)
-  if (shouldUseD1(env)) {
-    const result = await env.LOCAL_DB!
-      .prepare('select payload from user_coupons where user_id = ?1 order by created_at desc, id desc')
-      .bind(userId)
-      .all<{ payload: string }>()
-    return (result.results ?? []).map(row => JSON.parse(row.payload) as UserCoupon)
-  }
-
-  const result = await getPool(env).query<{ payload: string }>(
-    'select payload from user_coupons where user_id = $1 order by created_at desc, id desc',
-    [userId],
-  )
-  return result.rows.map(row => JSON.parse(row.payload) as UserCoupon)
-}
-
 async function currentStateVersion(env: WorkerEnv) {
   await ensureSchema(env)
   if (shouldUseD1(env)) {
@@ -440,188 +283,6 @@ async function assertExpectedStateVersion(env: WorkerEnv, expectedVersion?: numb
   const currentVersion = await currentStateVersion(env)
   if (currentVersion !== undefined && currentVersion !== expectedVersion)
     throw new StateVersionConflictError()
-}
-
-function applicationSnapshotUpdatedAt(application: WelfareApplication) {
-  return application.completedAt
-    || application.reviewedAt
-    || application.submittedAt
-    || application.deliveryRewardedAt
-    || application.deliverySubmittedAt
-    || application.deliveryClaimedAt
-    || application.createdAt
-    || now()
-}
-
-function couponSnapshotDiscountRate(coupon: UserCoupon) {
-  const rate = Number(coupon.discountRate ?? 1)
-  return Number.isFinite(rate) ? rate : 1
-}
-
-function applicationSnapshotValues(application: WelfareApplication) {
-  return [
-    application.id,
-    application.userId,
-    application.type,
-    application.status,
-    application.title || '未命名申请',
-    JSON.stringify(application),
-    application.createdAt || now(),
-    applicationSnapshotUpdatedAt(application),
-  ]
-}
-
-function couponSnapshotValues(coupon: UserCoupon) {
-  return [
-    coupon.id,
-    coupon.userId,
-    coupon.name || '未命名优惠券',
-    coupon.scope ?? null,
-    coupon.discountType ?? 'rate',
-    couponSnapshotDiscountRate(coupon),
-    coupon.discountAmount ?? null,
-    JSON.stringify(coupon),
-    coupon.createdAt || now(),
-    coupon.expiresAt ?? null,
-    coupon.usedAt ?? null,
-  ]
-}
-
-async function runD1Statements(env: WorkerEnv, statements: Array<ReturnType<D1Database['prepare']>>) {
-  if (!statements.length)
-    return
-
-  const localDb = env.LOCAL_DB! as D1Database & {
-    batch?: (items: Array<ReturnType<D1Database['prepare']>>) => Promise<unknown[]>
-  }
-  if (typeof localDb.batch === 'function') {
-    await localDb.batch(statements)
-    return
-  }
-
-  for (const statement of statements)
-    await statement.run()
-}
-
-function postgresValuesPlaceholders(rowCount: number, columnCount: number) {
-  return Array.from({ length: rowCount }, (_, rowIndex) => {
-    const offset = rowIndex * columnCount
-    return `(${Array.from({ length: columnCount }, (__, columnIndex) => `$${offset + columnIndex + 1}`).join(', ')})`
-  }).join(', ')
-}
-
-function chunks<T>(items: T[], size: number) {
-  const result: T[][] = []
-  for (let index = 0; index < items.length; index += size)
-    result.push(items.slice(index, index + size))
-  return result
-}
-
-async function syncD1StateSnapshots(env: WorkerEnv, applications: WelfareApplication[], coupons: UserCoupon[], deletedApplicationIds: string[], deletedCouponIds: string[]) {
-  const localDb = env.LOCAL_DB!
-  await runD1Statements(env, [
-    ...applications.map(application => localDb
-      .prepare(`
-        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-        on conflict (id)
-        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
-      `)
-      .bind(...applicationSnapshotValues(application))),
-    ...coupons.map(coupon => localDb
-      .prepare(`
-        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
-        values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-        on conflict (id)
-        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
-      `)
-      .bind(...couponSnapshotValues(coupon))),
-    ...deletedApplicationIds.map(id => localDb
-      .prepare('delete from welfare_applications where id = ?1')
-      .bind(id)),
-    ...deletedCouponIds.map(id => localDb
-      .prepare('delete from user_coupons where id = ?1')
-      .bind(id)),
-  ])
-}
-
-async function syncPostgresStateSnapshots(env: WorkerEnv, applications: WelfareApplication[], coupons: UserCoupon[], deletedApplicationIds: string[], deletedCouponIds: string[]) {
-  const pool = getPool(env)
-  if (deletedApplicationIds.length)
-    await pool.query('delete from welfare_applications where id = any($1)', [deletedApplicationIds])
-  if (deletedCouponIds.length)
-    await pool.query('delete from user_coupons where id = any($1)', [deletedCouponIds])
-
-  for (const batch of chunks(applications, POSTGRES_SNAPSHOT_BATCH_SIZE)) {
-    const values = batch.flatMap(applicationSnapshotValues)
-    await pool.query(
-      `
-        insert into welfare_applications (id, user_id, type, status, title, payload, created_at, updated_at)
-        values ${postgresValuesPlaceholders(batch.length, 8)}
-        on conflict (id)
-        do update set user_id = excluded.user_id, type = excluded.type, status = excluded.status, title = excluded.title, payload = excluded.payload, updated_at = excluded.updated_at
-      `,
-      values,
-    )
-  }
-  for (const batch of chunks(coupons, POSTGRES_SNAPSHOT_BATCH_SIZE)) {
-    const values = batch.flatMap(couponSnapshotValues)
-    await pool.query(
-      `
-        insert into user_coupons (id, user_id, name, scope, discount_type, discount_rate, discount_amount, payload, created_at, expires_at, used_at)
-        values ${postgresValuesPlaceholders(batch.length, 11)}
-        on conflict (id)
-        do update set user_id = excluded.user_id, name = excluded.name, scope = excluded.scope, discount_type = excluded.discount_type, discount_rate = excluded.discount_rate, discount_amount = excluded.discount_amount, payload = excluded.payload, expires_at = excluded.expires_at, used_at = excluded.used_at
-      `,
-      values,
-    )
-  }
-}
-
-function snapshotItems<T extends { id: string }>(state: unknown, key: 'applications' | 'coupons') {
-  return isRecord(state) && Array.isArray(state[key])
-    ? state[key].filter((item): item is T => isRecord(item) && typeof item.id === 'string')
-    : []
-}
-
-function changedSnapshotItems<T extends { id: string }>(previousState: unknown, nextItems: T[], key: 'applications' | 'coupons') {
-  if (!isRecord(previousState))
-    return nextItems
-
-  const previousItems = snapshotItems<T>(previousState, key)
-  const previousPayloadById = new Map(previousItems.map(item => [item.id, JSON.stringify(item)]))
-  return nextItems.filter(item => previousPayloadById.get(item.id) !== JSON.stringify(item))
-}
-
-function deletedSnapshotIds<T extends { id: string }>(previousState: unknown, nextItems: T[], key: 'applications' | 'coupons') {
-  if (!isRecord(previousState))
-    return []
-
-  const nextIds = new Set(nextItems.map(item => item.id))
-  return snapshotItems<T>(previousState, key)
-    .filter(item => !nextIds.has(item.id))
-    .map(item => item.id)
-}
-
-async function syncStateSnapshots(env: WorkerEnv, state: unknown, previousState?: unknown) {
-  if (!isRecord(state))
-    return
-
-  const allApplications = snapshotItems<WelfareApplication>(state, 'applications')
-  const allCoupons = snapshotItems<UserCoupon>(state, 'coupons')
-  const applications = previousState === undefined ? allApplications : changedSnapshotItems(previousState, allApplications, 'applications')
-  const coupons = previousState === undefined ? allCoupons : changedSnapshotItems(previousState, allCoupons, 'coupons')
-  const deletedApplicationIds = previousState === undefined ? [] : deletedSnapshotIds(previousState, allApplications, 'applications')
-  const deletedCouponIds = previousState === undefined ? [] : deletedSnapshotIds(previousState, allCoupons, 'coupons')
-  if (!applications.length && !coupons.length && !deletedApplicationIds.length && !deletedCouponIds.length)
-    return
-
-  if (shouldUseD1(env)) {
-    await syncD1StateSnapshots(env, applications, coupons, deletedApplicationIds, deletedCouponIds)
-    return
-  }
-
-  await syncPostgresStateSnapshots(env, applications, coupons, deletedApplicationIds, deletedCouponIds)
 }
 
 export async function writeWelfareState(env: WorkerEnv, state: unknown, options: WriteWelfareStateOptions = {}) {
@@ -658,7 +319,7 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
         .bind(STATE_KEY, JSON.stringify(storedState), nextVersion, mutationId)
         .run()
     }
-    await syncStateSnapshots(env, state, options.previousState)
+    await syncStateSnapshots(env, state, nextVersion)
     return nextVersion
   }
 
@@ -675,8 +336,9 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
     const version = result.rows[0]?.version
     if (!version)
       throw new StateVersionConflictError()
-    await syncStateSnapshots(env, state, options.previousState)
-    return normalizeStateVersion(version)
+    const normalizedVersion = normalizeStateVersion(version)
+    await syncStateSnapshots(env, state, normalizedVersion)
+    return normalizedVersion
   }
 
   await getPool(env).query(
@@ -688,7 +350,7 @@ export async function writeWelfareState(env: WorkerEnv, state: unknown, options:
     `,
     [STATE_KEY, JSON.stringify(storedState), nextVersion, mutationId],
   )
-  await syncStateSnapshots(env, state, options.previousState)
+  await syncStateSnapshots(env, state, nextVersion)
   return nextVersion
 }
 
@@ -701,7 +363,7 @@ export async function writeWelfareStateWithAtomicPointTransactions(
   env: WorkerEnv,
   state: unknown,
   pointTransactions: AtomicPointTransaction[],
-  options: { expectedVersion: number, previousState?: unknown },
+  options: { expectedVersion: number },
 ) {
   await ensureSchema(env)
   await ensurePointTransactionSchema(env)
@@ -738,11 +400,12 @@ export async function writeWelfareStateWithAtomicPointTransactions(
     const results = await localDb.batch(statements)
     if (!results[0]?.meta?.changes)
       throw new StateVersionConflictError()
-    await syncStateSnapshots(env, state, options.previousState)
+    await syncStateSnapshots(env, state, nextVersion)
     return nextVersion
   }
 
   const client = await getPool(env).connect()
+  let committedVersion = nextVersion
   try {
     await client.query('begin')
     const result = await client.query<{ version: number }>(
@@ -755,10 +418,9 @@ export async function writeWelfareStateWithAtomicPointTransactions(
       [STATE_KEY, storedStateJson, options.expectedVersion, mutationId],
     )
     const version = result.rows[0]?.version
-    if (!version) {
-      await client.query('rollback')
+    if (!version)
       throw new StateVersionConflictError()
-    }
+    committedVersion = normalizeStateVersion(version)
 
     for (const tx of pointTransactions) {
       await client.query(`
@@ -769,8 +431,6 @@ export async function writeWelfareStateWithAtomicPointTransactions(
     }
 
     await client.query('commit')
-    await syncStateSnapshots(env, state, options.previousState)
-    return normalizeStateVersion(version)
   }
   catch (error) {
     await client.query('rollback').catch(() => undefined)
@@ -779,4 +439,6 @@ export async function writeWelfareStateWithAtomicPointTransactions(
   finally {
     client.release()
   }
+  await syncStateSnapshots(env, state, committedVersion)
+  return committedVersion
 }

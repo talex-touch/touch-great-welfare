@@ -2,7 +2,7 @@
  * 简化的用户数据访问 - 直接使用 D1
  */
 
-import type { WorkerEnv } from './core'
+import type { WorkerEnv } from './env'
 import type { User } from '~/shared/welfare-types'
 
 export async function getUserFromTable(env: WorkerEnv, userId: string): Promise<User | null> {

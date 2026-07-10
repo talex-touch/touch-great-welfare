@@ -353,6 +353,7 @@ async function syncEducationEmailChallenges(env: WorkerEnv) {
 }
 
 async function verifyEducationEmailChallengeForUser(request: Request, env: WorkerEnv) {
+  const { user } = await getAuthenticatedRequest(request, env)
   const config = await getEffectiveEducationMailConfig(env)
   if (!config.enabled)
     throw new Error('教育邮箱收件验证未启用')
@@ -364,7 +365,6 @@ async function verifyEducationEmailChallengeForUser(request: Request, env: Worke
   if (!challengeId)
     throw new Error('教育邮箱证明码不存在')
 
-  const { user } = await getAuthenticatedRequest(request, env)
   const record = await readWelfareStateRecord(env)
   const state = record.state as Partial<WelfareState>
   assertWelfareState(state)
